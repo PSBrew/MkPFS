@@ -1,63 +1,15 @@
-<div align="center">
-
-<img src="assets/images/icon.png" alt="MkPFS icon" width="140" style="border-radius:30px; box-shadow:0 10px 30px rgba(37,99,235,0.18); border:4px solid rgba(14,165,233,0.08);" />
-
 # MkPFS
 
-### A command-line tool and Python library to manage PlayStation FileSystem (PFS) disk images with support for creating, verifying, and inspecting generated files.
+[![PyPI](https://img.shields.io/pypi/v/mkpfs?style=flat-square&logo=pypi&logoColor=white&color=2563eb)](https://pypi.org/project/mkpfs/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-2563eb?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3110/)
+[![License](https://img.shields.io/badge/license-GPL--3.0-0f172a?style=flat-square)](LICENSE)
+[![Status](https://img.shields.io/badge/status-active%20development-1d4ed8?style=flat-square)](https://github.com/PSBrew/MkPFS/actions)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-2563eb?style=flat-square)](#installation)
+[![Profiles](https://img.shields.io/badge/profiles-PS4%20%2F%20PS5-3b82f6?style=flat-square)](#command-reference)
 
-<p>
-  <a href="https://github.com/PSBrew/MkPFS/actions"><img alt="Status" src="https://img.shields.io/badge/status-active%20development-1d4ed8?style=for-the-badge" /></a>
-  <a href="https://pypi.org/project/mkpfs/"><img alt="PyPI" src="https://img.shields.io/pypi/v/mkpfs?style=for-the-badge&logo=pypi&logoColor=white&color=2563eb" /></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-0f172a?style=for-the-badge" /></a>
-  <a href="https://www.python.org/downloads/release/python-3110/"><img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-2563eb?style=for-the-badge&logo=python&logoColor=white" /></a>
-</p>
+MkPFS is a command-line tool and Python library for building, verifying, inspecting, browsing, and extracting PlayStation FileSystem (PFS) disk images. It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, and `.bin`, and fits both direct image workflows and PKG or FPKG inner-PFS generation.
 
-<p>
-  <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-2563eb?style=flat-square" />
-  <img alt="Interfaces" src="https://img.shields.io/badge/interfaces-CLI%20%7C%20Library-1e3a8a?style=flat-square" />
-  <img alt="PyPI distribution" src="https://img.shields.io/badge/distribution-PyPI-2563eb?style=flat-square&logo=pypi&logoColor=white" />
-  <img alt="PFS profiles" src="https://img.shields.io/badge/profiles-PS4%20%2F%20PS5-3b82f6?style=flat-square" />
-  <img alt="Compression" src="https://img.shields.io/badge/features-compression%20%7C%20hashes%20%7C%20tree%20view-1d4ed8?style=flat-square" />
-  <img alt="Knowledge Base" src="https://img.shields.io/badge/includes-curated%20PFS%20research-60a5fa?style=flat-square" />
-</p>
-
-<p>
-  MkPFS is a toolkit for building, verifying, browsing, and managing PlayStation PFS images.
-  It works with common image naming conventions such as <code>.ffpfs</code>, <code>.pfs</code>, <code>.dat</code>, and <code>.bin</code>,
-  and it is designed for both direct image workflows and PKG/FPKG inner-PFS generation.
-</p>
-
-<p>
-  <a href="#-installation"><strong>📦 Install</strong></a>
-  ·
-  <a href="#-command-overview"><strong>🧰 Commands</strong></a>
-  ·
-  <a href="#-related-projects--references"><strong>🔗 References</strong></a>
-  <br />
-  <a href="#-contributors--thanks"><strong>💙 Thanks</strong></a>
-  ·
-  <a href="https://github.com/sponsors/RenanGBarreto"><strong>💖 Sponsor</strong></a>
-</p>
-
-</div>
-
----
-
-<p align="center">
-  <img src="assets/images/hero-banner.svg" alt="MkPFS hero banner" width="100%" />
-</p>
-
-<p align="center">
-  <a href="https://github.com/sponsors/RenanGBarreto">
-    <img alt="Sponsor MkPFS" src="https://img.shields.io/badge/Support%20MkPFS-GitHub%20Sponsors-e11d48?style=for-the-badge&logo=githubsponsors&logoColor=white" />
-  </a>
-</p>
-
-<p align="center">
-  <strong>If MkPFS saves you time, helps your research, or becomes part of your workflow, please consider funding the project.</strong><br />
-  Sponsorship keeps new features, documentation work, packaging, and testing effort moving forward.
-</p>
+**Quick links:** [Installation](#installation) · [Command reference](#command-reference) · [Development](#development) · [Related projects](#related-projects) · [Sponsor](https://github.com/sponsors/RenanGBarreto)
 
 ## 🎯 Why MkPFS
 
@@ -156,93 +108,221 @@ uv build
 uv run --frozen twine check dist/*
 ```
 
-## ⌨️ Command Overview
+## Command Reference
 
-MkPFS keeps the command surface focused on the image lifecycle.
+MkPFS keeps the command surface focused on the image lifecycle. The CLI currently supports `pack`, `verify`, `inspect`, `tree`, and `unpack`.
+
+### Top-level CLI
+
+```text
+mkpfs [-h] {pack,verify,inspect,tree,unpack} ...
+```
+
+| Parameter | Description |
+| --- | --- |
+| `-h`, `--help` | Show the top-level help text and exit. |
+| `pack` | Pack a folder or a single file into a PFS image. |
+| `verify` | Validate image structure and payload checksums. |
+| `inspect` | Inspect image metadata and integrity summary. |
+| `tree` | Print the image tree representation. |
+| `unpack` | Extract files from an image into a destination directory. |
 
 ### `pack`
 
-Create a new PFS image from either a folder tree or a single file.
+```text
+mkpfs pack [-h] {folder,file} ...
+```
+
+Use `pack folder` to build from a directory tree, or `pack file` to stage one file into a single-file image.
+
+### `pack folder`
+
+```text
+mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file-extension]
+                  [--compress | --no-compress] [--threshold-gain THRESHOLD_GAIN]
+                  [--block-size BLOCK_SIZE] [--version {PS4,PS5}] [--inode-bits {32,64}]
+                  [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
+                  [--compression-level COMPRESSION_LEVEL] [--signed] [--encrypted]
+                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--verbose]
+                  [--dry-run] [--verify] source_dir image_file
+```
+
+Examples:
 
 ```bash
 mkpfs pack folder ./input ./game.ffpfs
-mkpfs pack file ./readme.txt ./readme.ffpfs
+mkpfs pack folder ./input ./game.ffpfs --encrypted
+mkpfs pack folder ./input ./game.ffpfs --require-game-files --verify
 ```
 
-Use `pack folder` when you want to:
+| Parameter | Description |
+| --- | --- |
+| `source_dir` | Source app or homebrew folder to pack. |
+| `image_file` | Output image file path. |
+| `-h`, `--help` | Show help and exit. |
+| `--adjust-output-file-extension` | Automatically adjust the output extension to match the detected pack mode. This is the default. |
+| `--no-adjust-output-file-extension` | Keep the requested output file name unchanged. |
+| `--compress` | Enable PFSC block compression. This is the default. |
+| `--no-compress` | Disable PFSC block compression. |
+| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `20`. |
+| `--block-size BLOCK_SIZE` | PFS block size in bytes, or `auto`. Default: `auto`, which resolves to `65536`. |
+| `--version {PS4,PS5}` | PFS profile version. Default: `PS4`. |
+| `--inode-bits {32,64}` | Inode width mode bit. Default: `32`. |
+| `--case-sensitive` | Build a case-sensitive image. |
+| `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior. |
+| `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means all available cores. |
+| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `7`. |
+| `--signed` | Build a signed PFS image using a zero EKPFS key and seed. |
+| `--encrypted` | Encrypt filesystem blocks with AES-XTS. |
+| `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
+| `--require-game-files` | Require `sce_sys/param.json` and `eboot.bin` before packing. |
+| `--verbose` | Print verbose per-file decisions during packing. |
+| `--dry-run` | Scan, layout, and report only. Do not write an image file. |
+| `--verify` | Run `mkpfs verify` automatically after a successful pack. |
 
-- Build a new image from a folder tree
-- Produce PS4 or PS5 oriented layouts
-- Generate files for `.ffpfs`, `.pfs`, `.dat`, or `.bin` naming conventions
-- Prepare an inner PFS image for future PKG or FPKG usage
-- Enable compression, optional AES-XTS encryption, and optional post-pack verification
-- Require `sce_sys/param.json` and `eboot.bin` before packing when strict mode is needed
+Notes:
 
-Use `pack file` when you want to package a single file as if it lived alone in a folder tree.
-That mode always skips the game-file preflight and builds the same image shape you would get from a folder containing only that file.
+- Folder output names are adjusted automatically by default.
+- MkPFS chooses `.ffpfs` when `sce_sys/param.json` exposes a title ID, otherwise it falls back to `.ffpfsc`.
+- `--ekpfs-key` is only meaningful when used with `--encrypted`.
 
-Encryption defaults to an all-zero EKPFS key when `--encrypted` is used without `--ekpfs-key`.
-`--require-game-files` is available for `pack folder`, otherwise folder packing will accept any tree.
-Output names are adjusted automatically by default, `pack folder` uses `.ffpfs` when `sce_sys/param.json` exposes a title ID,
-and `.ffpfsc` is used for single-file packs or folders without direct homebrew metadata. Use
-`--no-adjust-output-file-extension` to keep the exact filename you typed.
+### `pack file`
+
+```text
+mkpfs pack file [-h] [--adjust-output-file-extension | --no-adjust-output-file-extension]
+                [--compress | --no-compress] [--threshold-gain THRESHOLD_GAIN]
+                [--block-size BLOCK_SIZE] [--version {PS4,PS5}] [--inode-bits {32,64}]
+                [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
+                [--compression-level COMPRESSION_LEVEL] [--signed] [--encrypted]
+                [--ekpfs-key EKPFS_KEY] [--verbose] [--dry-run] [--verify]
+                source_file image_file
+```
+
+Examples:
 
 ```bash
-mkpfs pack folder ./input ./game.ffpfs --encrypted
-mkpfs pack folder ./input ./game.ffpfs --encrypted --ekpfs-key 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
-mkpfs pack folder ./input ./game.ffpfs --require-game-files
-mkpfs pack folder ./input ./game.ffpfs --no-adjust-output-file-extension
-mkpfs pack file ./myfile.ffpkg ./myfile.ffpfsc --verify
+mkpfs pack file ./payload.bin ./payload.ffpfsc
+mkpfs pack file ./payload.bin ./payload.ffpfsc --verify
 ```
+
+| Parameter | Description |
+| --- | --- |
+| `source_file` | Single source file to pack. |
+| `image_file` | Output image file path. |
+| `-h`, `--help` | Show help and exit. |
+| `--adjust-output-file-extension` | Automatically adjust the output extension to match the detected pack mode. This is the default. |
+| `--no-adjust-output-file-extension` | Keep the requested output file name unchanged. |
+| `--compress` | Enable PFSC block compression. This is the default. |
+| `--no-compress` | Disable PFSC block compression. |
+| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `20`. |
+| `--block-size BLOCK_SIZE` | PFS block size in bytes, or `auto`. Default: `auto`, which resolves to `65536`. |
+| `--version {PS4,PS5}` | PFS profile version. Default: `PS4`. |
+| `--inode-bits {32,64}` | Inode width mode bit. Default: `32`. |
+| `--case-sensitive` | Build a case-sensitive image. |
+| `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior. |
+| `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means all available cores. |
+| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `7`. |
+| `--signed` | Build a signed PFS image using a zero EKPFS key and seed. |
+| `--encrypted` | Encrypt filesystem blocks with AES-XTS. |
+| `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
+| `--verbose` | Print verbose per-file decisions during packing. |
+| `--dry-run` | Scan, layout, and report only. Do not write an image file. |
+| `--verify` | Run `mkpfs verify` automatically after a successful pack. |
+
+Notes:
+
+- Single-file packing stages the file into a temporary one-file tree before building.
+- The default adjusted extension for single-file output is `.ffpfsc`.
 
 ### `verify`
 
-Validate an existing image and print a detailed report.
+```text
+mkpfs verify [-h] [--source-dir SOURCE_DIR | --source-file SOURCE_FILE]
+             [--expect-crc32 EXPECT_CRC32]
+             [--expect-manifest-sha256 EXPECT_MANIFEST_SHA256]
+             [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
+```
+
+Examples:
 
 ```bash
 mkpfs verify ./game.ffpfs
 mkpfs verify ./single.ffpfsc --source-file ./payload.bin
+mkpfs verify ./game.ffpfs --source-dir ./input --expect-crc32 0x7F528D1F
 ```
 
-Use this command when you want to:
-
-- Confirm the image structure is valid
-- Re-check hashes and internal layout
-- Compare the image against its original source folder
-- Compare single-file images against one source file at root via `--source-file`
-- Review integrity data before testing, packaging, or distribution
+| Parameter | Description |
+| --- | --- |
+| `image_file` | Path to the input `.ffpfs` image. |
+| `-h`, `--help` | Show help and exit. |
+| `--source-dir SOURCE_DIR` | Optional source folder for hierarchy and payload comparison. |
+| `--source-file SOURCE_FILE` | Optional source file for single-file image comparison. Mutually exclusive with `--source-dir`. |
+| `--expect-crc32 EXPECT_CRC32` | Expected cumulative data CRC32 in hex. Verification fails if the computed value differs. |
+| `--expect-manifest-sha256 EXPECT_MANIFEST_SHA256` | Expected manifest SHA256 as 64 hex characters. Verification fails if it differs. |
+| `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
+| `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 
 ### `inspect`
 
-Print metadata and integrity summary information.
+```text
+mkpfs inspect [-h] [--format {text,json}] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
+```
+
+Examples:
 
 ```bash
 mkpfs inspect ./game.ffpfs
+mkpfs inspect ./game.ffpfs --format json
 ```
 
-Use this when you want a concise report in terminal output or JSON via `--format json`.
+| Parameter | Description |
+| --- | --- |
+| `image_file` | Path to the input `.ffpfs` image. |
+| `-h`, `--help` | Show help and exit. |
+| `--format {text,json}` | Output format for the inspection report. Default: `text`. |
+| `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
+| `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 
 ### `tree`
 
-Print the filesystem tree stored inside an image.
+```text
+mkpfs tree [-h] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
+```
+
+Examples:
 
 ```bash
 mkpfs tree ./game.ffpfs
 ```
 
-Use this command when you want to:
-
-- Browse image contents quickly
-- Confirm file placement without extracting data
-- Inspect results after creating, receiving, or verifying an image
+| Parameter | Description |
+| --- | --- |
+| `image_file` | Path to the input `.ffpfs` image. |
+| `-h`, `--help` | Show help and exit. |
+| `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
+| `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 
 ### `unpack`
 
-Extract logical files from an image to a destination directory.
+```text
+mkpfs unpack [-h] [--overwrite] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file output_dir
+```
+
+Examples:
 
 ```bash
 mkpfs unpack ./game.ffpfs ./extracted/
+mkpfs unpack ./game.ffpfs ./extracted/ --overwrite
 ```
+
+| Parameter | Description |
+| --- | --- |
+| `image_file` | Path to the input `.ffpfs` image. |
+| `output_dir` | Destination directory for extraction. |
+| `-h`, `--help` | Show help and exit. |
+| `--overwrite` | Overwrite an existing output path. |
+| `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
+| `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 
 ## 🔁 Typical Workflow
 
@@ -280,7 +360,7 @@ MkPFS is easier to sustain when users who benefit from it help fund it.
 
 <p>
   <a href="https://github.com/sponsors/RenanGBarreto">
-    <img alt="GitHub Sponsors" src="https://img.shields.io/badge/Fund%20Development-GitHub%20Sponsors-e11d48?style=for-the-badge&logo=githubsponsors&logoColor=white" />
+    <img alt="GitHub Sponsors" src="https://img.shields.io/badge/Fund%20Development-GitHub%20Sponsors-e11d48?style=flat-square&logo=githubsponsors&logoColor=white" />
   </a>
 </p>
 
@@ -304,7 +384,7 @@ Special thanks to the people and communities helping shape MkPFS:
 - **The PlayStation and reverse-engineering community** — for tools, research threads, testing feedback, technical notes, and historical knowledge
 - **Community-maintained references and wiki pages** — especially the projects and archives that preserve PFS, PKG, and FPKG implementation details
 
-## 🔗 Related projects
+## Related projects
 
 - [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) — practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility
 - [PSDevWiki PFS](https://www.psdevwiki.com/ps4/PFS) — community reference for PFS on-disk structures
