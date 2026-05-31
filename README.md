@@ -19,8 +19,8 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 - Create and manage PFS disk images for PlayStation-oriented workflows
 - Verify structure, payload hashes, layout consistency, and source-tree matches
 - Inspect image contents quickly with a tree view instead of digging through raw structures
-- Work with common image extensions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, and `.bin`
-- Use the generated images with tools like [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)
+- Work with common image extensions such as `.ffpfs`, `.ffpfsc`.
+- Use the generated images with tools like [MicroMount](https://github.com/drakmor/ShadowMountPlus) and [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)
 - Build the inner PFS filesystem used inside PKG or FPKG workflows
 - Use the same core workflow from both the CLI and the Python library
 - Explore a bundled, source-backed knowledge base for PFS and PKG research
@@ -31,11 +31,12 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 # Install using pip
 pip install mkpfs
 
-# Convert an .exfat or .ffpkg file into a PFSC compressed image .ffpfsc 
+# Convert an .exfat or .ffpkg file into a PFSC compressed image .ffpfsc
+# NOTE: .ffpfsc is the simplest way to have game-file compression support.
 mkpfs pack file --compress --verify ./GAME1234.exfat ./GAME1234.ffpfsc
 
 # Convert a homebrew folder into a PFS image with compression and verification
-# NOTE: .ffpfs file are directly supported by ShadowMountPlus
+# WARNING: .ffpfs file only has limited support in ShadowMountPlus
 mkpfs pack folder --compress --verify ./GAME1234-app ./GAME1234.ffpfs
 
 # Inspect the generated image
@@ -44,6 +45,32 @@ mkpfs inspect ./GAME1234.ffpfs
 # Unpack the image back into a folder
 mkpfs unpack ./GAME1234.ffpfs ./GAME1234-extracted/
 ```
+
+## 💖 Sponsorship
+
+MkPFS is easier to sustain when users who benefit from it help fund it.
+
+<p>
+  <a href="https://github.com/sponsors/RenanGBarreto">
+    <img alt="GitHub Sponsors" src="https://img.shields.io/badge/Fund%20Development-GitHub%20Sponsors-e11d48?style=flat-square&logo=githubsponsors&logoColor=white" />
+  </a>
+</p>
+
+Support helps with:
+
+- Ongoing CLI improvements
+- The Python library and reusable internals
+- Better test coverage and compatibility work
+- More documentation, examples, and research notes
+
+Sponsor here:
+- https://github.com/sponsors/RenanGBarreto
+
+Or donate directly using:
+ - **BTC:**  **`141kKRoDpaS6PNC2yxSi8vziDFTmzCnArE`**
+ - **USDT (TRC-20):**  **`TQb7bUYSYRmdWgALHCejH33dNij9XyTAnU`**
+ - **USDT (ERC-20):**  **`0x63c0b4b21133c4068375ae7566dafcf1398cf6fb`**
+
 
 ## 📊 Compression Statistics
 
@@ -325,12 +352,12 @@ mkpfs tree ./output.ffpfs
 ## 💻 Example Output
 
 ```bash
-$ mkpfs pack folder --verify --compress "./BREW00000-app" "./BREW00000.ffpsf"
+$ mkpfs pack folder --verify --compress "./BREW00000-app" "./BREW00000.ffpfs"
 ======================================================================
 PFS Image Builder - Parameters
 ======================================================================
   Source path:       ./BREW00000-app
-  Output path:       ./BREW00000.ffpsf
+  Output path:       ./BREW00000.ffpfs
   Version:           1 (PS4)
   Header magic:      PFS (20130315)
   Compression Setup: PFSC (0x43534650)
@@ -356,7 +383,7 @@ Discovering files...
 Compressing 180 files (5.87 GB) using 10 CPU cores...
 [################################] 100% compress @ 68.75 MB/s            
 
-Writing PFS image to ./BREW00000.ffpsf...
+Writing PFS image to ./BREW00000.ffpfs...
 [################################] 100% write @ 728.27 MB/s
 
 Successfully wrote 3.21 GB image
@@ -364,7 +391,7 @@ Successfully wrote 3.21 GB image
 Build Summary
 ======================================================================
   Input path:              ./BREW00000-app
-  Output path:             ./BREW00000.ffpsf
+  Output path:             ./BREW00000.ffpfs
   Total files:             180
   Total uncompressed size: 5.87 GB
   Total stored size:       3.21 GB
@@ -387,7 +414,7 @@ Running post-create check...
 ======================================================================
 PFS Check Report
 ======================================================================
-Image:                 ./BREW00000.ffpsf
+Image:                 ./BREW00000.ffpfs
 Version:               1 (PS4)
 Header magic:          PFS (20130315)
 Compression Setup:     PFSC (0x43534650)
@@ -430,27 +457,6 @@ Run the validation commands:
 uv run --frozen ruff format .
 uv run --frozen ruff check .
 ```
-
-## 💖 Sponsorship
-
-MkPFS is easier to sustain when users who benefit from it help fund it.
-
-<p>
-  <a href="https://github.com/sponsors/RenanGBarreto">
-    <img alt="GitHub Sponsors" src="https://img.shields.io/badge/Fund%20Development-GitHub%20Sponsors-e11d48?style=flat-square&logo=githubsponsors&logoColor=white" />
-  </a>
-</p>
-
-Support helps with:
-
-- Ongoing CLI improvements
-- The Python library and reusable internals
-- Better test coverage and compatibility work
-- More documentation, examples, and research notes
-
-Sponsor here:
-
-- https://github.com/sponsors/RenanGBarreto
 
 ## 💙 Special thanks and Contributors
 
