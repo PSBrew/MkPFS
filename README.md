@@ -6,10 +6,11 @@
 [![Status](https://img.shields.io/badge/status-active%20development-1d4ed8?style=flat-square)](https://github.com/PSBrew/MkPFS/actions)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-2563eb?style=flat-square)](#installation)
 [![Profiles](https://img.shields.io/badge/profiles-PS4%20%2F%20PS5-3b82f6?style=flat-square)](#command-reference)
+[![GitHub Sponsors](https://img.shields.io/badge/Fund%20Development-GitHub%20Sponsors-e11d48?style=flat-square&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/RenanGBarreto)
 
 MkPFS is a command-line tool and Python library for building, verifying, inspecting, browsing, and extracting PlayStation FileSystem (PFS) disk images. It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, and `.bin`, and fits both direct image workflows and PKG or FPKG inner-PFS generation.
 
-**Quick links:** [Installation](#installation) · [Command reference](#command-reference) · [Development](#development) · [Related projects](#related-projects) · [Sponsor](https://github.com/sponsors/RenanGBarreto)
+[Quick Start](#quick-start) · [Compression Statistics](#compression-statistics) · [Installation](#installation) · [Command reference](#command-reference) · [Development](#development) · [Related projects](#related-projects) · [Sponsor](https://github.com/sponsors/RenanGBarreto)
 
 ## 🎯 Why MkPFS
 
@@ -24,63 +25,53 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 - Use the same core workflow from both the CLI and the Python library
 - Explore a bundled, source-backed knowledge base for PFS and PKG research
 
-## ✨ Main Features
+## 🚀 Quick Start
 
+```bash
+# Install using pip
+pip install mkpfs
 
-<table>
-  <tr>
-    <td width="55%" valign="top">
-      <h3>⚙️ Create PFS Images Fast</h3>
-      <p>
-        Turn a prepared folder into a PFS image with compression, optional encryption, profile selection, inode mode control,
-        dry runs, and post-build verification support. MkPFS is built around the actual image lifecycle instead
-        of forcing you through low-level manual steps.
-      </p>
-      <p>
-        Great for repeatable packaging workflows, rapid iteration, and PKG/FPKG inner-PFS generation.
-      </p>
-    </td>
-    <td width="45%" valign="top">
-      <img src="assets/images/screenshot-create.svg" alt="MkPFS create workflow placeholder" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="45%" valign="top">
-      <img src="assets/images/screenshot-check.svg" alt="MkPFS verification workflow placeholder" width="100%" />
-    </td>
-    <td width="55%" valign="top">
-      <h3>🔍 Verify With Confidence</h3>
-      <p>
-        Run structural checks, confirm payload hashes, compare an image to its source tree, and inspect CRC32
-        or manifest digest expectations. The goal is to make validation obvious and repeatable instead of an
-        afterthought.
-      </p>
-      <p>
-        The <code>verify</code> alias is especially handy when you want that intent to be visible in scripts, release pipelines,
-        and compatibility checks before using the image with ShadowMountPlus or packaging it into a PKG/FPKG workflow.
-      </p>
-    </td>
-  </tr>
-  <tr>
-    <td width="55%" valign="top">
-      <h3>⚙️ Use CLI or Library</h3>
-      <p>
-        MkPFS is positioned as a command-line tool and Python library for the same core image workflow:
-        create, verify, browse, and manage images from both the CLI and direct library calls.
-      </p>
-      <p>
-        That makes MkPFS useful for automation-heavy users, scripting, and integration in advanced workflows.
-      </p>
-    </td>
-    <td width="45%" valign="top">
-          </td>
-  </tr>
-</table>
+# Convert an .exfat or .ffpkg file into a PFSC compressed image .ffpfsc 
+mkpfs pack file --compress --verify ./GAME1234.exfat ./GAME1234.ffpfsc
 
+# Convert a homebrew folder into a PFS image with compression and verification
+# NOTE: .ffpfs file are directly supported by ShadowMountPlus
+mkpfs pack folder --compress --verify ./GAME1234-app ./GAME1234.ffpfs
+
+# Inspect the generated image
+mkpfs inspect ./GAME1234.ffpfs
+
+# Unpack the image back into a folder
+mkpfs unpack ./GAME1234.ffpfs ./GAME1234-extracted/
+```
+
+## 📊 Compression Statistics
+
+Using the compression from MkPFS, you can have your game files reduced by **40-60%**, drastically reducing the size of the image. 
+The PlayStation kernel is already able to read the files natively in the PFSC format with minimal performance impact!
+
+The numbers below are measured from a real homebrew title that previously had 6.5 GB of game files:
+
+| Format | Description | Size    | Space saved     |
+| --- | --- |---------|-----------------|
+| `.exfat` | Raw game image (exFAT) | ~6.5 GB | baseline        |
+| `.ffpkg` | Raw game image (UFS) | ~6.5 GB | baseline        |
+| `.exfat.ffpfsc` | PFSC-compressed wrapper around the exFAT image | ~3.4 GB | **-47%**        |
+| `.ffpkg.ffpfsc` | PFSC-compressed wrapper around the UFS image | ~3.4 GB | **-47%**        |
+| `.ffpfs` | Source folder packed directly into a PFSC image | ~3.5 GB | **-46%** |
+
+Both single-file wrapping (`pack file`) and folder-based packing (`pack folder`) produce compressed images of equivalent size, giving you flexibility without sacrificing efficiency.
 
 ## 📦 Installation
 
 ### Run from a local checkout
+
+### Install from PyPI
+
+```bash
+pip install mkpfs
+mkpfs -h
+```
 
 ```bash
 uv sync --group dev
@@ -94,13 +85,6 @@ uv tool install .
 mkpfs -h
 ```
 
-### Install from PyPI
-
-```bash
-uv tool install mkpfs
-mkpfs -h
-```
-
 ### Build distributables
 
 ```bash
@@ -110,7 +94,8 @@ uv run --frozen twine check dist/*
 
 ## Command Reference
 
-MkPFS keeps the command surface focused on the image lifecycle. The CLI currently supports `pack`, `verify`, `inspect`, `tree`, and `unpack`.
+MkPFS keeps the command surface focused on the image lifecycle. 
+The CLI currently supports `pack`, `verify`, `inspect`, `tree`, and `unpack`.
 
 ### Top-level CLI
 
@@ -201,8 +186,8 @@ mkpfs pack file [-h] [--adjust-output-file-extension | --no-adjust-output-file-e
 Examples:
 
 ```bash
-mkpfs pack file ./payload.bin ./payload.ffpfsc
-mkpfs pack file ./payload.bin ./payload.ffpfsc --verify
+mkpfs pack file ./payload.exfat ./payload.ffpfsc
+mkpfs pack file ./payload.exfat ./payload.ffpfsc --verify
 ```
 
 | Parameter | Description |
@@ -247,7 +232,7 @@ Examples:
 
 ```bash
 mkpfs verify ./game.ffpfs
-mkpfs verify ./single.ffpfsc --source-file ./payload.bin
+mkpfs verify ./single.ffpfsc --source-file ./payload.exfat
 mkpfs verify ./game.ffpfs --source-dir ./input --expect-crc32 0x7F528D1F
 ```
 
@@ -379,15 +364,15 @@ Sponsor here:
 
 Special thanks to the people and communities helping shape MkPFS:
 
-- **RenanGBarreto** — main creator and maintainer of MkPFS
-- **Darkmor** — creator of [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus), whose work helped inspire practical PFS mounting workflows
-- **The PlayStation and reverse-engineering community** — for tools, research threads, testing feedback, technical notes, and historical knowledge
-- **Community-maintained references and wiki pages** — especially the projects and archives that preserve PFS, PKG, and FPKG implementation details
+- **Renan @ PSBrew**: main creator and maintainer of MkPFS
+- **Darkmor @ ShadowMountPlus**: creator of [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus), whose work helped inspire practical PFS mounting workflows
+- **The PlayStation and reverse-engineering community**: for tools, research threads, testing feedback, technical notes, and historical knowledge
+- **Community-maintained references and wiki pages**: especially the projects and archives that preserve PFS, PKG, and FPKG implementation details
 
 ## Related projects
 
-- [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) — practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility
-- [PSDevWiki PFS](https://www.psdevwiki.com/ps4/PFS) — community reference for PFS on-disk structures
-- [PSDevWiki PKG files](https://www.psdevwiki.com/ps4/PKG_files) — PKG format reference and tooling pointers
-- [ShadPKG HOWWORKS](https://github.com/seregonwar/ShadPKG/blob/main/docs/HOWWORKS.md) — implementation-focused PKG/PFS decryption walkthrough
-- [Wololo: PS4 FPKG writeup by Flatz](https://wololo.net/ps4-fpkg-writeup-by-flatz/) — historical writeup on FPKG/PKG techniques
+- [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus): Practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility
+- [PSDevWiki PFS](https://www.psdevwiki.com/ps4/PFS): Community reference for PFS on-disk structures
+- [PSDevWiki PKG files](https://www.psdevwiki.com/ps4/PKG_files): PKG format reference and tooling pointers
+- [ShadPKG HOWWORKS](https://github.com/seregonwar/ShadPKG/blob/main/docs/HOWWORKS.md): Implementation-focused PKG/PFS decryption walkthrough
+- [Wololo: PS4 FPKG writeup by Flatz](https://wololo.net/ps4-fpkg-writeup-by-flatz/): Historical writeup on FPKG/PKG techniques
