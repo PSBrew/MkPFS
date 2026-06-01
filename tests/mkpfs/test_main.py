@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import runpy
 import unittest
 from contextlib import redirect_stdout
@@ -21,10 +23,7 @@ class TestMainModule(unittest.TestCase):
 
     def test_module_execution_exits_with_the_stubbed_cli_code(self) -> None:
         """Executing ``mkpfs.__main__`` should raise ``SystemExit`` with the CLI return code."""
-        with (
-            patch.object(cli, "cli_mkpfs_main", return_value=0),
-            self.assertRaises(SystemExit) as excinfo,
-        ):
+        with patch.object(cli, "cli_mkpfs_main", return_value=0), self.assertRaises(SystemExit) as excinfo:
             runpy.run_module("mkpfs.__main__", run_name="__main__")
 
         self.assertEqual(excinfo.exception.code, 0)

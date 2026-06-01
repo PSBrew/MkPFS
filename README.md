@@ -1,9 +1,9 @@
 # MkPFS
 
 [![PyPI](https://img.shields.io/pypi/v/mkpfs?style=flat-square&logo=pypi&logoColor=white&color=2563eb)](https://pypi.org/project/mkpfs/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-2563eb?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3110/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-2563eb?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-380/)
 [![License](https://img.shields.io/badge/license-GPL--3.0-0f172a?style=flat-square)](LICENSE)
-[![Status](https://img.shields.io/badge/status-active%20development-1d4ed8?style=flat-square)](https://github.com/PSBrew/MkPFS/actions)
+[![Status](https://img.shields.io/badge/status-production%2Fstable-1d4ed8?style=flat-square)](https://github.com/PSBrew/MkPFS/actions)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-2563eb?style=flat-square)](#installation)
 [![Profiles](https://img.shields.io/badge/profiles-PS4%20%2F%20PS5-3b82f6?style=flat-square)](#command-reference)
 [![GitHub Sponsors](https://img.shields.io/badge/Fund%20Development-GitHub%20Sponsors-e11d48?style=flat-square&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/RenanGBarreto)

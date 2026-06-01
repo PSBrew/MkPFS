@@ -5,6 +5,8 @@ This module provides a compact `log` function and convenience wrappers
 configuring the global `logging` subsystem so callers can opt-in if needed.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import sys

@@ -1,5 +1,7 @@
 """MKPFS CLI main() hook."""
 
+from __future__ import annotations
+
 from mkpfs.cli import cli_mkpfs_main
 
 

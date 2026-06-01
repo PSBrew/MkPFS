@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import json
 import struct
@@ -548,9 +550,10 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             _ = logical_block_size
             return raw_size, False, 0.0, 0
 
-        with (
-            patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1),
-            patch.object(pfs_mod, "_analyze_pfsc_file_storage", side_effect=fake_analyze_pfsc_file_storage),
+        with patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1), patch.object(
+            pfs_mod,
+            "_analyze_pfsc_file_storage",
+            side_effect=fake_analyze_pfsc_file_storage,
         ):
             build_pfs(
                 source_root=src,

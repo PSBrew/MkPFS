@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -309,9 +311,10 @@ class TestCliPromptOverwrite(CliTestCase):
         partial_path: Path = Path(f"{output_path}.tmp")
         output_path.write_text("x", encoding="utf-8")
         partial_path.write_text("partial", encoding="utf-8")
-        with (
-            patch("builtins.input", side_effect=["maybe", "yes"]),
-            patch.object(Path, "unlink", side_effect=OSError("unlink blocked")),
+        with patch("builtins.input", side_effect=["maybe", "yes"]), patch.object(
+            Path,
+            "unlink",
+            side_effect=OSError("unlink blocked"),
         ):
             self.assertTrue(cli.prompt_overwrite(output_path=output_path))
 
@@ -331,9 +334,10 @@ class TestCliPromptOverwrite(CliTestCase):
         os.utime(stale_spool_path, times=(100.0, 100.0))
         os.utime(fresh_spool_path, times=(990.0, 990.0))
 
-        with (
-            patch.object(cli.tempfile, "gettempdir", return_value=str(temp_root)),
-            patch.object(cli.time, "time", return_value=1000.0),
+        with patch.object(cli.tempfile, "gettempdir", return_value=str(temp_root)), patch.object(
+            cli.time,
+            "time",
+            return_value=1000.0,
         ):
             cli.cleanup_pack_temp_artifacts(output_path=output_path, stale_age_seconds=300)
 
@@ -428,11 +432,13 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         stdout_buffer: StringIO = StringIO()
-        with (
-            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
-            patch.object(cli, "prompt_overwrite", return_value=True),
-            redirect_stdout(stdout_buffer),
-        ):
+        with patch.object(
+            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
+        ) as mocked_build, patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), redirect_stdout(stdout_buffer):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertEqual(mocked_build.call_args.kwargs["output_path"].suffix, ".ffpfsc")
         self.assertEqual(mocked_build.call_args.kwargs["ekpfs"], b"\x00" * 32)
@@ -450,11 +456,13 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         stdout_buffer: StringIO = StringIO()
-        with (
-            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
-            patch.object(cli, "prompt_overwrite", return_value=True),
-            redirect_stdout(stdout_buffer),
-        ):
+        with patch.object(
+            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
+        ) as mocked_build, patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), redirect_stdout(stdout_buffer):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertEqual(mocked_build.call_args.kwargs["output_path"].suffix, ".ffpfs")
         self.assertIn("Raw game files detected inside the source folder", stdout_buffer.getvalue())
@@ -471,11 +479,13 @@ class TestCliCreateRun(CliTestCase):
         )
         args.adjust_output_file_extension = False
         stdout_buffer: StringIO = StringIO()
-        with (
-            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
-            patch.object(cli, "prompt_overwrite", return_value=True),
-            redirect_stdout(stdout_buffer),
-        ):
+        with patch.object(
+            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
+        ) as mocked_build, patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), redirect_stdout(stdout_buffer):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertEqual(mocked_build.call_args.kwargs["output_path"].name, "custom-name.img")
         self.assertNotIn("adjusting output file extension", stdout_buffer.getvalue())
@@ -492,9 +502,8 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         args.require_game_files = True
-        with (
-            patch.object(cli, "build_pfs", side_effect=AssertionError("build should not run")),
-            self.assertRaises(BuildError),
+        with patch.object(cli, "build_pfs", side_effect=AssertionError("build should not run")), self.assertRaises(
+            BuildError
         ):
             cli.cli_mkpfs_create_run(args)
 
@@ -508,9 +517,12 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         args.new_crypt = True
-        with (
-            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
-            patch.object(cli, "prompt_overwrite", return_value=True),
+        with patch.object(
+            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
+        ) as mocked_build, patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertTrue(mocked_build.call_args.kwargs["new_crypt"])
@@ -574,11 +586,13 @@ class TestCliCreateRun(CliTestCase):
             dry_run=False,
             verify=False,
         )
-        with (
-            patch.object(cli, "validate_input", return_value=("TITLE", [])),
-            patch.object(cli, "cleanup_pack_temp_artifacts") as mocked_cleanup,
-            patch.object(cli, "prompt_overwrite", return_value=False),
-            patch.object(cli, "build_pfs", side_effect=AssertionError("build should not run")),
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "cleanup_pack_temp_artifacts",
+        ) as mocked_cleanup, patch.object(cli, "prompt_overwrite", return_value=False), patch.object(
+            cli,
+            "build_pfs",
+            side_effect=AssertionError("build should not run"),
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         mocked_cleanup.assert_called_once()
@@ -594,11 +608,16 @@ class TestCliCreateRun(CliTestCase):
             dry_run=False,
             verify=True,
         )
-        with (
-            patch.object(cli, "validate_input", return_value=("TITLE", [])),
-            patch.object(cli, "prompt_overwrite", return_value=True),
-            patch.object(cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)),
-            patch.object(cli, "run_image_check", return_value=(["error"], ["warning"], {}, -1)),
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(
+            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
+        ), patch.object(
+            cli,
+            "run_image_check",
+            return_value=(["error"], ["warning"], {}, -1),
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 1)
 
@@ -631,14 +650,11 @@ class TestCliCreateRun(CliTestCase):
         )
         args.encrypted = True
         args.ekpfs_key = "12" * 32
-        with (
-            patch.object(cli, "validate_input", return_value=("TITLE", [])),
-            patch.object(
-                cli,
-                "build_pfs",
-                return_value=BuildStats(input_path=source_path, output_path=output_path),
-            ) as mocked_build,
-        ):
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "build_pfs",
+            return_value=BuildStats(input_path=source_path, output_path=output_path),
+        ) as mocked_build:
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertTrue(mocked_build.call_args.kwargs["encrypted"])
         self.assertEqual(mocked_build.call_args.kwargs["ekpfs"], bytes.fromhex("12" * 32))
@@ -676,12 +692,11 @@ class TestCliCreateRun(CliTestCase):
             self.assertEqual(adjusted_output.suffix, ".ffpfsc")
             return BuildStats(input_path=staged_root, output_path=adjusted_output)
 
-        with (
-            patch.object(cli, "validate_input", side_effect=fake_validate_input),
-            patch.object(cli, "build_pfs", side_effect=fake_build_pfs),
-            patch.object(cli, "prompt_overwrite", return_value=True),
-            redirect_stdout(stdout_buffer),
-        ):
+        with patch.object(cli, "validate_input", side_effect=fake_validate_input), patch.object(
+            cli,
+            "build_pfs",
+            side_effect=fake_build_pfs,
+        ), patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(stdout_buffer):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
         self.assertEqual(seen_require_game_files, [False])
@@ -831,10 +846,7 @@ class TestCliReadOnlyCommands(CliTestCase):
         """Tree listing should print a root marker and return success for a valid image."""
         stdout_buffer: StringIO = StringIO()
         dirents: dict[int, list[ParsedDirent]] = {0: [ParsedDirent(inode_number=1, type_code=1, name="file")]}
-        with (
-            patch.object(cli, "run_image_check", return_value=([], [], dirents, 0)),
-            redirect_stdout(stdout_buffer),
-        ):
+        with patch.object(cli, "run_image_check", return_value=([], [], dirents, 0)), redirect_stdout(stdout_buffer):
             self.assertEqual(cli.cli_mkpfs_ls_run(SimpleNamespace(image_file="img")), 0)
         self.assertIn("/", stdout_buffer.getvalue())
 

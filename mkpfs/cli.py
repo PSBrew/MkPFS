@@ -1,5 +1,7 @@
 """Command-line interface for mkpfs package."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

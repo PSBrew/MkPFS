@@ -3,6 +3,8 @@
 This module provides the Progress class used by CLI build flows.
 """
 
+from __future__ import annotations
+
 import sys
 import time
 
