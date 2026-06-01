@@ -2520,12 +2520,11 @@ def build_pfs(
             ino.number = idx
             remap[old] = idx
 
+        # Inode objects are already renumbered in-place above. Only dirent links
+        # still carry old inode numbers and need remapping.
         for d in dir_nodes_sorted:
-            d.inode.number = remap[d.inode.number]
             for ent in d.dirents:
                 ent.inode_number = remap[ent.inode_number]
-        for f in file_nodes_sorted:
-            f.inode.number = remap[f.inode.number]
 
         inode_by_path = {}
         for d in dir_nodes_sorted:

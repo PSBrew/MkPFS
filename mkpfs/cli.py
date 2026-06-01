@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import tempfile
 import time
 from collections.abc import Iterator
@@ -68,7 +69,7 @@ def print_build_parameters(
     min_compress_size: int,
     dry_run: bool,
     require_game_files: bool,
-    skip_executable_compression: bool = False,
+    skip_executable_compression: bool = True,
 ) -> None:
     """Print build configuration at the start."""
     mode: int = compose_pfs_mode_with_sign(inode_bits, case_insensitive, signed)
@@ -208,6 +209,64 @@ def print_summary(stats: BuildStats) -> None:
         info(f"  Throughput:              {human_readable_size(int(throughput))}/s")
 
     info("" * 70 + "\n")
+
+
+def resolve_disk_usage_probe_path(*, output_path: Path) -> Path:
+    """Resolve an existing path suitable for destination disk usage checks.
+
+    Args:
+        output_path: Requested output image path, possibly inside a directory
+            tree that does not exist yet.
+
+    Returns:
+        Existing directory path to probe with ``shutil.disk_usage``.
+    """
+    probe_path: Path = output_path.parent
+    root_path: Path = (probe_path.anchor and Path(probe_path.anchor)) or Path("/")
+    while not probe_path.exists() and probe_path != root_path:
+        probe_path = probe_path.parent
+    return probe_path if probe_path.exists() else root_path
+
+
+def calculate_source_raw_size_bytes(*, source_root: Path) -> int:
+    """Calculate total raw byte size for all files inside a source tree.
+
+    Args:
+        source_root: Directory used as pack source.
+
+    Returns:
+        Sum of raw ``st_size`` values for all files in the source tree.
+    """
+    total_raw_size_bytes: int = 0
+    candidate_path: Path
+    for candidate_path in source_root.rglob("*"):
+        if candidate_path.is_file():
+            total_raw_size_bytes += candidate_path.stat().st_size
+    return total_raw_size_bytes
+
+
+def get_destination_space_error_message(*, source_root: Path, output_path: Path) -> str | None:
+    """Build an insufficient-destination-space error for pack preflight.
+
+    Args:
+        source_root: Source directory whose raw file bytes must fit.
+        output_path: Requested output image destination.
+
+    Returns:
+        Error text when free destination space is insufficient, otherwise
+        ``None``.
+    """
+    required_raw_size_bytes: int = calculate_source_raw_size_bytes(source_root=source_root)
+    probe_path: Path = resolve_disk_usage_probe_path(output_path=output_path)
+    free_space_bytes: int = shutil.disk_usage(path=probe_path).free
+    if free_space_bytes >= required_raw_size_bytes:
+        return None
+    required_size_gb: float = required_raw_size_bytes / float(1024**3)
+    return (
+        "ERROR: The destination file is on a disk that does not have enough space "
+        f"({required_size_gb:.1f} GB) to perform the operation.\n"
+        "Operation cancelled."
+    )
 
 
 def prompt_overwrite(output_path: Path) -> bool:
@@ -437,8 +496,8 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--threshold-gain",
         type=int,
-        default=20,
-        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 20)",
+        default=0,
+        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 0)",
     )
     parser.add_argument(
         "--block-size",
@@ -447,7 +506,7 @@ def cli_mkpfs_add_create_args(
     )
     parser.add_argument("--version", choices=["PS4", "PS5"], default="PS4", help="PFS profile version (default: PS4)")
     parser.add_argument(
-        "--inode-bits", type=int, choices=[32, 64], default=32, help="Inode width mode bit (32 or 64, default: 32)"
+        "--inode-bits", type=int, choices=[32, 64], default=64, help="Inode width mode bit (32 or 64, default: 64)"
     )
 
     case_group = parser.add_mutually_exclusive_group()
@@ -460,7 +519,7 @@ def cli_mkpfs_add_create_args(
         default=0,
         help="Number of CPU cores for PFSC compression (0 = auto max(1, cpu_count()), non-zero = max(1, user value))",
     )
-    parser.add_argument("--compression-level", type=int, default=7, help="Zlib compression level (0-9, default: 7)")
+    parser.add_argument("--compression-level", type=int, default=9, help="Zlib compression level (0-9, default: 9)")
     parser.add_argument(
         "--max-compressed-ratio",
         type=int,
@@ -476,6 +535,7 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--skip-executable-compression",
         action="store_true",
+        default=True,
         help="Store eboot*.bin, *.prx, and *.sprx files raw even when PFSC compression is enabled",
     )
     parser.add_argument("--signed", action="store_true", help="Build a signed PFS image using zero EKPFS/seed")
@@ -603,6 +663,15 @@ def _run_pack_build(
         require_game_files,
         bool(getattr(args, "skip_executable_compression", False)),
     )
+
+    if not args.dry_run:
+        destination_space_error: str | None = get_destination_space_error_message(
+            source_root=build_source_root,
+            output_path=output_path,
+        )
+        if destination_space_error is not None:
+            error(destination_space_error)
+            return 1
 
     if not args.dry_run:
         cleanup_pack_temp_artifacts(output_path=output_path)

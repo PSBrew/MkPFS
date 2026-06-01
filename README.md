@@ -190,17 +190,17 @@ python -m mkpfs pack folder c:\game_folder d:\game.ffpfs `
 | `--no-adjust-output-file-extension` | Keep the requested output file name unchanged. |
 | `--compress` | Enable PFSC block compression. This is the default. |
 | `--no-compress` | Disable PFSC block compression. |
-| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `20`. |
+| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `0`. |
 | `--block-size BLOCK_SIZE` | PFS block size in bytes, `auto`, or `auto-fit`. Default: `auto`, which resolves to `65536`; `auto-fit` picks 4096..65536 by estimated file-data padding. |
 | `--version {PS4,PS5}` | PFS profile version. Default: `PS4`. |
-| `--inode-bits {32,64}` | Inode width mode bit. Default: `32`. |
+| `--inode-bits {32,64}` | Inode width mode bit. Default: `64`. |
 | `--case-sensitive` | Build a case-sensitive image. |
 | `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior. |
 | `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count())`, non-zero uses `max(1, user value)`. |
-| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `7`. |
+| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `9`. |
 | `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: disabled. |
 | `--min-compress-size MIN_COMPRESS_SIZE` | Store files smaller than this many bytes raw without trying PFSC compression. Use `65536` to skip files smaller than one PFSC logical block. Default: `0`. |
-| `--skip-executable-compression` | Store `eboot*.bin`, `*.prx`, and `*.sprx` files raw even when PFSC compression is enabled. |
+| `--skip-executable-compression` | Store `eboot*.bin`, `*.prx`, and `*.sprx` files raw even when PFSC compression is enabled. Default: enabled. |
 | `--signed` | Build a signed PFS image using a zero EKPFS key and seed. |
 | `--encrypted` | Encrypt filesystem blocks with AES-XTS. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
@@ -246,17 +246,17 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --verify
 | `--no-adjust-output-file-extension` | Keep the requested output file name unchanged. |
 | `--compress` | Enable PFSC block compression. This is the default. |
 | `--no-compress` | Disable PFSC block compression. |
-| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `20`. |
+| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `0`. |
 | `--block-size BLOCK_SIZE` | PFS block size in bytes, `auto`, or `auto-fit`. Default: `auto`, which resolves to `65536`; `auto-fit` picks 4096..65536 by estimated file-data padding. |
 | `--version {PS4,PS5}` | PFS profile version. Default: `PS4`. |
-| `--inode-bits {32,64}` | Inode width mode bit. Default: `32`. |
+| `--inode-bits {32,64}` | Inode width mode bit. Default: `64`. |
 | `--case-sensitive` | Build a case-sensitive image. |
 | `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior. |
 | `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count())`, non-zero uses `max(1, user value)`. |
-| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `7`. |
+| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `9`. |
 | `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: disabled. |
 | `--min-compress-size MIN_COMPRESS_SIZE` | Store files smaller than this many bytes raw without trying PFSC compression. Use `65536` to skip files smaller than one PFSC logical block. Default: `0`. |
-| `--skip-executable-compression` | Store `eboot*.bin`, `*.prx`, and `*.sprx` files raw even when PFSC compression is enabled. |
+| `--skip-executable-compression` | Store `eboot*.bin`, `*.prx`, and `*.sprx` files raw even when PFSC compression is enabled. Default: enabled. |
 | `--signed` | Build a signed PFS image using a zero EKPFS key and seed. |
 | `--encrypted` | Encrypt filesystem blocks with AES-XTS. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
@@ -385,10 +385,10 @@ PFS Image Builder - Parameters
   Header magic:      PFS (20130315)
   Compression Setup: PFSC (0x43534650)
   Block size:        65,536 bytes (64 KiB)
-  Inode width:       32-bit
-  PFS mode:          0x0008  (Bit 0=signed, Bit 1=64-bit inodes, Bit 2=encrypted, Bit 3=case insensitive)
+  Inode width:       64-bit
+  PFS mode:          0x000A  (Bit 0=signed, Bit 1=64-bit inodes, Bit 2=encrypted, Bit 3=case insensitive)
     Signed:          no
-    64-bit inodes:   no
+    64-bit inodes:   yes
     Encrypted:       no
     New crypt:       no
     Case insensitive: yes
@@ -442,9 +442,9 @@ Version:               1 (PS4)
 Header magic:          PFS (20130315)
 Compression Setup:     PFSC (0x43534650)
 Read-only:             yes
-Mode:                  0x0008  (Bit 0=signed, Bit 1=64-bit inodes, Bit 2=encrypted, Bit 3=case insensitive)
+Mode:                  0x000A  (Bit 0=signed, Bit 1=64-bit inodes, Bit 2=encrypted, Bit 3=case insensitive)
   Signed:              no
-  64-bit inodes:       no
+  64-bit inodes:       yes
   Encrypted:           no
   Case insensitive:    yes
 Block size:            65,536 bytes

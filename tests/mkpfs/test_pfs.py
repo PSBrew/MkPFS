@@ -546,6 +546,33 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert pfs_mod.read_image_inode_payload(fh, header, small_inode) == small_payload
             assert pfs_mod.read_image_inode_payload(fh, header, large_inode)[:4] == b"PFSC"
 
+    def test_build_pfs_handles_fpt_collision_inode_renumbering(self) -> None:
+        """Forced FPT collisions should not break inode renumbering during build."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        out: Path = tmp_path / "collision-renumbering.ffpfs"
+
+        with patch.object(pfs_mod, "fpt_hash", return_value=0x12345678):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS4,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=True,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+            )
+
+        assert out.is_file()
+        assert out.stat().st_size > 0
+
     def test_pfsc_encode_decode_round_trip(self) -> None:
         """PFSC payload encoding and decoding should preserve logical bytes."""
         raw: bytes = (b"A" * 65536) + (b"B" * 65536) + (b"C" * 1234)
