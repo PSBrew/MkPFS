@@ -24,7 +24,7 @@ dependencies = [
 mkpfs = "mkpfs.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling<1.30"]
 build-backend = "hatchling.build"
 
 [project.urls]
