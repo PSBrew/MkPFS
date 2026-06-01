@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +67,8 @@ class CliTestCase(unittest.TestCase):
             case_insensitive=True,
             cpu_count=0,
             compression_level=7,
+            min_compress_size=0,
+            max_compressed_ratio=None,
             signed=False,
             encrypted=False,
             ekpfs_key=None,
@@ -93,6 +95,8 @@ class CliTestCase(unittest.TestCase):
             case_insensitive=True,
             cpu_count=0,
             compression_level=7,
+            min_compress_size=0,
+            max_compressed_ratio=None,
             signed=False,
             encrypted=False,
             ekpfs_key=None,
@@ -162,8 +166,8 @@ class TestCliArgumentHelpers(CliTestCase):
         )
         self.assertEqual(set(choices), {"pack", "verify", "inspect", "tree", "unpack"})
 
-    def test_pack_parser_uses_default_compression_level_of_seven(self) -> None:
-        """The pack parser should expose 7 as the default compression level."""
+    def test_pack_parser_uses_default_compression_level_of_nine(self) -> None:
+        """The pack parser should expose 9 as the default compression level."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
             action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
@@ -175,7 +179,73 @@ class TestCliArgumentHelpers(CliTestCase):
         compression_action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "compression_level"
         )
-        self.assertEqual(compression_action.default, 7)
+        self.assertEqual(compression_action.default, 9)
+
+    def test_pack_parser_uses_zero_as_default_threshold_gain(self) -> None:
+        """The pack parser should expose 0 as the default threshold gain."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        pack_parser: argparse.ArgumentParser = next(
+            action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        pack_choices: dict[str, argparse.ArgumentParser] = next(
+            action.choices for action in pack_parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        folder_parser: argparse.ArgumentParser = pack_choices["folder"]
+        threshold_action: argparse.Action = next(
+            action for action in folder_parser._actions if getattr(action, "dest", "") == "threshold_gain"
+        )
+        self.assertEqual(threshold_action.default, 0)
+
+    def test_pack_parser_uses_sixty_four_as_default_inode_bits(self) -> None:
+        """The pack parser should expose 64 as the default inode width."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        pack_parser: argparse.ArgumentParser = next(
+            action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        pack_choices: dict[str, argparse.ArgumentParser] = next(
+            action.choices for action in pack_parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        folder_parser: argparse.ArgumentParser = pack_choices["folder"]
+        inode_bits_action: argparse.Action = next(
+            action for action in folder_parser._actions if getattr(action, "dest", "") == "inode_bits"
+        )
+        self.assertEqual(inode_bits_action.default, 64)
+
+    def test_pack_parser_exposes_executable_compression_skip_flag(self) -> None:
+        """The pack parser should default to skipping executable compression."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        pack_parser: argparse.ArgumentParser = next(
+            action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        pack_choices: dict[str, argparse.ArgumentParser] = next(
+            action.choices for action in pack_parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        folder_parser: argparse.ArgumentParser = pack_choices["folder"]
+        skip_action: argparse.Action = next(
+            action for action in folder_parser._actions if getattr(action, "dest", "") == "skip_executable_compression"
+        )
+        self.assertTrue(skip_action.default)
+        self.assertIsNotNone(skip_action.help)
+        self.assertIn("eboot*.bin", skip_action.help or "")
+
+    def test_pack_parser_exposes_whole_file_compression_threshold(self) -> None:
+        """The pack parser should expose the whole-file compression threshold."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        pack_parser: argparse.ArgumentParser = next(
+            action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        pack_choices: dict[str, argparse.ArgumentParser] = next(
+            action.choices for action in pack_parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        folder_parser: argparse.ArgumentParser = pack_choices["folder"]
+        max_ratio_action: argparse.Action = next(
+            action for action in folder_parser._actions if getattr(action, "dest", "") == "max_compressed_ratio"
+        )
+        min_size_action: argparse.Action = next(
+            action for action in folder_parser._actions if getattr(action, "dest", "") == "min_compress_size"
+        )
+        self.assertIsNone(max_ratio_action.default)
+        self.assertEqual(min_size_action.default, 0)
 
     def test_pack_parser_cpu_count_help_mentions_auto_and_user_normalization(self) -> None:
         """The pack parser should document auto and explicit worker normalization rules."""
@@ -367,6 +437,8 @@ class TestCliOutputFormatting(CliTestCase):
                 threshold_gain=20,
                 cpu_count=0,
                 zlib_level=7,
+                max_compressed_ratio=None,
+                min_compress_size=0,
                 dry_run=True,
                 require_game_files=False,
             )
@@ -490,6 +562,35 @@ class TestCliCreateRun(CliTestCase):
         self.assertEqual(mocked_build.call_args.kwargs["output_path"].name, "custom-name.img")
         self.assertNotIn("adjusting output file extension", stdout_buffer.getvalue())
 
+    def test_create_run_auto_fit_block_size_selects_small_blocks_for_small_files(self) -> None:
+        """The auto-fit block-size mode should pick a smaller block size for small-file trees."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        data_path: Path = source_path / "data"
+        data_path.mkdir()
+        for idx in range(32):
+            (data_path / f"small_{idx:02d}.bin").write_bytes(b"x" * 100)
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=tmp_path / "out",
+            dry_run=True,
+            verify=False,
+        )
+        args.block_size = "auto-fit"
+        stdout_buffer: StringIO = StringIO()
+
+        with patch.object(
+            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
+        ) as mocked_build, patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), redirect_stdout(stdout_buffer):
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
+
+        self.assertEqual(mocked_build.call_args.kwargs["block_size"], 4096)
+        self.assertIn("Auto-fit block size selected", stdout_buffer.getvalue())
+
     def test_create_run_requires_game_files_when_flag_is_enabled(self) -> None:
         """Pack should fail fast when strict game-file validation is enabled and files are missing."""
         tmp_path: Path = self.make_temp_path()
@@ -563,6 +664,18 @@ class TestCliCreateRun(CliTestCase):
             with self.assertRaises(BuildError):
                 cli.cli_mkpfs_create_run(bad_level)
 
+            bad_max_ratio_dict: dict[str, object] = base_args.copy()
+            bad_max_ratio_dict["max_compressed_ratio"] = 101
+            bad_max_ratio: SimpleNamespace = SimpleNamespace(**bad_max_ratio_dict)
+            with self.assertRaises(BuildError):
+                cli.cli_mkpfs_create_run(bad_max_ratio)
+
+            bad_min_size_dict: dict[str, object] = base_args.copy()
+            bad_min_size_dict["min_compress_size"] = -1
+            bad_min_size: SimpleNamespace = SimpleNamespace(**bad_min_size_dict)
+            with self.assertRaises(BuildError):
+                cli.cli_mkpfs_create_run(bad_min_size)
+
             bad_key_dict: dict[str, object] = base_args.copy()
             bad_key_dict["encrypted"] = True
             bad_key_dict["ekpfs_key"] = "xyz"
@@ -596,6 +709,75 @@ class TestCliCreateRun(CliTestCase):
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         mocked_cleanup.assert_called_once()
+
+    def test_create_run_returns_error_when_destination_disk_is_too_small(self) -> None:
+        """Create run should fail early when destination free space is below raw source size."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=tmp_path / "out.ffpfs",
+            dry_run=False,
+            verify=False,
+        )
+        stderr_buffer: StringIO = StringIO()
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "cleanup_pack_temp_artifacts",
+            side_effect=AssertionError("cleanup should not run"),
+        ), patch.object(
+            cli,
+            "prompt_overwrite",
+            side_effect=AssertionError("prompt should not run"),
+        ), patch.object(
+            cli,
+            "build_pfs",
+            side_effect=AssertionError("build should not run"),
+        ), patch.object(
+            cli.shutil,
+            "disk_usage",
+            return_value=SimpleNamespace(total=10, used=9, free=1),
+        ), redirect_stderr(stderr_buffer):
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 1)
+        self.assertIn(
+            "ERROR: The destination file is on a disk that does not have enough space", stderr_buffer.getvalue()
+        )
+        self.assertIn("Operation cancelled.", stderr_buffer.getvalue())
+
+    def test_pack_file_run_returns_error_when_destination_disk_is_too_small(self) -> None:
+        """Pack file should fail early when destination free space is below raw source size."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "single.bin"
+        source_file.write_bytes(b"payload")
+        args: SimpleNamespace = self.make_pack_file_args(
+            source_path=source_file,
+            image_path=tmp_path / "out.ffpfsc",
+            dry_run=False,
+            verify=False,
+        )
+        stderr_buffer: StringIO = StringIO()
+        with patch.object(cli, "validate_input", return_value=(None, [])), patch.object(
+            cli,
+            "cleanup_pack_temp_artifacts",
+            side_effect=AssertionError("cleanup should not run"),
+        ), patch.object(
+            cli,
+            "prompt_overwrite",
+            side_effect=AssertionError("prompt should not run"),
+        ), patch.object(
+            cli,
+            "build_pfs",
+            side_effect=AssertionError("build should not run"),
+        ), patch.object(
+            cli.shutil,
+            "disk_usage",
+            return_value=SimpleNamespace(total=10, used=9, free=1),
+        ), redirect_stderr(stderr_buffer):
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 1)
+        self.assertIn(
+            "ERROR: The destination file is on a disk that does not have enough space", stderr_buffer.getvalue()
+        )
+        self.assertIn("Operation cancelled.", stderr_buffer.getvalue())
 
     def test_create_run_runs_post_verify_and_returns_error_when_check_fails(self) -> None:
         """Create run should perform post-verify and return a failure code when verification reports errors."""

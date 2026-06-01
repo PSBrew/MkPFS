@@ -32,6 +32,7 @@ from .utils import _read_exact, ceil_div, human_readable_size, read_param_json
 
 PFSC_PROGRESS_REPORT_BYTES: int = consts.PFSC_LOGICAL_BLOCK_SIZE * 16
 PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE: int = 256 * 1024 * 1024
+AUTO_FIT_BLOCK_SIZE_CANDIDATES: tuple[int, ...] = (0x1000, 0x2000, 0x4000, 0x8000, 0x10000)
 
 
 class SupportsIntQueue(Protocol):
@@ -42,6 +43,26 @@ class SupportsIntQueue(Protocol):
 
     def get_nowait(self) -> int:
         """Return the next queued byte delta without blocking."""
+
+
+def estimate_file_data_footprint(*, file_sizes: list[int], block_size: int) -> int:
+    """Estimate data-block footprint for file payloads at a given PFS block size."""
+    return sum((ceil_div(size, block_size) * block_size) if size > 0 else block_size for size in file_sizes)
+
+
+def choose_auto_fit_block_size(source_root: Path) -> int:
+    """Choose a PFS block size that minimizes estimated file-data footprint."""
+    file_sizes: list[int] = [p.stat().st_size for p in source_root.rglob("*") if p.is_file()]
+    if not file_sizes:
+        return consts.PFSC_LOGICAL_BLOCK_SIZE
+
+    return min(
+        AUTO_FIT_BLOCK_SIZE_CANDIDATES,
+        key=lambda candidate: (
+            estimate_file_data_footprint(file_sizes=file_sizes, block_size=candidate),
+            -candidate,
+        ),
+    )
 
 
 def validate_d32_ranges(inodes: list[Inode], final_ndblock: int) -> None:
@@ -696,6 +717,27 @@ class FileNode:
     inode: Inode | None = None
 
 
+def should_skip_executable_compression(file_name: str) -> bool:
+    """Return True for executable payloads that should stay raw when requested."""
+    lower_name: str = file_name.lower()
+    return (
+        (lower_name.startswith("eboot") and lower_name.endswith(".bin"))
+        or lower_name.endswith(".prx")
+        or lower_name.endswith(".sprx")
+    )
+
+
+def store_file_node_raw(file_node: FileNode) -> None:
+    """Mark a file node to be stored directly from the source file."""
+    file_node.stored_source_path = file_node.abs_path
+    file_node.stored_source_is_temp = False
+    file_node.stored_size = file_node.raw_size
+    file_node.compressed = False
+    file_node.gain_pct = 0.0
+
+    file_node.hypothetical_compressed_size = file_node.raw_size
+
+
 @dataclass
 class DirNode:
     rel_dir: str
@@ -987,6 +1029,7 @@ def _analyze_pfsc_file_storage(
     *,
     abs_path: Path,
     threshold_gain: int,
+    min_file_gain: int,
     zlib_level: int,
     logical_block_size: int,
     block_worker_count: int = 1,
@@ -997,6 +1040,7 @@ def _analyze_pfsc_file_storage(
     Args:
         abs_path: Source file path.
         threshold_gain: Minimum per-block gain percent to keep compressed bytes.
+        min_file_gain: Minimum whole-file gain percent required to store PFSC.
         zlib_level: zlib compression level.
         logical_block_size: PFSC logical block size.
         block_worker_count: Number of worker processes to use for block-level
@@ -1007,6 +1051,8 @@ def _analyze_pfsc_file_storage(
         Tuple ``(stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size)``.
     """
     raw_size: int = abs_path.stat().st_size
+    if not (0 <= min_file_gain <= 100):
+        raise ValueError(f"min_file_gain must be between 0 and 100 inclusive, got {min_file_gain}")
     if raw_size == 0:
         return 0, False, 0.0, 0
 
@@ -1060,6 +1106,8 @@ def _analyze_pfsc_file_storage(
     if compressed_blocks == 0 or encoded_payload_size >= raw_size:
         return raw_size, False, 0.0, hypothetical_all_compressed_size
     effective_gain_pct: float = ((raw_size - encoded_payload_size) / raw_size) * 100.0
+    if effective_gain_pct < min_file_gain:
+        return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
     return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
 
 
@@ -1068,6 +1116,7 @@ def _encode_pfsc_file_to_spool(
     abs_path: Path,
     spool_path: Path,
     threshold_gain: int,
+    min_file_gain: int,
     zlib_level: int,
     logical_block_size: int,
     block_worker_count: int = 1,
@@ -1079,6 +1128,7 @@ def _encode_pfsc_file_to_spool(
         abs_path: Source file path.
         spool_path: Output spool file path for compressed PFSC payload.
         threshold_gain: Minimum per-block gain percent to keep compressed bytes.
+        min_file_gain: Minimum whole-file gain percent required to store PFSC.
         zlib_level: zlib compression level.
         logical_block_size: PFSC logical block size.
         block_worker_count: Number of worker processes to use for block-level
@@ -1089,6 +1139,8 @@ def _encode_pfsc_file_to_spool(
         Tuple ``(stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size)``.
     """
     raw_size: int = abs_path.stat().st_size
+    if not (0 <= min_file_gain <= 100):
+        raise ValueError(f"min_file_gain must be between 0 and 100 inclusive, got {min_file_gain}")
     if raw_size == 0:
         return 0, False, 0.0, 0
 
@@ -1144,6 +1196,10 @@ def _encode_pfsc_file_to_spool(
         if compressed_blocks == 0 or encoded_payload_size >= raw_size:
             return raw_size, False, 0.0, hypothetical_all_compressed_size
 
+        effective_gain_pct: float = ((raw_size - encoded_payload_size) / raw_size) * 100.0
+        if effective_gain_pct < min_file_gain:
+            return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
+
         header: PFSCHeader = PFSCHeader(
             magic=consts.PFSC_MAGIC,
             unk4=consts.PFSC_UNK4,
@@ -1172,7 +1228,6 @@ def _encode_pfsc_file_to_spool(
         spool_file.write(header_area)
         spool_file.truncate(encoded_payload_size)
 
-    effective_gain_pct: float = ((raw_size - encoded_payload_size) / raw_size) * 100.0
     return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
 
 
@@ -1302,6 +1357,8 @@ def _compress_files_in_process(
     *,
     file_nodes_sorted: list[FileNode],
     threshold_gain: int,
+    min_file_gain: int,
+    min_compress_size: int,
     zlib_level: int,
     compression_cpu_count: int,
     dry_run: bool,
@@ -1313,6 +1370,8 @@ def _compress_files_in_process(
     Args:
         file_nodes_sorted: Ordered file nodes to process.
         threshold_gain: Minimum per-block gain threshold.
+        min_file_gain: Minimum whole-file gain percent required to store PFSC.
+        min_compress_size: Minimum raw file size required before trying PFSC.
         zlib_level: zlib compression level.
         compression_cpu_count: CPU budget available to block-level compression for
             a single file.
@@ -1354,13 +1413,8 @@ def _compress_files_in_process(
                 bytes_processed=displayed_progress_units if total_bytes_to_process > 0 else 0,
             )
 
-        if file_node.raw_size == 0:
-            file_node.stored_source_path = file_node.abs_path
-            file_node.stored_source_is_temp = False
-            file_node.stored_size = 0
-            file_node.compressed = False
-            file_node.gain_pct = 0.0
-            file_node.hypothetical_compressed_size = 0
+        if file_node.raw_size == 0 or file_node.raw_size < min_compress_size:
+            store_file_node_raw(file_node)
         else:
             block_worker_count: int = resolve_block_compression_worker_count(
                 requested_cpu_count=compression_cpu_count,
@@ -1374,6 +1428,7 @@ def _compress_files_in_process(
                 stored_size, is_compressed, gain_pct, hypothetical_compressed_size = _analyze_pfsc_file_storage(
                     abs_path=file_node.abs_path,
                     threshold_gain=threshold_gain,
+                    min_file_gain=min_file_gain,
                     zlib_level=zlib_level,
                     logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
                     block_worker_count=block_worker_count,
@@ -1395,6 +1450,7 @@ def _compress_files_in_process(
                     abs_path=file_node.abs_path,
                     spool_path=spool_path,
                     threshold_gain=threshold_gain,
+                    min_file_gain=min_file_gain,
                     zlib_level=zlib_level,
                     logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
                     block_worker_count=block_worker_count,
@@ -1691,6 +1747,8 @@ def compute_file_storage(
     file_node: FileNode,
     compress: bool,
     threshold_gain: int,
+    min_file_gain: int = 0,
+    min_compress_size: int = 0,
     block_size: int = consts.PFSC_LOGICAL_BLOCK_SIZE,
     zlib_level: int = zlib.Z_BEST_COMPRESSION,
 ) -> None:
@@ -1703,6 +1761,8 @@ def compute_file_storage(
         file_node: FileNode describing the file to process.
         compress: Whether compression is enabled.
         threshold_gain: Minimum percent gain required to keep compressed data.
+        min_file_gain: Minimum whole-file gain percent required to store PFSC.
+        min_compress_size: Minimum raw file size required before trying PFSC.
         block_size: PFSC logical block size used for compression planning.
         zlib_level: Compression level passed to zlib.compress.
 
@@ -1715,7 +1775,7 @@ def compute_file_storage(
         raise ValueError(f"threshold_gain must be between 0 and 100 inclusive, got {threshold_gain}")
 
     raw_size: int = file_node.abs_path.stat().st_size
-    if not compress or raw_size == 0:
+    if not compress or raw_size == 0 or raw_size < min_compress_size:
         file_node.stored_source_path = file_node.abs_path
         file_node.stored_source_is_temp = False
         file_node.stored_size = raw_size
@@ -1731,6 +1791,7 @@ def compute_file_storage(
     stored_size, is_compressed, gain_pct, hypothetical_size = _analyze_pfsc_file_storage(
         abs_path=file_node.abs_path,
         threshold_gain=threshold_gain,
+        min_file_gain=min_file_gain,
         zlib_level=zlib_level,
         logical_block_size=block_size,
         block_worker_count=1,
@@ -1744,7 +1805,7 @@ def compute_file_storage(
 
 
 def _compute_file_storage_worker(
-    args: tuple[Path, int, bool, int, int, bool, SupportsIntQueue | None],
+    args: tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None],
 ) -> tuple[Path, Path, bool, int, bool, float, int]:
     """Worker function for parallel compression.
 
@@ -1753,7 +1814,7 @@ def _compute_file_storage_worker(
     of mutating a FileNode.
 
     Args:
-        args: Tuple containing ``(abs_path, threshold_gain, compress, block_size,
+        args: Tuple containing ``(abs_path, threshold_gain, min_file_gain, min_compress_size, compress, block_size,
             zlib_level, dry_run, progress_queue)``.
 
     Returns:
@@ -1762,15 +1823,27 @@ def _compute_file_storage_worker(
     """
     abs_path: Path
     threshold_gain: int
+    min_file_gain: int
+    min_compress_size: int
     compress: bool
     _block_size: int
     zlib_level: int
     dry_run: bool
     progress_queue: SupportsIntQueue | None
-    (abs_path, threshold_gain, compress, _block_size, zlib_level, dry_run, progress_queue) = args
+    (
+        abs_path,
+        threshold_gain,
+        min_file_gain,
+        min_compress_size,
+        compress,
+        _block_size,
+        zlib_level,
+        dry_run,
+        progress_queue,
+    ) = args
 
     raw_size: int = abs_path.stat().st_size
-    if not compress or raw_size == 0:
+    if not compress or raw_size == 0 or raw_size < min_compress_size:
         return abs_path, abs_path, False, raw_size, False, 0.0, 0
 
     batched_progress_bytes: int = 0
@@ -1791,6 +1864,7 @@ def _compute_file_storage_worker(
         stored_size, is_compressed, gain_pct, hypothetical_compressed_size = _analyze_pfsc_file_storage(
             abs_path=abs_path,
             threshold_gain=threshold_gain,
+            min_file_gain=min_file_gain,
             zlib_level=zlib_level,
             logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
             block_worker_count=1,
@@ -1804,6 +1878,7 @@ def _compute_file_storage_worker(
             abs_path=abs_path,
             spool_path=spool_path,
             threshold_gain=threshold_gain,
+            min_file_gain=min_file_gain,
             zlib_level=zlib_level,
             logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
             block_worker_count=1,
@@ -2134,12 +2209,19 @@ def build_pfs(
     encrypted: bool = False,
     new_crypt: bool = False,
     ekpfs: bytes | None = None,
+    skip_executable_compression: bool = False,
+    min_file_gain: int = 0,
+    min_compress_size: int = 0,
 ) -> BuildStats:
     start: float = time.time()
     progress: Progress = Progress(enabled=True)
     signed_inode_bits: int = 64 if signed and inode_bits == 64 else 32
     resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)
     seed: bytes = consts.ZERO_PFS_SEED if (signed or encrypted) else b"\x00" * len(consts.ZERO_PFS_SEED)
+    if not (0 <= min_file_gain <= 100):
+        raise BuildError("min_file_gain must be within 0..100")
+    if min_compress_size < 0:
+        raise BuildError("min_compress_size must be non-negative")
 
     dirs: dict[str, DirNode]
     files: dict[str, FileNode]
@@ -2149,22 +2231,41 @@ def build_pfs(
     file_nodes_sorted: list[FileNode] = sorted(files.values(), key=lambda f: f.rel_path.lower())
     temporary_payload_paths: list[Path] = []
 
-    if compress and len(file_nodes_sorted) > 0:
+    compression_file_nodes: list[FileNode] = file_nodes_sorted
+    if compress and skip_executable_compression:
+        compression_file_nodes = []
+        for f in file_nodes_sorted:
+            if should_skip_executable_compression(f.name):
+                store_file_node_raw(f)
+            else:
+                compression_file_nodes.append(f)
+    if compress and min_compress_size > 0:
+        eligible_file_nodes: list[FileNode] = []
+        for f in compression_file_nodes:
+            if f.raw_size < min_compress_size:
+                store_file_node_raw(f)
+            else:
+                eligible_file_nodes.append(f)
+        compression_file_nodes = eligible_file_nodes
+
+    if compress and len(compression_file_nodes) > 0:
         # Calculate total bytes for compression progress
-        total_bytes_to_process: int = sum(f.raw_size for f in file_nodes_sorted)
+        total_bytes_to_process: int = sum(f.raw_size for f in compression_file_nodes)
         compression_cpu_count: int = resolve_compression_worker_count(requested_cpu_count=cpu_count)
         worker_count: int = compression_cpu_count
-        file_nodes_by_path: dict[Path, FileNode] = {f.abs_path: f for f in file_nodes_sorted}
+        file_nodes_by_path: dict[Path, FileNode] = {f.abs_path: f for f in compression_file_nodes}
         progress.status(
-            f"\nCompressing {len(file_nodes_sorted)} files ({human_readable_size(total_bytes_to_process)}) "
+            f"\nCompressing {len(compression_file_nodes)} files ({human_readable_size(total_bytes_to_process)}) "
             f"using {worker_count} CPU core{'s' if worker_count != 1 else ''}..."
         )
-        if worker_count == 1 or len(file_nodes_sorted) == 1:
+        if worker_count == 1 or len(compression_file_nodes) == 1:
             # Single-worker or single-file path uses in-process flow so a large file
             # can leverage block-level multiprocessing inside one file.
             _compress_files_in_process(
-                file_nodes_sorted=file_nodes_sorted,
+                file_nodes_sorted=compression_file_nodes,
                 threshold_gain=threshold_gain,
+                min_file_gain=min_file_gain,
+                min_compress_size=min_compress_size,
                 zlib_level=zlib_level,
                 compression_cpu_count=compression_cpu_count,
                 dry_run=dry_run,
@@ -2174,24 +2275,26 @@ def build_pfs(
         else:
             # Use multiprocessing for parallel compression.
             progress_total_units: int = (
-                total_bytes_to_process if total_bytes_to_process > 0 else len(file_nodes_sorted)
+                total_bytes_to_process if total_bytes_to_process > 0 else len(compression_file_nodes)
             )
             progress.step("compress", 0, progress_total_units, bytes_processed=0)
             total_bytes_processed: int = 0
             displayed_progress_units: int = 0
             with mp.Manager() as manager:
                 progress_queue: SupportsIntQueue = manager.Queue()
-                worker_args: list[tuple[Path, int, bool, int, int, bool, SupportsIntQueue | None]] = [
+                worker_args: list[tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None]] = [
                     (
                         f.abs_path,
                         threshold_gain,
+                        min_file_gain,
+                        min_compress_size,
                         True,
                         consts.PFSC_LOGICAL_BLOCK_SIZE,
                         zlib_level,
                         dry_run,
                         progress_queue,
                     )
-                    for f in file_nodes_sorted
+                    for f in compression_file_nodes
                 ]
                 with mp.Pool(processes=worker_count) as pool:
                     results = pool.imap_unordered(_compute_file_storage_worker, worker_args, chunksize=1)
@@ -2255,7 +2358,7 @@ def build_pfs(
             temporary_payload_paths.extend(
                 [
                     file_node.stored_source_path
-                    for file_node in file_nodes_sorted
+                    for file_node in compression_file_nodes
                     if file_node.stored_source_is_temp and file_node.stored_source_path is not None
                 ]
             )
@@ -2418,12 +2521,11 @@ def build_pfs(
             ino.number = idx
             remap[old] = idx
 
+        # Inode objects are already renumbered in-place above. Only dirent links
+        # still carry old inode numbers and need remapping.
         for d in dir_nodes_sorted:
-            d.inode.number = remap[d.inode.number]
             for ent in d.dirents:
                 ent.inode_number = remap[ent.inode_number]
-        for f in file_nodes_sorted:
-            f.inode.number = remap[f.inode.number]
 
         inode_by_path = {}
         for d in dir_nodes_sorted:
@@ -4238,6 +4340,9 @@ def pfs_build(
     verbose: bool,
     encrypted: bool = False,
     ekpfs: bytes | None = None,
+    skip_executable_compression: bool = False,
+    min_file_gain: int = 0,
+    min_compress_size: int = 0,
 ) -> BuildStats:
     """Stable thin wrapper around :func:`build_pfs`.
 
@@ -4260,6 +4365,9 @@ def pfs_build(
         verbose=verbose,
         encrypted=encrypted,
         ekpfs=ekpfs,
+        skip_executable_compression=skip_executable_compression,
+        min_file_gain=min_file_gain,
+        min_compress_size=min_compress_size,
     )
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import random
 import struct
 import subprocess
 import sys
@@ -405,6 +406,173 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert len(compressed_payload) == compressed_inode.size
             assert compressed_payload[:4] == b"PFSC"
 
+    def test_executable_compression_skip_keeps_eboot_prx_and_sprx_raw(self) -> None:
+        """Requested executable compression skips should leave eboot*.bin, *.prx, and *.sprx inodes raw."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        eboot_path: Path = src / "eboot_patch.bin"
+        prx_path: Path = src / "modules" / "libsample.prx"
+        sprx_path: Path = src / "modules" / "libsample.sprx"
+        normal_path: Path = src / "data" / "large.bin"
+        prx_path.parent.mkdir(parents=True)
+        eboot_payload: bytes = b"E" * 200000
+        prx_payload: bytes = b"P" * 200000
+        sprx_payload: bytes = b"X" * 200000
+        normal_payload: bytes = b"N" * 200000
+        eboot_path.write_bytes(eboot_payload)
+        prx_path.write_bytes(prx_payload)
+        sprx_path.write_bytes(sprx_payload)
+        normal_path.write_bytes(normal_payload)
+        out: Path = tmp_path / "skip-executables.ffpfs"
+        build_pfs(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS4,
+            inode_bits=32,
+            case_insensitive=True,
+            signed=False,
+            compress=True,
+            threshold_gain=1,
+            cpu_count=1,
+            zlib_level=9,
+            dry_run=False,
+            verbose=False,
+            encrypted=False,
+            skip_executable_compression=True,
+        )
+
+        with out.open("rb") as fh:
+            header: pfs_mod.ParsedHeader = parse_image_header(fh)
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out, source=src)
+            assert inspection.errors == []
+
+            eboot_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["eboot_patch.bin"]]
+            prx_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["modules/libsample.prx"]]
+            sprx_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["modules/libsample.sprx"]]
+            normal_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/large.bin"]]
+
+            assert not eboot_inode.is_compressed
+            assert not prx_inode.is_compressed
+            assert not sprx_inode.is_compressed
+            assert normal_inode.is_compressed
+            assert pfs_mod.read_image_inode_payload(fh, header, eboot_inode) == eboot_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, prx_inode) == prx_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, sprx_inode) == sprx_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, normal_inode)[:4] == b"PFSC"
+
+    def test_min_file_gain_keeps_low_gain_files_raw(self) -> None:
+        """Whole-file gain thresholds should reject PFSC payloads below the requested gain."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        rng: random.Random = random.Random(12345)
+        low_gain_payload: bytes = (b"\x00" * (c.PFSC_LOGICAL_BLOCK_SIZE * 4)) + bytes(
+            rng.randrange(0, 256) for _ in range(c.PFSC_LOGICAL_BLOCK_SIZE)
+        )
+        high_gain_payload: bytes = b"H" * (c.PFSC_LOGICAL_BLOCK_SIZE * 100)
+        low_gain_path: Path = src / "data" / "low_gain.bin"
+        high_gain_path: Path = src / "data" / "high_gain.bin"
+        low_gain_path.write_bytes(low_gain_payload)
+        high_gain_path.write_bytes(high_gain_payload)
+        out: Path = tmp_path / "whole-file-gain.ffpfs"
+
+        build_pfs(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS4,
+            inode_bits=32,
+            case_insensitive=True,
+            signed=False,
+            compress=True,
+            threshold_gain=1,
+            min_file_gain=95,
+            cpu_count=1,
+            zlib_level=9,
+            dry_run=False,
+            verbose=False,
+            encrypted=False,
+        )
+
+        with out.open("rb") as fh:
+            header: pfs_mod.ParsedHeader = parse_image_header(fh)
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out, source=src)
+            assert inspection.errors == []
+            low_gain_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/low_gain.bin"]]
+            high_gain_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/high_gain.bin"]]
+            assert not low_gain_inode.is_compressed
+            assert high_gain_inode.is_compressed
+            assert pfs_mod.read_image_inode_payload(fh, header, low_gain_inode) == low_gain_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, high_gain_inode)[:4] == b"PFSC"
+
+    def test_min_compress_size_skips_small_files_before_pfsc(self) -> None:
+        """Files below the requested compression size floor should be stored raw."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        small_path: Path = src / "data" / "small_repeated.bin"
+        large_path: Path = src / "data" / "large_repeated.bin"
+        small_payload: bytes = b"S" * 4096
+        large_payload: bytes = b"L" * 200000
+        small_path.write_bytes(small_payload)
+        large_path.write_bytes(large_payload)
+        out: Path = tmp_path / "min-compress-size.ffpfs"
+
+        build_pfs(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS4,
+            inode_bits=32,
+            case_insensitive=True,
+            signed=False,
+            compress=True,
+            threshold_gain=1,
+            cpu_count=1,
+            zlib_level=9,
+            dry_run=False,
+            verbose=False,
+            encrypted=False,
+            min_compress_size=65536,
+        )
+
+        with out.open("rb") as fh:
+            header: pfs_mod.ParsedHeader = parse_image_header(fh)
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out, source=src)
+            assert inspection.errors == []
+            small_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/small_repeated.bin"]]
+            large_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/large_repeated.bin"]]
+            assert not small_inode.is_compressed
+            assert large_inode.is_compressed
+            assert pfs_mod.read_image_inode_payload(fh, header, small_inode) == small_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, large_inode)[:4] == b"PFSC"
+
+    def test_build_pfs_handles_fpt_collision_inode_renumbering(self) -> None:
+        """Forced FPT collisions should not break inode renumbering during build."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        out: Path = tmp_path / "collision-renumbering.ffpfs"
+
+        with patch.object(pfs_mod, "fpt_hash", return_value=0x12345678):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS4,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=True,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+            )
+
+        assert out.is_file()
+        assert out.stat().st_size > 0
+
     def test_pfsc_encode_decode_round_trip(self) -> None:
         """PFSC payload encoding and decoding should preserve logical bytes."""
         raw: bytes = (b"A" * 65536) + (b"B" * 65536) + (b"C" * 1234)
@@ -474,6 +642,8 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             (
                 file_path,
                 1,
+                0,
+                0,
                 True,
                 c.PFSC_LOGICAL_BLOCK_SIZE,
                 9,
@@ -535,6 +705,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             *,
             abs_path: Path,
             threshold_gain: int,
+            min_file_gain: int,
             zlib_level: int,
             logical_block_size: int,
             block_worker_count: int = 1,
@@ -546,6 +717,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             if progress_callback is not None:
                 progress_callback(raw_size)
             _ = threshold_gain
+            _ = min_file_gain
             _ = zlib_level
             _ = logical_block_size
             return raw_size, False, 0.0, 0
@@ -588,6 +760,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             abs_path=source_path,
             spool_path=sequential_spool,
             threshold_gain=1,
+            min_file_gain=0,
             zlib_level=7,
             logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
             block_worker_count=1,
@@ -596,6 +769,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             abs_path=source_path,
             spool_path=parallel_spool,
             threshold_gain=1,
+            min_file_gain=0,
             zlib_level=7,
             logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
             block_worker_count=2,
@@ -1860,3 +2034,13 @@ class TestSourceTreeScanning(PfsTestCase):
     def test_scan_source_tree_returns_expected_directory_and_file_maps(self) -> None:
         """Scanning a small source tree should return the expected files, directories, and count."""
         assert_scan_source_tree(self.make_temp_path())
+
+    def test_auto_fit_block_size_prefers_small_blocks_for_small_files(self) -> None:
+        """Auto-fit block-size selection should minimize estimated file-data footprint."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "src"
+        src.mkdir()
+        for idx in range(10):
+            (src / f"small_{idx}.bin").write_bytes(b"x" * 100)
+
+        assert pfs_mod.choose_auto_fit_block_size(src) == 4096

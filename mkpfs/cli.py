@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import tempfile
 import time
 from collections.abc import Iterator
@@ -23,7 +24,9 @@ from .pfs import (
     build_expected_fpt,
     build_pfs,
     build_tree_from_uroot,
+    choose_auto_fit_block_size,
     compose_pfs_mode_with_sign,
+    estimate_file_data_footprint,
     extract_pfs_image,
     human_readable_size,
     inspect_pfs_image,
@@ -62,8 +65,11 @@ def print_build_parameters(
     threshold_gain: int,
     cpu_count: int,
     zlib_level: int,
+    max_compressed_ratio: int | None,
+    min_compress_size: int,
     dry_run: bool,
     require_game_files: bool,
+    skip_executable_compression: bool = True,
 ) -> None:
     """Print build configuration at the start."""
     mode: int = compose_pfs_mode_with_sign(inode_bits, case_insensitive, signed)
@@ -91,12 +97,17 @@ def print_build_parameters(
     info(f"    New crypt:       {'yes' if new_crypt else 'no'}")
     info(f"    Case insensitive: {'yes' if mode & consts.PFS_MODE_CASE_INSENSITIVE else 'no'}")
     info(f"  Compression:       {'enabled' if compress else 'disabled'}")
+    if compress:
+        info(f"    Skip executables: {'yes' if skip_executable_compression else 'no'}")
     info(f"  Game-file checks:   {'required' if require_game_files else 'disabled'}")
     if compress:
         info(f"  Threshold gain:    {threshold_gain}%")
         cpu_label: str = "auto (max(1, cpu_count()))" if cpu_count == 0 else str(max(1, cpu_count))
         info(f"  CPU cores:         {cpu_label}")
         info(f"  Zlib level:        {zlib_level}")
+        if max_compressed_ratio is not None:
+            info(f"  Max PFSC ratio:    {max_compressed_ratio}%")
+        info(f"  Min compress size: {human_readable_size(min_compress_size)}")
     info(f"  Dry run:           {'yes' if dry_run else 'no'}")
     info("" + "=" * 70)
 
@@ -174,9 +185,9 @@ def print_summary(stats: BuildStats) -> None:
         info(f"    Uncompressed files:     {stats.uncompressed_files:,}")
         info(f"    Actual gain achieved:   {stats.actual_gain_pct:.2f}%")
         info(
-            "    Max theoretical gain:   "
+            "    All-PFSC gain:          "
             f"{stats.max_possible_gain_pct:.2f}%  "
-            f"({human_readable_size(stats.all_compressed_total_size)} if all files compressed)"
+            f"({human_readable_size(stats.all_compressed_total_size)} if every file used PFSC)"
         )
     else:
         info("\n  Compression:             disabled")
@@ -198,6 +209,64 @@ def print_summary(stats: BuildStats) -> None:
         info(f"  Throughput:              {human_readable_size(int(throughput))}/s")
 
     info("" * 70 + "\n")
+
+
+def resolve_disk_usage_probe_path(*, output_path: Path) -> Path:
+    """Resolve an existing path suitable for destination disk usage checks.
+
+    Args:
+        output_path: Requested output image path, possibly inside a directory
+            tree that does not exist yet.
+
+    Returns:
+        Existing directory path to probe with ``shutil.disk_usage``.
+    """
+    probe_path: Path = output_path.parent
+    root_path: Path = (probe_path.anchor and Path(probe_path.anchor)) or Path("/")
+    while not probe_path.exists() and probe_path != root_path:
+        probe_path = probe_path.parent
+    return probe_path if probe_path.exists() else root_path
+
+
+def calculate_source_raw_size_bytes(*, source_root: Path) -> int:
+    """Calculate total raw byte size for all files inside a source tree.
+
+    Args:
+        source_root: Directory used as pack source.
+
+    Returns:
+        Sum of raw ``st_size`` values for all files in the source tree.
+    """
+    total_raw_size_bytes: int = 0
+    candidate_path: Path
+    for candidate_path in source_root.rglob("*"):
+        if candidate_path.is_file():
+            total_raw_size_bytes += candidate_path.stat().st_size
+    return total_raw_size_bytes
+
+
+def get_destination_space_error_message(*, source_root: Path, output_path: Path) -> str | None:
+    """Build an insufficient-destination-space error for pack preflight.
+
+    Args:
+        source_root: Source directory whose raw file bytes must fit.
+        output_path: Requested output image destination.
+
+    Returns:
+        Error text when free destination space is insufficient, otherwise
+        ``None``.
+    """
+    required_raw_size_bytes: int = calculate_source_raw_size_bytes(source_root=source_root)
+    probe_path: Path = resolve_disk_usage_probe_path(output_path=output_path)
+    free_space_bytes: int = shutil.disk_usage(path=probe_path).free
+    if free_space_bytes >= required_raw_size_bytes:
+        return None
+    required_size_gb: float = required_raw_size_bytes / float(1024**3)
+    return (
+        "ERROR: The destination file is on a disk that does not have enough space "
+        f"({required_size_gb:.1f} GB) to perform the operation.\n"
+        "Operation cancelled."
+    )
 
 
 def prompt_overwrite(output_path: Path) -> bool:
@@ -427,15 +496,17 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--threshold-gain",
         type=int,
-        default=20,
-        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 20)",
+        default=0,
+        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 0)",
     )
     parser.add_argument(
-        "--block-size", default="auto", help="PFS block size in bytes, or 'auto' (default: auto=65536)"
+        "--block-size",
+        default="auto",
+        help="PFS block size in bytes, 'auto' (65536), or 'auto-fit' to minimize estimated file-data padding",
     )
     parser.add_argument("--version", choices=["PS4", "PS5"], default="PS4", help="PFS profile version (default: PS4)")
     parser.add_argument(
-        "--inode-bits", type=int, choices=[32, 64], default=32, help="Inode width mode bit (32 or 64, default: 32)"
+        "--inode-bits", type=int, choices=[32, 64], default=64, help="Inode width mode bit (32 or 64, default: 64)"
     )
 
     case_group = parser.add_mutually_exclusive_group()
@@ -448,7 +519,25 @@ def cli_mkpfs_add_create_args(
         default=0,
         help="Number of CPU cores for PFSC compression (0 = auto max(1, cpu_count()), non-zero = max(1, user value))",
     )
-    parser.add_argument("--compression-level", type=int, default=7, help="Zlib compression level (0-9, default: 7)")
+    parser.add_argument("--compression-level", type=int, default=9, help="Zlib compression level (0-9, default: 9)")
+    parser.add_argument(
+        "--max-compressed-ratio",
+        type=int,
+        default=None,
+        help="Maximum PFSC size as percent of the raw file size (0-100)",
+    )
+    parser.add_argument(
+        "--min-compress-size",
+        type=int,
+        default=0,
+        help="Store files smaller than this many bytes raw without trying PFSC compression (default: 0)",
+    )
+    parser.add_argument(
+        "--skip-executable-compression",
+        action="store_true",
+        default=True,
+        help="Store eboot*.bin, *.prx, and *.sprx files raw even when PFSC compression is enabled",
+    )
     parser.add_argument("--signed", action="store_true", help="Build a signed PFS image using zero EKPFS/seed")
     parser.add_argument("--encrypted", action="store_true", help="Encrypt filesystem blocks with AES-XTS")
     parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key, defaults to all zeros when omitted")
@@ -502,13 +591,25 @@ def _run_pack_build(
     if args.threshold_gain < 0 or args.threshold_gain > 100:
         raise BuildError("--threshold-gain must be within 0..100")
 
-    if isinstance(args.block_size, str) and args.block_size.strip().lower() == "auto":
+    block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
+    if block_size_arg == "auto":
         block_size: int = 65536
+    elif block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}:
+        block_size = choose_auto_fit_block_size(build_source_root)
+        file_sizes = [p.stat().st_size for p in build_source_root.rglob("*") if p.is_file()]
+        default_footprint: int = estimate_file_data_footprint(file_sizes=file_sizes, block_size=65536)
+        selected_footprint: int = estimate_file_data_footprint(file_sizes=file_sizes, block_size=block_size)
+        saved_bytes: int = max(0, default_footprint - selected_footprint)
+        info(
+            "Auto-fit block size selected: "
+            f"{block_size:,} bytes ({block_size // 1024} KiB), "
+            f"estimated file-data saving vs 64 KiB: {human_readable_size(saved_bytes)}"
+        )
     else:
         try:
             block_size = int(args.block_size)
         except (TypeError, ValueError) as exc:
-            raise BuildError("--block-size must be an integer value or 'auto'") from exc
+            raise BuildError("--block-size must be an integer value, 'auto', or 'auto-fit'") from exc
 
     if not is_power_of_two(block_size):
         raise BuildError("--block-size must be a power of two")
@@ -521,6 +622,11 @@ def _run_pack_build(
     if args.compression_level < 0 or args.compression_level > 9:
         raise BuildError("--compression-level must be within 0..9")
 
+    if args.max_compressed_ratio is not None and (args.max_compressed_ratio < 0 or args.max_compressed_ratio > 100):
+        raise BuildError("--max-compressed-ratio must be within 0..100")
+    if args.min_compress_size < 0:
+        raise BuildError("--min-compress-size must be non-negative")
+
     _title_id: str | None
     warnings: list[str]
     _title_id, warnings = validate_input(build_source_root, require_game_files=require_game_files)
@@ -528,6 +634,7 @@ def _run_pack_build(
         warning(w)
 
     compress: bool = not args.no_compress
+    min_file_gain: int = 100 - int(args.max_compressed_ratio) if args.max_compressed_ratio is not None else 0
     case_insensitive: bool = args.case_insensitive or not args.case_sensitive
     pfs_version: int = consts.PFS_VERSION_PS5 if args.version == "PS5" else consts.PFS_VERSION_PS4
     encrypted: bool = bool(getattr(args, "encrypted", False))
@@ -550,9 +657,21 @@ def _run_pack_build(
         args.threshold_gain,
         args.cpu_count,
         args.compression_level,
+        args.max_compressed_ratio,
+        args.min_compress_size,
         args.dry_run,
         require_game_files,
+        bool(getattr(args, "skip_executable_compression", False)),
     )
+
+    if not args.dry_run:
+        destination_space_error: str | None = get_destination_space_error_message(
+            source_root=build_source_root,
+            output_path=output_path,
+        )
+        if destination_space_error is not None:
+            error(destination_space_error)
+            return 1
 
     if not args.dry_run:
         cleanup_pack_temp_artifacts(output_path=output_path)
@@ -577,6 +696,9 @@ def _run_pack_build(
         encrypted=encrypted,
         new_crypt=new_crypt,
         ekpfs=ekpfs_key,
+        skip_executable_compression=bool(getattr(args, "skip_executable_compression", False)),
+        min_file_gain=min_file_gain,
+        min_compress_size=args.min_compress_size,
     )
 
     stats.input_path = display_source_path
