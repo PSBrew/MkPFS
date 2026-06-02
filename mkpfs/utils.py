@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import BinaryIO
 
@@ -70,6 +71,23 @@ def normalize_output_path(path_arg: str, desired_suffix: str, adjust: bool = Tru
         return p, False
     normalized: Path = p.with_suffix(desired_suffix)
     return normalized, True
+
+
+def resolve_temp_root(temp_folder: Path | None = None) -> Path:
+    """Resolve the temporary root directory used for pack artifacts.
+
+    Args:
+        temp_folder: Optional caller-provided temp directory path.
+
+    Returns:
+        Existing directory path used for temporary files.
+    """
+    if temp_folder is None:
+        return Path(tempfile.gettempdir())
+
+    temp_root: Path = temp_folder.expanduser().resolve()
+    temp_root.mkdir(parents=True, exist_ok=True)
+    return temp_root
 
 
 def read_param_json(path: Path) -> dict[str, object]:

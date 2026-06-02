@@ -156,7 +156,7 @@ mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file
                   [--max-compressed-ratio MAX_COMPRESSED_RATIO]
                   [--min-compress-size MIN_COMPRESS_SIZE]
                   [--skip-executable-compression] [--signed] [--encrypted]
-                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--verbose]
+                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--temp-folder TEMP_FOLDER] [--verbose]
                   [--dry-run] [--verify] source_dir image_file
 ```
 
@@ -166,6 +166,7 @@ Examples:
 mkpfs pack folder ./input ./game.ffpfs
 mkpfs pack folder ./input ./game.ffpfs --encrypted
 mkpfs pack folder ./input ./game.ffpfs --require-game-files --verify
+mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 ```
 
 PowerShell example with tuned PFSC compression:
@@ -191,7 +192,7 @@ python -m mkpfs pack folder c:\game_folder d:\game.ffpfs `
 | `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `0`. |
 | `--block-size BLOCK_SIZE` | PFS block size in bytes, `auto`, or `auto-fit`. Default: `auto`, which resolves to `65536`; `auto-fit` picks 4096..65536 by estimated file-data padding. |
 | `--version {PS4,PS5}` | PFS profile version. Default: `PS4`. |
-| `--inode-bits {32,64}` | Inode width mode bit. Default: `64`. |
+| `--inode-bits {32,64}` | Inode width mode bit. Default: `32`. (NOTE: 64 bits migth be unstable) |
 | `--case-sensitive` | Build a case-sensitive image. |
 | `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior. |
 | `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count())`, non-zero uses `max(1, user value)`. |
@@ -203,6 +204,7 @@ python -m mkpfs pack folder c:\game_folder d:\game.ffpfs `
 | `--encrypted` | Encrypt filesystem blocks with AES-XTS. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
 | `--require-game-files` | Require `sce_sys/param.json` and `eboot.bin` before packing. |
+| `--temp-folder TEMP_FOLDER` | Directory used for temporary pack artifacts, including staged single-file trees and PFSC spool files. Default: the system temp folder. |
 | `--verbose` | Print verbose per-file decisions during packing. |
 | `--dry-run` | Scan, layout, and report only. Do not write an image file. |
 | `--verify` | Run `mkpfs verify` automatically after a successful pack. |
@@ -224,7 +226,7 @@ mkpfs pack file [-h] [--adjust-output-file-extension | --no-adjust-output-file-e
                 [--max-compressed-ratio MAX_COMPRESSED_RATIO]
                 [--min-compress-size MIN_COMPRESS_SIZE]
                 [--skip-executable-compression] [--signed] [--encrypted]
-                [--ekpfs-key EKPFS_KEY] [--verbose] [--dry-run] [--verify]
+                [--ekpfs-key EKPFS_KEY] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify]
                 source_file image_file
 ```
 
@@ -233,6 +235,7 @@ Examples:
 ```bash
 mkpfs pack file ./payload.exfat ./payload.ffpfsc
 mkpfs pack file ./payload.exfat ./payload.ffpfsc --verify
+mkpfs pack file ./payload.exfat ./payload.ffpfsc --temp-folder ./tmp/mkpfs
 ```
 
 | Parameter | Description |
@@ -247,7 +250,7 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --verify
 | `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `0`. |
 | `--block-size BLOCK_SIZE` | PFS block size in bytes, `auto`, or `auto-fit`. Default: `auto`, which resolves to `65536`; `auto-fit` picks 4096..65536 by estimated file-data padding. |
 | `--version {PS4,PS5}` | PFS profile version. Default: `PS4`. |
-| `--inode-bits {32,64}` | Inode width mode bit. Default: `64`. |
+| `--inode-bits {32,64}` | Inode width mode bit. Default: `32`. |
 | `--case-sensitive` | Build a case-sensitive image. |
 | `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior. |
 | `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count())`, non-zero uses `max(1, user value)`. |
@@ -258,6 +261,7 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --verify
 | `--signed` | Build a signed PFS image using a zero EKPFS key and seed. |
 | `--encrypted` | Encrypt filesystem blocks with AES-XTS. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
+| `--temp-folder TEMP_FOLDER` | Directory used for temporary pack artifacts, including the one-file staging tree and PFSC spool files. Default: the system temp folder. |
 | `--verbose` | Print verbose per-file decisions during packing. |
 | `--dry-run` | Scan, layout, and report only. Do not write an image file. |
 | `--verify` | Run `mkpfs verify` automatically after a successful pack. |
@@ -265,6 +269,7 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --verify
 Notes:
 
 - Single-file packing stages the file in a temporary one-file tree using links, so the source payload is not duplicated on disk.
+- Use `--temp-folder` when you want staged files and PFSC spool files to live somewhere other than the system temp directory.
 - The default adjusted extension for single-file output is `.ffpfsc`.
 
 ### `verify`
@@ -439,10 +444,10 @@ PFS Image Builder - Parameters
   Header magic:      PFS (20130315)
   Compression Setup: PFSC (0x43534650)
   Block size:        65,536 bytes (64 KiB)
-  Inode width:       64-bit
-  PFS mode:          0x000A  (Bit 0=signed, Bit 1=64-bit inodes, Bit 2=encrypted, Bit 3=case insensitive)
+  Inode width:       32-bit
+  PFS mode:          0x0008  (Bit 0=signed, Bit 1=64-bit inodes, Bit 2=encrypted, Bit 3=case insensitive)
     Signed:          no
-    64-bit inodes:   yes
+    64-bit inodes:   no
     Encrypted:       no
     New crypt:       no
     Case insensitive: yes
@@ -496,9 +501,9 @@ Version:               1 (PS4)
 Header magic:          PFS (20130315)
 Compression Setup:     PFSC (0x43534650)
 Read-only:             yes
-Mode:                  0x000A  (Bit 0=signed, Bit 1=64-bit inodes, Bit 2=encrypted, Bit 3=case insensitive)
+Mode:                  0x0008  (Bit 0=signed, Bit 1=64-bit inodes, Bit 2=encrypted, Bit 3=case insensitive)
   Signed:              no
-  64-bit inodes:       yes
+  64-bit inodes:       no
   Encrypted:           no
   Case insensitive:    yes
 Block size:            65,536 bytes

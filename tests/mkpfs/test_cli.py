@@ -57,6 +57,7 @@ class CliTestCase(unittest.TestCase):
         return SimpleNamespace(
             source_dir=str(source_path),
             image_file=str(image_path),
+            temp_folder=None,
             adjust_output_file_extension=True,
             no_compress=False,
             threshold_gain=20,
@@ -85,6 +86,7 @@ class CliTestCase(unittest.TestCase):
         return SimpleNamespace(
             source_file=str(source_path),
             image_file=str(image_path),
+            temp_folder=None,
             adjust_output_file_extension=True,
             no_compress=False,
             threshold_gain=20,
@@ -196,8 +198,8 @@ class TestCliArgumentHelpers(CliTestCase):
         )
         self.assertEqual(threshold_action.default, 0)
 
-    def test_pack_parser_uses_sixty_four_as_default_inode_bits(self) -> None:
-        """The pack parser should expose 64 as the default inode width."""
+    def test_pack_parser_uses_thirty_two_as_default_inode_bits(self) -> None:
+        """The pack parser should expose 32 as the default inode width."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
             action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
@@ -209,7 +211,22 @@ class TestCliArgumentHelpers(CliTestCase):
         inode_bits_action: argparse.Action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "inode_bits"
         )
-        self.assertEqual(inode_bits_action.default, 64)
+        self.assertEqual(inode_bits_action.default, 32)
+
+    def test_pack_parser_uses_ps4_as_default_version(self) -> None:
+        """The pack parser should expose PS4 as the default pack profile version."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        pack_parser: argparse.ArgumentParser = next(
+            action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        pack_choices: dict[str, argparse.ArgumentParser] = next(
+            action.choices for action in pack_parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        folder_parser: argparse.ArgumentParser = pack_choices["folder"]
+        version_action: argparse.Action = next(
+            action for action in folder_parser._actions if getattr(action, "dest", "") == "version"
+        )
+        self.assertEqual(version_action.default, "PS4")
 
     def test_pack_parser_exposes_executable_compression_skip_flag(self) -> None:
         """The pack parser should default to skipping executable compression."""
@@ -298,6 +315,19 @@ class TestCliArgumentHelpers(CliTestCase):
                 option_strings.update(action.option_strings)
         self.assertIn("--adjust-output-file-extension", option_strings)
         self.assertIn("--no-adjust-output-file-extension", option_strings)
+
+    def test_pack_parser_exposes_temp_folder_flag_for_both_pack_variants(self) -> None:
+        """The pack folder and file parsers should expose the temp-folder option."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        pack_parser: argparse.ArgumentParser = next(
+            action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        pack_choices: dict[str, argparse.ArgumentParser] = next(
+            action.choices for action in pack_parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        for variant_name in ("folder", "file"):
+            variant_parser: argparse.ArgumentParser = pack_choices[variant_name]
+            self.assertTrue(any(getattr(action, "dest", "") == "temp_folder" for action in variant_parser._actions))
 
     def test_pack_parser_defaults_to_adjusting_output_extensions(self) -> None:
         """The pack parser should default to automatic extension adjustment."""
@@ -464,6 +494,7 @@ class TestCliOutputFormatting(CliTestCase):
             cli.print_build_parameters(
                 source_path=Path("src"),
                 output_path=Path("out.ffpfs"),
+                temp_folder=Path("/tmp/mkpfs"),
                 block_size=65536,
                 pfs_version=0,
                 inode_bits=32,
@@ -484,6 +515,7 @@ class TestCliOutputFormatting(CliTestCase):
         self.assertIn("PFS Image Builder - Parameters", output_text)
         self.assertIn("Header magic:      PFS (20130315)", output_text)
         self.assertIn("Compression Setup: PFSC (0x43534650)", output_text)
+        self.assertIn("Temp folder:       /tmp/mkpfs", output_text)
         self.assertIn("Zlib level:        7", output_text)
 
     def test_print_summary_reports_build_summary_and_disabled_compression(self) -> None:
@@ -665,6 +697,30 @@ class TestCliCreateRun(CliTestCase):
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertTrue(mocked_build.call_args.kwargs["new_crypt"])
+
+    def test_create_run_forwards_custom_temp_folder_to_cleanup_and_build(self) -> None:
+        """Create run should use the configured temp folder for cleanup and builder calls."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        temp_folder: Path = tmp_path / "pack-temp"
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=tmp_path / "out",
+            dry_run=False,
+            verify=False,
+        )
+        args.temp_folder = str(temp_folder)
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build, patch.object(
+            cli,
+            "cleanup_pack_temp_artifacts",
+        ) as mocked_cleanup:
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
+        self.assertEqual(mocked_build.call_args.kwargs["temp_folder"], temp_folder.resolve())
+        self.assertEqual(mocked_cleanup.call_args.kwargs["temp_folder"], temp_folder.resolve())
 
     def test_create_run_rejects_invalid_threshold_block_cpu_and_level_values(self) -> None:
         """Create run should raise BuildError for invalid threshold, block size, cpu count, and compression level."""
@@ -927,6 +983,36 @@ class TestCliCreateRun(CliTestCase):
             ),
             stdout_buffer.getvalue(),
         )
+
+    def test_pack_file_run_uses_custom_temp_folder_for_staging_and_build(self) -> None:
+        """Pack file should stage the source file inside the configured temp folder."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "sample.bin"
+        source_file.write_bytes(b"payload")
+        temp_folder: Path = tmp_path / "custom-pack-temp"
+        args: SimpleNamespace = self.make_pack_file_args(
+            source_path=source_file,
+            image_path=tmp_path / "out",
+            dry_run=True,
+            verify=False,
+        )
+        args.temp_folder = str(temp_folder)
+
+        def fake_build_pfs(**kwargs: object) -> BuildStats:
+            staged_root_value: object = kwargs["source_root"]
+            output_value: object = kwargs["output_path"]
+            self.assertIsInstance(staged_root_value, Path)
+            self.assertIsInstance(output_value, Path)
+            staged_root: Path = staged_root_value
+            output_path_value: Path = output_value
+            self.assertTrue(staged_root.parent.samefile(temp_folder.resolve()))
+            self.assertEqual(kwargs["temp_folder"], temp_folder.resolve())
+            return BuildStats(input_path=staged_root, output_path=output_path_value)
+
+        with patch.object(cli, "validate_input", return_value=(None, [])), patch.object(
+            cli, "build_pfs", side_effect=fake_build_pfs
+        ), patch.object(cli, "prompt_overwrite", return_value=True):
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
 
 class TestCliReadOnlyCommands(CliTestCase):

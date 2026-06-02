@@ -13,7 +13,6 @@ import multiprocessing as mp
 import queue
 import shutil
 import struct
-import tempfile
 import time
 import uuid
 import zlib
@@ -28,7 +27,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from . import consts
 from .logging import info
 from .pbar import Progress
-from .utils import _read_exact, ceil_div, human_readable_size, read_param_json
+from .utils import _read_exact, ceil_div, human_readable_size, read_param_json, resolve_temp_root
 
 PFSC_PROGRESS_REPORT_BYTES: int = consts.PFSC_LOGICAL_BLOCK_SIZE * 16
 PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE: int = 256 * 1024 * 1024
@@ -927,18 +926,19 @@ def encode_pfsc_payload(
     return encoded_payload, effective_gain_pct, hypothetical_all_compressed_size
 
 
-def _make_compression_spool_path(*, source_path: Path) -> Path:
+def _make_compression_spool_path(*, source_path: Path, temp_folder: Path | None = None) -> Path:
     """Build a unique temporary spool path for a compressed payload.
 
     Args:
         source_path: Source file path used only for naming context.
+        temp_folder: Optional temporary folder for spool files.
 
     Returns:
         A unique path under the system temporary directory.
     """
     suffix: str = uuid.uuid4().hex
     safe_name: str = source_path.name.replace(" ", "_")
-    temp_root: Path = Path(tempfile.gettempdir())
+    temp_root: Path = resolve_temp_root(temp_folder=temp_folder)
     return temp_root / f"mkpfs-{safe_name}.{suffix}.pfsc"
 
 
@@ -1364,6 +1364,7 @@ def _compress_files_in_process(
     dry_run: bool,
     total_bytes_to_process: int,
     progress: Progress,
+    temp_folder: Path | None,
 ) -> None:
     """Compress files in-process while streaming progress updates.
 
@@ -1378,6 +1379,7 @@ def _compress_files_in_process(
         dry_run: When True, only analyze compression decisions without writing spool files.
         total_bytes_to_process: Total raw bytes represented by ``file_nodes_sorted``.
         progress: Progress reporter to update.
+        temp_folder: Temporary folder used for PFSC spool files.
     """
     progress_total_units: int = total_bytes_to_process if total_bytes_to_process > 0 else len(file_nodes_sorted)
     displayed_progress_units: int = 0
@@ -1441,7 +1443,10 @@ def _compress_files_in_process(
                 file_node.gain_pct = gain_pct
                 file_node.hypothetical_compressed_size = hypothetical_compressed_size
             else:
-                spool_path: Path = _make_compression_spool_path(source_path=file_node.abs_path)
+                spool_path: Path = _make_compression_spool_path(
+                    source_path=file_node.abs_path,
+                    temp_folder=temp_folder,
+                )
                 stored_size = 0
                 is_compressed = False
                 gain_pct = 0.0
@@ -1805,7 +1810,7 @@ def compute_file_storage(
 
 
 def _compute_file_storage_worker(
-    args: tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None],
+    args: tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None, Path | None],
 ) -> tuple[Path, Path, bool, int, bool, float, int]:
     """Worker function for parallel compression.
 
@@ -1815,7 +1820,7 @@ def _compute_file_storage_worker(
 
     Args:
         args: Tuple containing ``(abs_path, threshold_gain, min_file_gain, min_compress_size, compress, block_size,
-            zlib_level, dry_run, progress_queue)``.
+            zlib_level, dry_run, progress_queue, temp_folder)``.
 
     Returns:
         A tuple ``(file_path, stored_source_path, stored_source_is_temp, stored_size,
@@ -1830,6 +1835,7 @@ def _compute_file_storage_worker(
     zlib_level: int
     dry_run: bool
     progress_queue: SupportsIntQueue | None
+    temp_folder: Path | None
     (
         abs_path,
         threshold_gain,
@@ -1840,6 +1846,7 @@ def _compute_file_storage_worker(
         zlib_level,
         dry_run,
         progress_queue,
+        temp_folder,
     ) = args
 
     raw_size: int = abs_path.stat().st_size
@@ -1873,7 +1880,7 @@ def _compute_file_storage_worker(
         stored_source_path: Path = abs_path
         stored_source_is_temp: bool = False
     else:
-        spool_path: Path = _make_compression_spool_path(source_path=abs_path)
+        spool_path: Path = _make_compression_spool_path(source_path=abs_path, temp_folder=temp_folder)
         stored_size, is_compressed, gain_pct, hypothetical_compressed_size = _encode_pfsc_file_to_spool(
             abs_path=abs_path,
             spool_path=spool_path,
@@ -2212,9 +2219,38 @@ def build_pfs(
     skip_executable_compression: bool = False,
     min_file_gain: int = 0,
     min_compress_size: int = 0,
+    temp_folder: Path | None = None,
 ) -> BuildStats:
+    """Build a PFS image from a source tree.
+
+    Args:
+        source_root: Source directory to pack.
+        output_path: Final image path to write.
+        block_size: Filesystem block size in bytes.
+        pfs_version: PFS profile version.
+        inode_bits: Inode width in bits.
+        case_insensitive: Whether to set the case-insensitive mode bit.
+        signed: Whether to build a signed image.
+        compress: Whether PFSC compression is enabled.
+        threshold_gain: Minimum per-block gain required to keep PFSC blocks.
+        cpu_count: Requested CPU worker count for compression.
+        zlib_level: Zlib compression level.
+        dry_run: When True, only report the layout without writing an image.
+        verbose: Whether to emit verbose per-file decisions.
+        encrypted: Whether to encrypt filesystem blocks.
+        new_crypt: Whether to use the alternate EKPFS derivation.
+        ekpfs: Optional EKPFS key bytes.
+        skip_executable_compression: Whether to keep executable-like files raw.
+        min_file_gain: Minimum whole-file gain required to store PFSC.
+        min_compress_size: Minimum raw file size eligible for PFSC.
+        temp_folder: Optional temporary folder for PFSC spool files.
+
+    Returns:
+        Build statistics for the completed image.
+    """
     start: float = time.time()
     progress: Progress = Progress(enabled=True)
+    temp_root: Path = resolve_temp_root(temp_folder=temp_folder)
     signed_inode_bits: int = 64 if signed and inode_bits == 64 else 32
     resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)
     seed: bytes = consts.ZERO_PFS_SEED if (signed or encrypted) else b"\x00" * len(consts.ZERO_PFS_SEED)
@@ -2271,6 +2307,7 @@ def build_pfs(
                 dry_run=dry_run,
                 total_bytes_to_process=total_bytes_to_process,
                 progress=progress,
+                temp_folder=temp_root,
             )
         else:
             # Use multiprocessing for parallel compression.
@@ -2282,7 +2319,9 @@ def build_pfs(
             displayed_progress_units: int = 0
             with mp.Manager() as manager:
                 progress_queue: SupportsIntQueue = manager.Queue()
-                worker_args: list[tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None]] = [
+                worker_args: list[
+                    tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None, Path | None]
+                ] = [
                     (
                         f.abs_path,
                         threshold_gain,
@@ -2293,6 +2332,7 @@ def build_pfs(
                         zlib_level,
                         dry_run,
                         progress_queue,
+                        temp_root,
                     )
                     for f in compression_file_nodes
                 ]

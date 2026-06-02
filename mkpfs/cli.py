@@ -49,12 +49,14 @@ from .utils import (
     is_power_of_two,
     normalize_output_path,
     read_param_json,
+    resolve_temp_root,
 )
 
 
 def print_build_parameters(
     source_path: Path,
     output_path: Path,
+    temp_folder: Path,
     block_size: int,
     pfs_version: int,
     inode_bits: int,
@@ -72,7 +74,29 @@ def print_build_parameters(
     require_game_files: bool,
     skip_executable_compression: bool = True,
 ) -> None:
-    """Print build configuration at the start."""
+    """Print build configuration at the start.
+
+    Args:
+        source_path: Original source path shown to the user.
+        output_path: Final output image path.
+        temp_folder: Temporary folder used for pack artifacts.
+        block_size: PFS block size in bytes.
+        pfs_version: PFS profile version number.
+        inode_bits: Inode width in bits.
+        case_insensitive: Whether case-insensitive mode is enabled.
+        signed: Whether signed mode is enabled.
+        encrypted: Whether encryption is enabled.
+        new_crypt: Whether the alternate encryption derivation is enabled.
+        compress: Whether PFSC compression is enabled.
+        threshold_gain: Minimum per-block compression gain.
+        cpu_count: Requested CPU worker count.
+        zlib_level: Zlib compression level.
+        max_compressed_ratio: Optional maximum compressed ratio.
+        min_compress_size: Minimum file size eligible for compression.
+        dry_run: Whether the build is a dry run.
+        require_game_files: Whether strict game-file validation is enabled.
+        skip_executable_compression: Whether executable-like files are stored raw.
+    """
     mode: int = compose_pfs_mode_with_sign(inode_bits, case_insensitive, signed)
     if encrypted:
         mode |= consts.PFS_MODE_ENCRYPTED
@@ -81,6 +105,7 @@ def print_build_parameters(
     info("" + "=" * 70)
     info(f"  Source path:       {source_path}")
     info(f"  Output path:       {output_path}")
+    info(f"  Temp folder:       {temp_folder}")
     ver_label: str = "PS5" if pfs_version == consts.PFS_VERSION_PS5 else "PS4"
     info(f"  Version:           {pfs_version} ({ver_label})")
     compression_magic: str = describe_magic(magic=consts.PFSC_MAGIC) if compress else "none"
@@ -299,11 +324,14 @@ def prompt_overwrite(output_path: Path) -> bool:
         info("Please enter 'y' or 'n'")
 
 
-def cleanup_pack_temp_artifacts(*, output_path: Path, stale_age_seconds: int = 300) -> None:
+def cleanup_pack_temp_artifacts(
+    *, output_path: Path, temp_folder: Path | None = None, stale_age_seconds: int = 300
+) -> None:
     """Remove stale temporary artifacts from interrupted pack runs.
 
     Args:
         output_path: Final output image path for the current run.
+        temp_folder: Optional temporary folder to scan for stale spool files.
         stale_age_seconds: Minimum age in seconds for temp spool files to qualify
             as stale cleanup candidates.
     """
@@ -312,7 +340,7 @@ def cleanup_pack_temp_artifacts(*, output_path: Path, stale_age_seconds: int = 3
         with suppress(OSError):
             tmp_path.unlink()
 
-    temp_root: Path = Path(tempfile.gettempdir())
+    temp_root: Path = resolve_temp_root(temp_folder=temp_folder)
     stale_cutoff_epoch: float = time.time() - max(0, stale_age_seconds)
     spool_path: Path
     for spool_path in temp_root.glob("mkpfs-*.pfsc"):
@@ -505,9 +533,13 @@ def cli_mkpfs_add_create_args(
         default="auto",
         help="PFS block size in bytes, 'auto' (65536), or 'auto-fit' to minimize estimated file-data padding",
     )
+    parser.add_argument(
+        "--temp-folder",
+        help="Directory for temporary pack artifacts (defaults to the system temp folder)",
+    )
     parser.add_argument("--version", choices=["PS4", "PS5"], default="PS4", help="PFS profile version (default: PS4)")
     parser.add_argument(
-        "--inode-bits", type=int, choices=[32, 64], default=64, help="Inode width mode bit (32 or 64, default: 64)"
+        "--inode-bits", type=int, choices=[32, 64], default=32, help="Inode width mode bit (32 or 64, default: 32)"
     )
 
     case_group = parser.add_mutually_exclusive_group()
@@ -553,12 +585,27 @@ def cli_mkpfs_add_create_args(
     parser.add_argument("--verify", action="store_true", help="Run 'verify' after a successful pack")
 
 
+def _resolve_pack_temp_folder(args: argparse.Namespace) -> Path:
+    """Resolve the temporary folder used by pack workflows.
+
+    Args:
+        args: Parsed CLI arguments with an optional ``temp_folder`` attribute.
+
+    Returns:
+        Existing directory path used for temporary pack artifacts.
+    """
+    temp_folder_arg: str | None = getattr(args, "temp_folder", None)
+    temp_folder: Path | None = Path(temp_folder_arg) if temp_folder_arg else None
+    return resolve_temp_root(temp_folder=temp_folder)
+
+
 def _run_pack_build(
     *,
     args: argparse.Namespace,
     build_source_root: Path,
     compare_source_root: Path,
     display_source_path: Path,
+    temp_folder: Path,
     require_game_files: bool,
     desired_output_suffix: str,
     output_adjustment_message: str,
@@ -570,6 +617,7 @@ def _run_pack_build(
         build_source_root: Directory passed into the builder.
         compare_source_root: Directory used for optional post-build verification.
         display_source_path: Original user-facing source path shown in reports.
+        temp_folder: Directory used for temporary pack artifacts.
         require_game_files: Whether to enforce the strict game-file preflight.
         desired_output_suffix: Output suffix to use when adjustment is enabled.
         output_adjustment_message: Log message emitted when the output suffix changes.
@@ -647,6 +695,7 @@ def _run_pack_build(
     print_build_parameters(
         display_source_path,
         output_path,
+        temp_folder,
         block_size,
         pfs_version,
         args.inode_bits,
@@ -675,7 +724,7 @@ def _run_pack_build(
             return 1
 
     if not args.dry_run:
-        cleanup_pack_temp_artifacts(output_path=output_path)
+        cleanup_pack_temp_artifacts(output_path=output_path, temp_folder=temp_folder)
     if not args.dry_run and not prompt_overwrite(output_path):
         info("Operation cancelled.")
         return 0
@@ -700,6 +749,7 @@ def _run_pack_build(
         skip_executable_compression=bool(getattr(args, "skip_executable_compression", False)),
         min_file_gain=min_file_gain,
         min_compress_size=args.min_compress_size,
+        temp_folder=temp_folder,
     )
 
     stats.input_path = display_source_path
@@ -724,7 +774,7 @@ def _run_pack_build(
 
 
 @contextmanager
-def _stage_single_file_source_root(*, source_file: Path) -> Iterator[Path]:
+def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | None = None) -> Iterator[Path]:
     """Yield a temporary source root exposing one file without copying data.
 
     The staged file is created as a hard link when possible, with a symlink
@@ -733,6 +783,8 @@ def _stage_single_file_source_root(*, source_file: Path) -> Iterator[Path]:
     Args:
         source_file: Existing source file that should appear at the temporary
             root path.
+        temp_folder: Optional temporary folder where the staging directory should
+            be created.
 
     Yields:
         Temporary directory path containing exactly one file entry with the
@@ -741,7 +793,8 @@ def _stage_single_file_source_root(*, source_file: Path) -> Iterator[Path]:
     Raises:
         BuildError: If no link strategy can stage the file.
     """
-    with tempfile.TemporaryDirectory() as staging_dir_name:
+    temp_root: Path = resolve_temp_root(temp_folder=temp_folder)
+    with tempfile.TemporaryDirectory(dir=str(temp_root)) as staging_dir_name:
         staging_root: Path = Path(staging_dir_name)
         staging_file: Path = staging_root / source_file.name
         try:
@@ -766,6 +819,7 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
         Process exit code for the folder packing workflow.
     """
     source_path: Path = Path(args.source_dir).expanduser().resolve()
+    temp_folder: Path = _resolve_pack_temp_folder(args)
     title_id: str | None = _detect_title_id_from_source(source_path)
     desired_output_suffix: str = ".ffpfs" if title_id is not None else ".ffpfsc"
     output_adjustment_message: str
@@ -783,6 +837,7 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
         build_source_root=source_path,
         compare_source_root=source_path,
         display_source_path=source_path,
+        temp_folder=temp_folder,
         require_game_files=bool(getattr(args, "require_game_files", False)),
         desired_output_suffix=desired_output_suffix,
         output_adjustment_message=output_adjustment_message,
@@ -799,15 +854,17 @@ def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
         Process exit code for the file packing workflow.
     """
     source_file: Path = Path(args.source_file).expanduser().resolve()
+    temp_folder: Path = _resolve_pack_temp_folder(args)
     if not source_file.exists() or not source_file.is_file():
         raise BuildError(f"--source-file must be an existing file: {source_file}")
 
-    with _stage_single_file_source_root(source_file=source_file) as staging_root:
+    with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
         return _run_pack_build(
             args=args,
             build_source_root=staging_root,
             compare_source_root=staging_root,
             display_source_path=source_file,
+            temp_folder=temp_folder,
             require_game_files=False,
             desired_output_suffix=".ffpfsc",
             output_adjustment_message=(

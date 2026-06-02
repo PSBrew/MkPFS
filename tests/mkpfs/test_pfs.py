@@ -406,6 +406,41 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert len(compressed_payload) == compressed_inode.size
             assert compressed_payload[:4] == b"PFSC"
 
+    def test_build_pfs_uses_custom_temp_folder_for_pfsc_spool_files(self) -> None:
+        """Compressed builds should route PFSC spool files through the configured temp folder."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        large_file: Path = src / "data" / "large.bin"
+        large_file.write_bytes(b"A" * 200000)
+        out: Path = tmp_path / "custom-temp-folder.ffpfs"
+        custom_temp_folder: Path = tmp_path / "pack-temp"
+        expected_temp_folder: Path = custom_temp_folder.resolve()
+
+        def fake_make_compression_spool_path(*, source_path: Path, temp_folder: Path | None = None) -> Path:
+            self.assertEqual(temp_folder, expected_temp_folder)
+            return expected_temp_folder / f"mkpfs-{source_path.name}.pfsc"
+
+        with patch.object(pfs_mod, "_make_compression_spool_path", side_effect=fake_make_compression_spool_path):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS4,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=True,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+                temp_folder=expected_temp_folder,
+            )
+
+        assert out.is_file()
+
     def test_executable_compression_skip_keeps_eboot_prx_and_sprx_raw(self) -> None:
         """Requested executable compression skips should leave eboot*.bin, *.prx, and *.sprx inodes raw."""
         tmp_path: Path = self.make_temp_path()
@@ -649,6 +684,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
                 9,
                 False,
                 progress_queue,
+                None,
             )
         )
 
