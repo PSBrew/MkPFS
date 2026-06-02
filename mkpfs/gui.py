@@ -56,6 +56,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "pf_signed": "Signed Image",
         "pf_verify": "Verify After Pack",
         "pf_dry": "Dry Run",
+        "pf_temp": "Temp Folder (optional)",
+        "pf_temp_ph": "Custom temp folder…",
+        "pkf_temp": "Temp Folder (optional)",
+        "pkf_temp_ph": "Custom temp folder…",
         "pf_err_src": "✗ Source folder is required.",
         "pf_err_out": "✗ Output image path is required.",
         # Pack File
@@ -150,6 +154,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "pf_signed": "Imagem Assinada",
         "pf_verify": "Verificar Após Empacotar",
         "pf_dry": "Simulação (Dry Run)",
+        "pf_temp": "Pasta Temporária (opcional)",
+        "pf_temp_ph": "Pasta temp personalizada…",
+        "pkf_temp": "Pasta Temporária (opcional)",
+        "pkf_temp_ph": "Pasta temp personalizada…",
         "pf_err_src": "✗ A pasta fonte é obrigatória.",
         "pf_err_out": "✗ O caminho de saída é obrigatório.",
         "pkf_title": "Empacotar Arquivo",
@@ -239,6 +247,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "pf_signed": "Imagen Firmada",
         "pf_verify": "Verificar Tras Empaquetar",
         "pf_dry": "Simulación (Dry Run)",
+        "pf_temp": "Carpeta Temporal (opcional)",
+        "pf_temp_ph": "Carpeta temp personalizada…",
+        "pkf_temp": "Carpeta Temporal (opcional)",
+        "pkf_temp_ph": "Carpeta temp personalizada…",
         "pf_err_src": "✗ La carpeta fuente es obligatoria.",
         "pf_err_out": "✗ La ruta de salida es obligatoria.",
         "pkf_title": "Empaquetar Archivo",
@@ -959,6 +971,7 @@ class PackFolderPanel(BasePanel):
         self._signed: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
+        self._temp_folder: ctk.StringVar = ctk.StringVar()
         super().__init__(parent)
 
     def _build_controls(self, card: GlassCard) -> None:
@@ -1015,6 +1028,12 @@ class PackFolderPanel(BasePanel):
         ]:
             NeonCheckbox(chk, text=text, variable=var, accent=self._accent).pack(anchor="w", pady=3)
 
+        # Temp folder (optional, spans both columns below checkboxes)
+        PathRow(
+            opt, tr("pf_temp"), self._temp_folder,
+            mode="folder", placeholder=tr("pf_temp_ph"), browse_label=tr("browse"),
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
         out: str = self._out.get().strip()
@@ -1033,6 +1052,8 @@ class PackFolderPanel(BasePanel):
             args.append("--verify")
         if self._dry_run.get():
             args.append("--dry-run")
+        if temp := self._temp_folder.get().strip():
+            args += ["--temp-folder", temp]
         self._run_mkpfs(args)
 
 
@@ -1053,6 +1074,7 @@ class PackFilePanel(BasePanel):
         self._out: ctk.StringVar = ctk.StringVar()
         self._version: ctk.StringVar = ctk.StringVar(value="PS4")
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
+        self._temp_folder: ctk.StringVar = ctk.StringVar()
         super().__init__(parent)
 
     def _build_controls(self, card: GlassCard) -> None:
@@ -1105,6 +1127,11 @@ class PackFilePanel(BasePanel):
             anchor="w", pady=3
         )
 
+        PathRow(
+            opt, tr("pkf_temp"), self._temp_folder,
+            mode="folder", placeholder=tr("pkf_temp_ph"), browse_label=tr("browse"),
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
         out: str = self._out.get().strip()
@@ -1114,6 +1141,8 @@ class PackFilePanel(BasePanel):
         args: list[str] = ["pack", "file", src, out, "--version", self._version.get()]
         if not self._compress.get():
             args.append("--no-compress")
+        if temp := self._temp_folder.get().strip():
+            args += ["--temp-folder", temp]
         self._run_mkpfs(args)
 
 
