@@ -406,6 +406,120 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert len(compressed_payload) == compressed_inode.size
             assert compressed_payload[:4] == b"PFSC"
 
+    def test_raw_file_smaller_than_block_preserves_inode_size(self) -> None:
+        """Block padding should not replace the real file size in inode metadata."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        tiny_file: Path = src / "data" / "tiny.bin"
+        tiny_payload: bytes = b"T"
+        tiny_file.write_bytes(tiny_payload)
+        out: Path = tmp_path / "tiny-raw.ffpfs"
+        build_pfs(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS4,
+            inode_bits=32,
+            case_insensitive=True,
+            signed=False,
+            compress=False,
+            threshold_gain=20,
+            cpu_count=1,
+            zlib_level=9,
+            dry_run=False,
+            verbose=False,
+            encrypted=False,
+        )
+
+        inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out, source=src)
+        assert inspection.errors == []
+        tiny_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/tiny.bin"]]
+        assert tiny_inode.size == len(tiny_payload)
+        assert tiny_inode.size_compressed == len(tiny_payload)
+        assert tiny_inode.logical_size == len(tiny_payload)
+        assert tiny_inode.stored_size == len(tiny_payload)
+        assert tiny_inode.blocks == 1
+
+    def test_raw_file_larger_than_block_omits_padding_from_inode_payload(self) -> None:
+        """Raw file inode reads should stop at the real stored size, not block padding."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        odd_file: Path = src / "data" / "odd.bin"
+        odd_payload: bytes = bytes((idx % 251 for idx in range(65536 + 7)))
+        odd_file.write_bytes(odd_payload)
+        out: Path = tmp_path / "odd-raw.ffpfs"
+        build_pfs(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS4,
+            inode_bits=32,
+            case_insensitive=True,
+            signed=False,
+            compress=False,
+            threshold_gain=20,
+            cpu_count=1,
+            zlib_level=9,
+            dry_run=False,
+            verbose=False,
+            encrypted=False,
+        )
+
+        with out.open("rb") as fh:
+            header: pfs_mod.ParsedHeader = parse_image_header(fh)
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out, source=src)
+            assert inspection.errors == []
+            odd_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/odd.bin"]]
+            assert odd_inode.size == len(odd_payload)
+            assert odd_inode.size_compressed == len(odd_payload)
+            assert odd_inode.logical_size == len(odd_payload)
+            assert odd_inode.stored_size == len(odd_payload)
+            assert odd_inode.blocks == 2
+            assert pfs_mod.read_image_inode_payload(fh, header, odd_inode) == odd_payload
+
+            padding_size: int = odd_inode.blocks * header.block_size - len(odd_payload)
+            fh.seek(odd_inode.db[0] * header.block_size + len(odd_payload))
+            assert fh.read(padding_size) == b"\x00" * padding_size
+
+    def test_empty_raw_file_allocates_one_padded_block_but_preserves_size(self) -> None:
+        """Empty file inodes should keep size zero while reserving one data block."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        empty_file: Path = src / "data" / "empty.bin"
+        empty_file.write_bytes(b"")
+        out: Path = tmp_path / "empty-raw.ffpfs"
+        build_pfs(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS4,
+            inode_bits=32,
+            case_insensitive=True,
+            signed=False,
+            compress=False,
+            threshold_gain=20,
+            cpu_count=1,
+            zlib_level=9,
+            dry_run=False,
+            verbose=False,
+            encrypted=False,
+        )
+
+        with out.open("rb") as fh:
+            header: pfs_mod.ParsedHeader = parse_image_header(fh)
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out, source=src)
+            assert inspection.errors == []
+            empty_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/empty.bin"]]
+            assert empty_inode.size == 0
+            assert empty_inode.size_compressed == 0
+            assert empty_inode.logical_size == 0
+            assert empty_inode.stored_size == 0
+            assert empty_inode.blocks == 1
+            assert pfs_mod.read_image_inode_payload(fh, header, empty_inode) == b""
+
+            fh.seek(empty_inode.db[0] * header.block_size)
+            assert fh.read(header.block_size) == b"\x00" * header.block_size
+
     def test_executable_compression_skip_keeps_eboot_prx_and_sprx_raw(self) -> None:
         """Requested executable compression skips should leave eboot*.bin, *.prx, and *.sprx inodes raw."""
         tmp_path: Path = self.make_temp_path()
@@ -1390,6 +1504,21 @@ class TestSignedImageHeaderDigest(PfsTestCase):
         assert hasattr(c, "HEADER_DIGEST_SIZE")
         assert c.HEADER_DIGEST_SIZE == 0x5A0
 
+    def test_unsigned_inode_block_sig_uses_contiguous_block_sentinel(self) -> None:
+        """Unsigned header inode-table pointer slots should match orbis-pub-cmd layout."""
+        sig: bytes = pfs_mod.build_inode_block_sig_s64(
+            inode_block_count=3,
+            block_size=65536,
+            now=0,
+            signed=False,
+        )
+        pointer_base: int = 0x68 + c.SIG_SIZE
+
+        assert struct.unpack_from("<q", sig, pointer_base)[0] == 1
+        assert struct.unpack_from("<q", sig, pointer_base + 40)[0] == -1
+        assert struct.unpack_from("<q", sig, pointer_base + 80)[0] == -1
+        assert struct.unpack_from("<q", sig, pointer_base + 120)[0] == 0
+
 
 def assert_dirent_to_bytes_known_vector() -> None:
     """Encode a file dirent for inode 5, name "eboot.bin" (9 chars)."""
@@ -2017,3 +2146,9 @@ class TestSourceTreeScanning(PfsTestCase):
             (src / f"small_{idx}.bin").write_bytes(b"x" * 100)
 
         assert pfs_mod.choose_auto_fit_block_size(src) == 4096
+
+    def test_file_data_footprint_charges_empty_files_one_block(self) -> None:
+        """File-data estimates should reserve one block for each empty file."""
+        footprint: int = pfs_mod.estimate_file_data_footprint(file_sizes=[0, 1], block_size=65536)
+
+        assert footprint == 131072

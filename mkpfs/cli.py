@@ -349,8 +349,8 @@ def run_image_check(
                 )
 
             compressed_count = sum(1 for i in file_inodes.values() if inodes[i].is_compressed)
-            total_logical = sum(max(0, inodes[i].size) for i in file_inodes.values())
-            total_stored = sum(max(0, inodes[i].size_compressed) for i in file_inodes.values())
+            total_logical = sum(max(0, inodes[i].logical_size) for i in file_inodes.values())
+            total_stored = sum(max(0, inodes[i].stored_size) for i in file_inodes.values())
 
             if emit_report:
                 payload_magic: str = describe_magic(magic=consts.PFSC_MAGIC) if compressed_count > 0 else "none"

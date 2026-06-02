@@ -1092,7 +1092,16 @@ class TestRunImageCheck(CliTestCase):
         image_path: Path = tmp_path / "image.ffpfs"
         image_path.write_bytes(b"x")
         header: SimpleNamespace = SimpleNamespace(mode=0, version=0, magic=123, readonly=1, block_size=65536)
-        inodes: list[SimpleNamespace] = [SimpleNamespace(number=0, is_compressed=False, size=100, size_compressed=90)]
+        inodes: list[SimpleNamespace] = [
+            SimpleNamespace(
+                number=0,
+                is_compressed=False,
+                size=100,
+                size_compressed=90,
+                logical_size=100,
+                stored_size=90,
+            )
+        ]
         with ExitStack() as stack:
             stack.enter_context(patch.object(cli, "parse_image_header", return_value=header))
             stack.enter_context(patch.object(cli, "parse_image_inodes", return_value=inodes))
@@ -1121,6 +1130,50 @@ class TestRunImageCheck(CliTestCase):
         self.assertEqual(tree, {0: []})
         self.assertEqual(uroot, 0)
 
+    def test_run_image_check_report_uses_logical_and_stored_inode_sizes(self) -> None:
+        """The report should not swap logical and stored byte counts for compressed files."""
+        tmp_path: Path = self.make_temp_path()
+        image_path: Path = tmp_path / "image.ffpfs"
+        image_path.write_bytes(b"x")
+        header: SimpleNamespace = SimpleNamespace(mode=0, version=0, magic=123, readonly=1, block_size=65536)
+        inodes: list[SimpleNamespace] = [
+            SimpleNamespace(
+                number=0,
+                is_compressed=True,
+                size=25,
+                size_compressed=100,
+                logical_size=100,
+                stored_size=25,
+            )
+        ]
+        stdout_buffer: StringIO = StringIO()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(cli, "parse_image_header", return_value=header))
+            stack.enter_context(patch.object(cli, "parse_image_inodes", return_value=inodes))
+            stack.enter_context(patch.object(cli, "validate_inode_layout", return_value=None))
+            stack.enter_context(patch.object(cli, "verify_signed_image_signatures", return_value=None))
+            stack.enter_context(patch.object(cli, "parse_superroot_and_indexes", return_value=(0, {1: 2}, {}, set())))
+            stack.enter_context(
+                patch.object(cli, "build_tree_from_uroot", return_value=({"packed.bin": 0}, {"": 0}, {0: []}))
+            )
+            stack.enter_context(patch.object(cli, "build_expected_fpt", return_value={1: []}))
+            stack.enter_context(patch.object(cli, "validate_fpt_maps", return_value=None))
+            stack.enter_context(patch.object(cli, "validate_ps5_checklist", return_value=None))
+            stack.enter_context(patch.object(cli, "verify_file_payload_hashes", return_value=(1, 0x1234, "a" * 64)))
+            stack.enter_context(redirect_stdout(stdout_buffer))
+            errors, warnings, _tree, _uroot = cli.run_image_check(
+                image=image_path,
+                source=None,
+                print_tree=False,
+                emit_report=True,
+            )
+
+        output_text: str = stdout_buffer.getvalue()
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+        self.assertIn("Logical file bytes:    100", output_text)
+        self.assertIn("Stored file bytes:     25", output_text)
+
     def test_run_image_check_reports_crc_manifest_and_orphan_mismatches(self) -> None:
         """Image check should report checksum mismatches and orphan inodes when validation finds them."""
         tmp_path: Path = self.make_temp_path()
@@ -1128,8 +1181,22 @@ class TestRunImageCheck(CliTestCase):
         image_path.write_bytes(b"x")
         header: SimpleNamespace = SimpleNamespace(mode=0, version=0, magic=123, readonly=1, block_size=65536)
         inodes: list[SimpleNamespace] = [
-            SimpleNamespace(number=0, is_compressed=False, size=10, size_compressed=10),
-            SimpleNamespace(number=99, is_compressed=False, size=10, size_compressed=10),
+            SimpleNamespace(
+                number=0,
+                is_compressed=False,
+                size=10,
+                size_compressed=10,
+                logical_size=10,
+                stored_size=10,
+            ),
+            SimpleNamespace(
+                number=99,
+                is_compressed=False,
+                size=10,
+                size_compressed=10,
+                logical_size=10,
+                stored_size=10,
+            ),
         ]
         with ExitStack() as stack:
             stack.enter_context(patch.object(cli, "parse_image_header", return_value=header))

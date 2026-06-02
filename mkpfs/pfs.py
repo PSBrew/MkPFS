@@ -47,7 +47,7 @@ class SupportsIntQueue(Protocol):
 
 def estimate_file_data_footprint(*, file_sizes: list[int], block_size: int) -> int:
     """Estimate data-block footprint for file payloads at a given PFS block size."""
-    return sum((ceil_div(size, block_size) * block_size) if size > 0 else block_size for size in file_sizes)
+    return sum(max(1, ceil_div(size, block_size)) * block_size for size in file_sizes)
 
 
 def choose_auto_fit_block_size(source_root: Path) -> int:
@@ -541,7 +541,7 @@ def build_inode_block_sig_s64(inode_block_count: int, block_size: int, now: int,
         if signed:
             block: int = 1 + i if i < inode_block_count else 0
         else:
-            block = 1 if i == 0 else 0
+            block = 1 if i == 0 else (-1 if i < inode_block_count else 0)
         struct.pack_into("<q", sig, db_base + i * 40 + 32, block)
 
     ib_base: int = db_base + 12 * 40
@@ -2453,7 +2453,7 @@ def build_pfs(
             | (consts.INODE_FLAG_COMPRESSED if f.compressed else 0)
             | (consts.INODE_FLAG_SIGNED_EXTRA if signed else 0)
         )
-        blocks = max(1, ceil_div(f.stored_size, block_size)) if f.stored_size > 0 else 1
+        blocks = max(1, ceil_div(f.stored_size, block_size))
         file_size = f.stored_size
         file_size_compressed = f.raw_size if f.compressed else f.stored_size
         ino = Inode(
@@ -2615,7 +2615,7 @@ def build_pfs(
         reserved_empty_blocks.update({ndblock - 2, ndblock - 1})
 
         for inode, payload_size, is_dir, _payload_bytes, _payload_source in all_nodes_data:
-            blocks = max(1, ceil_div(payload_size, block_size)) if payload_size > 0 else 1
+            blocks = max(1, ceil_div(payload_size, block_size))
             inode.blocks = blocks
             if is_dir:
                 inode.size = blocks * block_size
@@ -2662,7 +2662,7 @@ def build_pfs(
             reserved_empty_blocks.add(ndblock - 1)
 
         for inode, payload_size, is_dir, _payload_bytes, _payload_source in all_nodes_data:
-            blocks = max(1, ceil_div(payload_size, block_size)) if payload_size > 0 else 1
+            blocks = max(1, ceil_div(payload_size, block_size))
             inode.db[0] = ndblock
             inode.blocks = blocks
             for i in range(1, consts.MAX_DIRECT_BLOCKS):
@@ -2692,7 +2692,7 @@ def build_pfs(
     stats.uncompressed_files = stats.total_files - stats.compressed_files
     stats.block_size = block_size
     stats.block_alignment_waste = sum(
-        (ceil_div(f.stored_size, block_size) * block_size - f.stored_size) if f.stored_size > 0 else block_size
+        max(1, ceil_div(f.stored_size, block_size)) * block_size - f.stored_size
         for f in file_nodes_sorted
     )
     if verbose:
