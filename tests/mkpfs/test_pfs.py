@@ -120,18 +120,17 @@ def assert_raises_build_error(operation: Callable[[], None]) -> None:
 class TestUnsignedInodeFlags(PfsTestCase):
     """Tests for inode flags in unsigned images."""
 
-    def test_unsigned_superroot_flags(self) -> None:
-        """Superroot in unsigned image must have INTERNAL and READONLY."""
+    def test_unsigned_flat_path_table_flags(self) -> None:
+        """flat_path_table in unsigned image must have INTERNAL and READONLY."""
         tmp_path: Path = self.make_temp_path()
         out: Path = _build(tmp_path, signed=False)
         with out.open("rb") as fh:
             hdr = parse_image_header(fh)
             inodes = parse_image_inodes(fh, hdr)
-        # inode 0 is superroot
-        sr = inodes[0]
-        assert sr.flags & c.INODE_FLAG_INTERNAL
-        assert sr.flags & c.INODE_FLAG_READONLY
-        assert not (sr.flags & c.INODE_FLAG_SIGNED_EXTRA)
+        fpt = inodes[0]
+        assert fpt.flags & c.INODE_FLAG_INTERNAL
+        assert fpt.flags & c.INODE_FLAG_READONLY
+        assert not (fpt.flags & c.INODE_FLAG_SIGNED_EXTRA)
 
     def test_unsigned_uroot_flags(self) -> None:
         """Uroot in unsigned image must have READONLY, not SIGNED_EXTRA."""
@@ -140,8 +139,7 @@ class TestUnsignedInodeFlags(PfsTestCase):
         with out.open("rb") as fh:
             hdr = parse_image_header(fh)
             inodes = parse_image_inodes(fh, hdr)
-        # uroot is inode 2 (no collision in minimal app)
-        uroot = inodes[2]
+        uroot = inodes[1]
         assert uroot.flags & c.INODE_FLAG_READONLY
         assert not (uroot.flags & c.INODE_FLAG_SIGNED_EXTRA)
 
@@ -162,17 +160,17 @@ class TestUnsignedInodeFlags(PfsTestCase):
 class TestSignedInodeFlags(PfsTestCase):
     """Tests for inode flags in signed images."""
 
-    def test_signed_superroot_flags(self) -> None:
-        """Superroot in signed image must have INTERNAL and SIGNED_EXTRA, not READONLY."""
+    def test_signed_flat_path_table_flags(self) -> None:
+        """flat_path_table in signed image must have INTERNAL and SIGNED_EXTRA, not READONLY."""
         tmp_path: Path = self.make_temp_path()
         out: Path = _build(tmp_path, signed=True)
         with out.open("rb") as fh:
             hdr = parse_image_header(fh)
             inodes = parse_image_inodes(fh, hdr)
-        sr = inodes[0]
-        assert sr.flags & c.INODE_FLAG_INTERNAL
-        assert not (sr.flags & c.INODE_FLAG_READONLY)  # cleared for signed
-        assert sr.flags & c.INODE_FLAG_SIGNED_EXTRA
+        fpt = inodes[0]
+        assert fpt.flags & c.INODE_FLAG_INTERNAL
+        assert not (fpt.flags & c.INODE_FLAG_READONLY)
+        assert fpt.flags & c.INODE_FLAG_SIGNED_EXTRA
 
     def test_signed_uroot_flags(self) -> None:
         """Uroot in signed image must have SIGNED_EXTRA, not READONLY."""
@@ -181,7 +179,7 @@ class TestSignedInodeFlags(PfsTestCase):
         with out.open("rb") as fh:
             hdr = parse_image_header(fh)
             inodes = parse_image_inodes(fh, hdr)
-        uroot = inodes[2]
+        uroot = inodes[1]
         assert not (uroot.flags & c.INODE_FLAG_READONLY)
         assert uroot.flags & c.INODE_FLAG_SIGNED_EXTRA
 
@@ -204,7 +202,7 @@ class TestSignedInodeFlags(PfsTestCase):
         with out.open("rb") as fh:
             hdr = parse_image_header(fh)
             inodes = parse_image_inodes(fh, hdr)
-        # Non-superroot directories should have SIGNED_EXTRA
+        # Non-special directories should have SIGNED_EXTRA
         dir_inodes = [
             i
             for i in inodes
@@ -390,10 +388,12 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         with out.open("rb") as fh:
             header: pfs_mod.ParsedHeader = parse_image_header(fh)
             inodes: list[pfs_mod.ParsedInode] = parse_image_inodes(fh, header)
-            superroot_payload: bytes = pfs_mod.read_image_inode_payload(fh, header, inodes[0])
-            superroot_dirents, _parse_errors = pfs_mod.parse_image_dirents(superroot_payload, strict=True)
-            superroot_names: set[str] = {entry.name for entry in superroot_dirents}
-            assert "global_pfsc_data" not in superroot_names
+            fpt_payload: bytes = pfs_mod.read_image_inode_payload(fh, header, inodes[0])
+            fpt_entries: set[int] = set()
+            for offset in range(0, len(fpt_payload), 8):
+                _hash_value, inode_number = struct.unpack_from("<II", fpt_payload, offset)
+                fpt_entries.add(inode_number & 0x7FFFFFFF)
+            assert all(inodes[inode_number].is_file for inode_number in fpt_entries if inode_number < len(inodes))
 
             inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out, source=src)
             assert inspection.errors == []

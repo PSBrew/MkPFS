@@ -2384,20 +2384,8 @@ def build_pfs(
     now: int = int(time.time())
     inodes: list[Inode] = []
 
-    super_root_inode = Inode(
-        number=0,
-        mode=consts.INODE_MODE_DIR | consts.INODE_RX_ONLY,
-        nlink=1,
-        flags=consts.INODE_FLAG_INTERNAL
-        | (0 if signed else consts.INODE_FLAG_READONLY)
-        | (consts.INODE_FLAG_SIGNED_EXTRA if signed else 0),
-        size=block_size,
-        size_compressed=block_size,
-        blocks=1,
-        time_sec=now,
-    )
     fpt_inode = Inode(
-        number=1,
+        number=0,
         mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
         nlink=1,
         flags=consts.INODE_FLAG_INTERNAL
@@ -2408,12 +2396,11 @@ def build_pfs(
         blocks=1,
         time_sec=now,
     )
-
     collision_inode: Inode | None = None
 
-    uroot_inode_num = 2
+    uroot_inode_num = 1
     uroot_inode = Inode(
-        number=uroot_inode_num,
+        number=1,
         mode=consts.INODE_MODE_DIR | consts.INODE_RX_ONLY,
         nlink=3,
         flags=(0 if signed else consts.INODE_FLAG_READONLY) | (consts.INODE_FLAG_SIGNED_EXTRA if signed else 0),
@@ -2423,12 +2410,12 @@ def build_pfs(
         time_sec=now,
     )
 
-    inodes.extend([super_root_inode, fpt_inode, uroot_inode])
+    inodes.extend([fpt_inode, uroot_inode])
     dirs[""].inode = uroot_inode
 
     inode_by_path: dict[str, Inode] = {"dir:": uroot_inode}
 
-    next_inode_number = 3
+    next_inode_number = 2
 
     non_root_dirs = [d for d in dir_nodes_sorted if d.rel_dir != ""]
     for d in non_root_dirs:
@@ -2502,18 +2489,16 @@ def build_pfs(
             mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
             nlink=1,
             flags=consts.INODE_FLAG_INTERNAL
-            | consts.INODE_FLAG_READONLY
+            | (0 if signed else consts.INODE_FLAG_READONLY)
             | (consts.INODE_FLAG_SIGNED_EXTRA if signed else 0),
             size=len(collision_blob or b""),
             size_compressed=len(collision_blob or b""),
             blocks=max(1, ceil_div(len(collision_blob or b""), block_size)),
             time_sec=now,
         )
-        inodes = [super_root_inode, fpt_inode, collision_inode, uroot_inode] + [
-            ino for ino in inodes if ino.number >= 3
-        ]
+        inodes = [fpt_inode, uroot_inode, collision_inode] + [ino for ino in inodes if ino.number >= 2]
 
-        # Renumber all non-special inodes after inserting collision_resolver.
+        # Renumber non-special inodes after inserting collision_resolver.
         remap: dict[int, int] = {}
         for idx, ino in enumerate(inodes):
             old = ino.number
@@ -2532,11 +2517,6 @@ def build_pfs(
             inode_by_path[f"dir:{d.rel_dir}"] = d.inode
         for f in file_nodes_sorted:
             inode_by_path[f"file:{f.rel_path}"] = f.inode
-
-    super_root_dirents: list[Dirent] = [Dirent(fpt_inode.number, consts.DIRENT_TYPE_FILE, "flat_path_table")]
-    if has_collision and collision_inode is not None:
-        super_root_dirents.append(Dirent(collision_inode.number, consts.DIRENT_TYPE_FILE, "collision_resolver"))
-    super_root_dirents.append(Dirent(uroot_inode.number, consts.DIRENT_TYPE_DIRECTORY, "uroot"))
 
     inode_count = len(inodes)
     inode_size: int = signed_inode_layout(signed_inode_bits).inode_size if signed else consts.INODE_D32_SIZE
@@ -2575,17 +2555,6 @@ def build_pfs(
             signature_targets.append(SignatureTarget(1 + i, header_inode_block_sig_offset(i), block_size, 3))
         ndblock += inode_block_count
 
-        super_root_inode.blocks = 1
-        ndblock = assign_signed_inode_layout(
-            super_root_inode,
-            super_root_inode.blocks,
-            block_size,
-            signed_inode_bits,
-            ndblock,
-            signature_targets,
-            indirect_block_records,
-        )
-
         fpt_inode.size = len(fpt_blob)
         fpt_inode.size_compressed = len(fpt_blob)
         fpt_inode.blocks = max(1, ceil_div(len(fpt_blob), block_size))
@@ -2610,9 +2579,6 @@ def build_pfs(
                 signature_targets,
                 indirect_block_records,
             )
-
-        ndblock += 2
-        reserved_empty_blocks.update({ndblock - 2, ndblock - 1})
 
         for inode, payload_size, is_dir, _payload_bytes, _payload_source in all_nodes_data:
             blocks = max(1, ceil_div(payload_size, block_size))
@@ -2641,9 +2607,6 @@ def build_pfs(
         ndblock = 1
         ndblock += inode_block_count
 
-        super_root_inode.db[0] = ndblock
-        ndblock += super_root_inode.blocks
-
         fpt_inode.size = len(fpt_blob)
         fpt_inode.size_compressed = len(fpt_blob)
         fpt_inode.blocks = max(1, ceil_div(len(fpt_blob), block_size))
@@ -2657,9 +2620,6 @@ def build_pfs(
             for i in range(1, consts.MAX_DIRECT_BLOCKS):
                 collision_inode.db[i] = -1
             ndblock += collision_inode.blocks
-        else:
-            ndblock += 1
-            reserved_empty_blocks.add(ndblock - 1)
 
         for inode, payload_size, is_dir, _payload_bytes, _payload_source in all_nodes_data:
             blocks = max(1, ceil_div(payload_size, block_size))
@@ -2759,10 +2719,6 @@ def build_pfs(
                     out.write(ino.to_bytes())
                 if (out.tell() % block_size) > (block_size - inode_size):
                     out.seek(out.tell() + (block_size - (out.tell() % block_size)))
-
-            out.seek(block_size * (inode_block_count + 1))
-            for d in super_root_dirents:
-                out.write(d.to_bytes())
 
             if signed:
                 write_payload_to_blocks(
@@ -3486,33 +3442,50 @@ def parse_superroot_and_indexes(
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
 ) -> tuple[int, dict[int, int], dict[int, list[ParsedDirent]], set[int]]:
-    super_root_offset = (1 + header.dinode_block_count) * header.block_size
-    blob: bytes = read_image_bytes(fh, header, super_root_offset, header.block_size, ekpfs=ekpfs, new_crypt=new_crypt)
-    super_entries, parse_errors = parse_image_dirents(blob, strict=True)
-    for e in parse_errors:
-        errors.append(f"superroot: {e}")
+    fpt_inode: int | None = 0 if len(inodes) > 0 else None
+    uroot_inode: int | None = 1 if len(inodes) > 1 else None
+    collision_inode: int | None = None
+    special_inodes: set[int] = set()
 
-    fpt_inode = None
-    collision_inode = None
-    uroot_inode = None
-    special_inodes: set[int] = {0}
-    for ent in super_entries:
-        if ent.name == "flat_path_table":
-            fpt_inode = ent.inode_number
-        elif ent.name == "collision_resolver":
-            collision_inode = ent.inode_number
-        elif ent.name == "uroot":
-            uroot_inode = ent.inode_number
+    # Current orbis-pub-cmd layout stores special entries as fixed inode numbers:
+    # 0 = flat_path_table, 1 = uroot, 2 = collision_resolver when needed. Older
+    # MkPFS images used inode 0 as a synthetic superroot directory; keep parsing
+    # that layout as a compatibility fallback.
+    if len(inodes) > 0 and inodes[0].is_dir:
+        super_root_offset = (1 + header.dinode_block_count) * header.block_size
+        blob: bytes = read_image_bytes(
+            fh,
+            header,
+            super_root_offset,
+            header.block_size,
+            ekpfs=ekpfs,
+            new_crypt=new_crypt,
+        )
+        super_entries: list[ParsedDirent]
+        parse_errors: list[str]
+        super_entries, parse_errors = parse_image_dirents(blob, strict=True)
+        for e in parse_errors:
+            errors.append(f"superroot: {e}")
 
-    if fpt_inode is None:
-        errors.append("superroot missing 'flat_path_table' entry")
-    if uroot_inode is None:
-        errors.append("superroot missing 'uroot' entry")
+        fpt_inode = None
+        collision_inode = None
+        uroot_inode = None
+        special_inodes.add(0)
+        for ent in super_entries:
+            if ent.name == "flat_path_table":
+                fpt_inode = ent.inode_number
+            elif ent.name == "collision_resolver":
+                collision_inode = ent.inode_number
+            elif ent.name == "uroot":
+                uroot_inode = ent.inode_number
+
+        if fpt_inode is None:
+            errors.append("superroot missing 'flat_path_table' entry")
+        if uroot_inode is None:
+            errors.append("superroot missing 'uroot' entry")
 
     if fpt_inode is not None:
         special_inodes.add(fpt_inode)
-    if collision_inode is not None:
-        special_inodes.add(collision_inode)
     if uroot_inode is not None:
         special_inodes.add(uroot_inode)
 
@@ -3531,6 +3504,9 @@ def parse_superroot_and_indexes(
             fpt_map[h] = v
 
         if any((v & 0x80000000) for v in fpt_map.values()):
+            if collision_inode is None and len(inodes) > 2:
+                collision_inode = 2
+                special_inodes.add(collision_inode)
             if collision_inode is None:
                 errors.append("flat_path_table has collision entries but no collision_resolver inode")
             elif 0 <= collision_inode < len(inodes):
@@ -3548,6 +3524,8 @@ def parse_superroot_and_indexes(
                     if parse_err:
                         errors.extend([f"collision_resolver hash 0x{h:08X}: {e}" for e in parse_err])
                     collision_map[h] = entries
+    if collision_inode is not None:
+        special_inodes.add(collision_inode)
 
     return (uroot_inode if uroot_inode is not None else -1), fpt_map, collision_map, special_inodes
 
