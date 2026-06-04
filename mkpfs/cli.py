@@ -933,14 +933,14 @@ def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | Non
     # require the "Create Symbolic Links" privilege (WinError 1314), which
     # most users lack. Prefer the user's temp_folder, but fall back to
     # the source file's parent directory when they are on different drives.
-    _staging_base: Path = temp_folder if temp_folder is not None else source_file.parent
+    staging_base: Path = temp_folder if temp_folder is not None else source_file.parent
     try:
-        if source_file.stat().st_dev != _staging_base.stat().st_dev:
-            _staging_base = source_file.parent
+        if source_file.stat().st_dev != staging_base.stat().st_dev:
+            staging_base = source_file.parent
     except OSError:
         pass  # stat failed, keep original base
 
-    with tempfile.TemporaryDirectory(dir=str(_staging_base)) as staging_dir_name:
+    with tempfile.TemporaryDirectory(dir=str(staging_base)) as staging_dir_name:
         staging_root: Path = Path(staging_dir_name)
         staging_file: Path = staging_root / source_file.name
         try:
