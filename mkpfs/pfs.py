@@ -2309,6 +2309,92 @@ def assign_signed_inode_layout(
     return next_block
 
 
+def _pack_pfs_header_block(
+    *,
+    block_size: int,
+    pfs_version: int,
+    mode: int,
+    nblock: int,
+    inode_count: int,
+    final_ndblock: int,
+    inode_block_count: int,
+    now: int,
+    signed: bool,
+    encrypted: bool,
+    seed: bytes,
+) -> bytes:
+    """Build the plaintext PFS header block (block 0).
+
+    Args:
+        block_size: Filesystem block size in bytes; length of the returned block.
+        pfs_version: PFS profile version.
+        mode: Composed PFS mode bits.
+        nblock: Number of leading blocks (always 1 today).
+        inode_count: Total inode count.
+        final_ndblock: Total data block count for the image.
+        inode_block_count: Number of inode blocks.
+        now: Build timestamp in seconds.
+        signed: Whether the image is signed.
+        encrypted: Whether the image is encrypted.
+        seed: PFS seed value.
+
+    Returns:
+        A ``block_size``-length header block.
+    """
+    hdr: bytearray = bytearray(block_size)
+    struct.pack_into("<q", hdr, 0x00, pfs_version)
+    struct.pack_into("<q", hdr, 0x08, consts.PFS_MAGIC)
+    struct.pack_into("<q", hdr, 0x10, 0)
+    struct.pack_into("<BBBB", hdr, 0x18, 0, 0, 1, 0)
+    struct.pack_into("<H", hdr, 0x1C, mode)
+    struct.pack_into("<H", hdr, 0x1E, 0)
+    struct.pack_into("<I", hdr, 0x20, block_size)
+    struct.pack_into("<I", hdr, 0x24, 0)
+    struct.pack_into("<q", hdr, 0x28, nblock)
+    struct.pack_into("<q", hdr, 0x30, inode_count)
+    struct.pack_into("<q", hdr, 0x38, final_ndblock)
+    struct.pack_into("<q", hdr, 0x40, inode_block_count)
+    ib_sig_bytes: bytes = build_inode_block_sig_s64(inode_block_count, block_size, now, signed=signed)
+    hdr[0x50 : 0x50 + len(ib_sig_bytes)] = ib_sig_bytes
+    if signed or encrypted:
+        struct.pack_into("<I", hdr, 0x36C, 1)
+        hdr[0x370 : 0x370 + len(seed)] = seed
+    else:
+        struct.pack_into("<I", hdr, 0x368, 1)
+    return bytes(hdr)
+
+
+def _write_inode_table(
+    *,
+    out: BinaryIO,
+    inodes: list[Inode],
+    signed: bool,
+    signed_inode_bits: int,
+    block_size: int,
+    inode_size: int,
+) -> None:
+    """Write the inode table starting at the current handle position.
+
+    Mirrors the per-block packing used by ``build_pfs``: when the remaining space
+    in the current block is smaller than one inode, skip to the next block.
+
+    Args:
+        out: Open writable and seekable handle positioned at the inode table start.
+        inodes: Inodes in image order.
+        signed: Whether to use the signed inode layout.
+        signed_inode_bits: Signed inode width (32 or 64) when ``signed``.
+        block_size: Filesystem block size.
+        inode_size: Serialized inode size in bytes.
+    """
+    for ino in inodes:
+        if signed:
+            out.write(ino.to_bytes_signed64() if signed_inode_bits == 64 else ino.to_bytes_signed32())
+        else:
+            out.write(ino.to_bytes())
+        if (out.tell() % block_size) > (block_size - inode_size):
+            out.seek(out.tell() + (block_size - (out.tell() % block_size)))
+
+
 def build_pfs(
     source_root: Path,
     output_path: Path,
@@ -2874,41 +2960,31 @@ def build_pfs(
         with tmp_path.open("w+b") as out:
             out.truncate(image_size)
 
-            hdr = bytearray(block_size)
-            struct.pack_into("<q", hdr, 0x00, pfs_version)
-            struct.pack_into("<q", hdr, 0x08, consts.PFS_MAGIC)
-            struct.pack_into("<q", hdr, 0x10, 0)
-            struct.pack_into("<BBBB", hdr, 0x18, 0, 0, 1, 0)
-            struct.pack_into("<H", hdr, 0x1C, mode)
-            struct.pack_into("<H", hdr, 0x1E, 0)
-            struct.pack_into("<I", hdr, 0x20, block_size)
-            struct.pack_into("<I", hdr, 0x24, 0)
-            struct.pack_into("<q", hdr, 0x28, nblock)
-            struct.pack_into("<q", hdr, 0x30, inode_count)
-            struct.pack_into("<q", hdr, 0x38, final_ndblock)
-            struct.pack_into("<q", hdr, 0x40, inode_block_count)
-            ib_sig_bytes = build_inode_block_sig_s64(inode_block_count, block_size, now, signed=signed)
-            hdr[0x50 : 0x50 + len(ib_sig_bytes)] = ib_sig_bytes
-            if signed or encrypted:
-                struct.pack_into("<I", hdr, 0x36C, 1)
-                hdr[0x370 : 0x370 + len(seed)] = seed
-            else:
-                struct.pack_into("<I", hdr, 0x368, 1)
-
+            hdr = _pack_pfs_header_block(
+                block_size=block_size,
+                pfs_version=pfs_version,
+                mode=mode,
+                nblock=nblock,
+                inode_count=inode_count,
+                final_ndblock=final_ndblock,
+                inode_block_count=inode_block_count,
+                now=now,
+                signed=signed,
+                encrypted=encrypted,
+                seed=seed,
+            )
             out.seek(0)
             out.write(hdr)
 
             out.seek(block_size)
-            for ino in inodes:
-                if signed:
-                    if signed_inode_bits == 64:
-                        out.write(ino.to_bytes_signed64())
-                    else:
-                        out.write(ino.to_bytes_signed32())
-                else:
-                    out.write(ino.to_bytes())
-                if (out.tell() % block_size) > (block_size - inode_size):
-                    out.seek(out.tell() + (block_size - (out.tell() % block_size)))
+            _write_inode_table(
+                out=out,
+                inodes=inodes,
+                signed=signed,
+                signed_inode_bits=signed_inode_bits,
+                block_size=block_size,
+                inode_size=inode_size,
+            )
 
             out.seek(block_size * (inode_block_count + 1))
             for d in super_root_dirents:
