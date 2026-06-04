@@ -2336,3 +2336,58 @@ class TestStreamSingleFileBuilder(PfsTestCase):
         result = extract_pfs_image(image=out, output_path=dest)
         assert not result.errors
         assert (dest / "blob.exfat").read_bytes() == payload
+
+    def test_stream_single_file_incompressible_stores_raw(self) -> None:
+        """Random (incompressible) input falls back to raw storage and still round-trips."""
+        import os
+
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "rand.bin"
+        src.write_bytes(os.urandom(300_000))
+        out: Path = tmp_path / "rand.ffpfsc"
+        stats = pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+        )
+        assert stats.compressed_files == 0
+        dest: Path = tmp_path / "u"
+        result = extract_pfs_image(image=out, output_path=dest)
+        assert not result.errors
+        assert (dest / "rand.bin").read_bytes() == src.read_bytes()
+
+    def test_stream_single_file_encrypted_round_trip(self) -> None:
+        """An encrypted streamed image decrypts and extracts back to the source bytes."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "enc.exfat"
+        src.write_bytes(b"SECRET!!" * 5000 + b"\x00" * 80_000)
+        out: Path = tmp_path / "enc.ffpfsc"
+        key: bytes = b"\x11" * 32
+        pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=True,
+            ekpfs=key,
+        )
+        dest: Path = tmp_path / "u"
+        result = extract_pfs_image(image=out, output_path=dest, ekpfs=key)
+        assert not result.errors
+        assert (dest / "enc.exfat").read_bytes() == src.read_bytes()
