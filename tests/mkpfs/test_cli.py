@@ -1624,3 +1624,35 @@ class TestCliPackFileNoSpool(CliTestCase):
             )
         self.assertEqual(rc, 0)
         self.assertFalse(out.exists())
+
+
+class TestCliTreeStructureOnly(CliTestCase):
+    """The tree command should render structure without decoding file payloads."""
+
+    def test_tree_does_not_decode_file_payloads(self) -> None:
+        """`mkpfs tree` builds the listing from metadata only, skipping payload hashing."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "blob.exfat"
+        src.write_bytes((b"GAMEDATA" * 4000) + b"\x00" * 200_000)
+        out: Path = tmp_path / "blob.ffpfsc"
+        cli.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=consts.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+        )
+        buffer: StringIO = StringIO()
+        with patch.object(cli, "verify_file_payload_hashes") as mock_verify, redirect_stdout(buffer), redirect_stderr(
+            StringIO()
+        ):
+            rc: int = cli_mkpfs_main(["tree", str(out)])
+        self.assertEqual(rc, 0)
+        mock_verify.assert_not_called()
+        self.assertIn("blob.exfat", buffer.getvalue())

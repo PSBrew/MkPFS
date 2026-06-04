@@ -368,6 +368,7 @@ def run_image_check(
     emit_report: bool = True,
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
+    verify_payloads: bool = True,
 ) -> tuple[list[str], list[str], dict[int, list[ParsedDirent]], int]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -408,25 +409,36 @@ def run_image_check(
             case_insensitive = bool(header.mode & consts.PFS_MODE_CASE_INSENSITIVE)
             expected_fpt = build_expected_fpt(file_inodes, dir_inodes, case_insensitive)
             validate_fpt_maps(fpt_map, collision_map, expected_fpt, errors)
-            validate_ps5_checklist(fh, header, inodes, file_inodes, warnings, errors, ekpfs=ekpfs, new_crypt=new_crypt)
-
-            checked_files, data_crc32, manifest_sha256 = verify_file_payload_hashes(
-                fh,
-                header,
-                inodes,
-                file_inodes,
-                errors,
-                ekpfs=ekpfs,
-                new_crypt=new_crypt,
-                progress=progress,
-            )
-
-            if expected_crc32 is not None and data_crc32 != expected_crc32:
-                errors.append(f"CRC32 mismatch: actual 0x{data_crc32:08X}, expected 0x{expected_crc32:08X}")
-            if expected_manifest_sha256 is not None and manifest_sha256.lower() != expected_manifest_sha256.lower():
-                errors.append(
-                    f"Manifest SHA256 mismatch: actual {manifest_sha256}, expected {expected_manifest_sha256.lower()}"
+            # Payload-content passes (decode every file). Skipped for structure-only
+            # callers such as the tree listing, which need only the directory layout.
+            checked_files: int = 0
+            data_crc32: int = 0
+            manifest_sha256: str = ""
+            if verify_payloads:
+                validate_ps5_checklist(
+                    fh, header, inodes, file_inodes, warnings, errors, ekpfs=ekpfs, new_crypt=new_crypt
                 )
+                checked_files, data_crc32, manifest_sha256 = verify_file_payload_hashes(
+                    fh,
+                    header,
+                    inodes,
+                    file_inodes,
+                    errors,
+                    ekpfs=ekpfs,
+                    new_crypt=new_crypt,
+                    progress=progress,
+                )
+
+                if expected_crc32 is not None and data_crc32 != expected_crc32:
+                    errors.append(f"CRC32 mismatch: actual 0x{data_crc32:08X}, expected 0x{expected_crc32:08X}")
+                if (
+                    expected_manifest_sha256 is not None
+                    and manifest_sha256.lower() != expected_manifest_sha256.lower()
+                ):
+                    errors.append(
+                        f"Manifest SHA256 mismatch: actual {manifest_sha256}, "
+                        f"expected {expected_manifest_sha256.lower()}"
+                    )
 
             reachable = set(file_inodes.values()) | set(dir_inodes.values()) | set(special_inodes)
             orphan_inodes = sorted(i.number for i in inodes if i.number not in reachable)
@@ -1216,6 +1228,7 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
         emit_report=False,
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
         new_crypt=bool(getattr(args, "new_crypt", False)),
+        verify_payloads=False,
     )
     if errors:
         for e in errors:
