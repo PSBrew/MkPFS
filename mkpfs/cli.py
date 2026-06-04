@@ -918,6 +918,29 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
     if getattr(args, "ekpfs_key", None) and not encrypted:
         raise BuildError("--ekpfs-key requires --encrypted")
 
+    temp_folder: Path = _resolve_pack_temp_folder(args)
+    print_build_parameters(
+        source_file,
+        output_path,
+        temp_folder,
+        block_size,
+        pfs_version,
+        32,
+        case_insensitive,
+        False,
+        encrypted,
+        new_crypt,
+        compress,
+        args.threshold_gain,
+        args.cpu_count,
+        args.compression_level,
+        args.max_compressed_ratio,
+        args.min_compress_size,
+        False,
+        False,
+        bool(getattr(args, "skip_executable_compression", False)),
+    )
+
     if not prompt_overwrite(output_path):
         info("Operation cancelled.")
         return 0
@@ -947,7 +970,6 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
     info("Running post-create check...")
     # Stage the single file into a temp directory (hardlink, no data copy) so the
     # check compares against a directory tree, mirroring the verify command.
-    temp_folder: Path = _resolve_pack_temp_folder(args)
     with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
         errors, warnings, _tree, _uroot = run_image_check(
             output_path,

@@ -1535,3 +1535,36 @@ class TestCliPackFileNoSpool(CliTestCase):
                 ]
             )
         self.assertEqual(rc, 0)
+
+    def test_pack_file_no_spool_prints_parameters_and_progress(self) -> None:
+        """The streaming path prints the parameters banner and a compression status line."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        src.write_bytes(b"GAMEDATA" * 20000 + b"\x00" * 200000)
+        out: Path = tmp_path / "PPSA.ffpfsc"
+        stdout_buffer: StringIO = StringIO()
+        stderr_buffer: StringIO = StringIO()
+        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(stdout_buffer), redirect_stderr(
+            stderr_buffer
+        ):
+            rc: int = cli_mkpfs_main(
+                [
+                    "pack",
+                    "file",
+                    str(src),
+                    str(out),
+                    "--version",
+                    "PS5",
+                    "--inode-bits",
+                    "32",
+                    "--no-spool",
+                    "--temp-folder",
+                    str(tmp_path / "temp"),
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        combined: str = stdout_buffer.getvalue() + stderr_buffer.getvalue()
+        self.assertIn("PFS Image Builder - Parameters", combined)
+        self.assertIn("Source path:", combined)
+        self.assertIn("Compressing 1 file", combined)

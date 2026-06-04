@@ -3335,15 +3335,19 @@ def build_pfs_stream_single_file(
             processed: int = 0
 
             def report(delta: int) -> None:
-                """Forward block progress to the write phase bar."""
+                """Forward block progress to the compression bar."""
                 nonlocal processed
                 processed += delta
-                progress.step("write", min(processed, total_units), total_units, bytes_processed=processed)
+                progress.step("compress", min(processed, total_units), total_units, bytes_processed=processed)
 
             if compress and raw_size > 0 and raw_size >= min_compress_size:
                 block_workers: int = resolve_block_compression_worker_count(
                     requested_cpu_count=resolve_compression_worker_count(requested_cpu_count=cpu_count),
                     file_size=raw_size,
+                )
+                progress.status(
+                    f"\nCompressing 1 file ({human_readable_size(raw_size)}) "
+                    f"using {block_workers} CPU core{'s' if block_workers != 1 else ''}..."
                 )
                 stored_size, is_compressed, gain_pct, hypothetical_size = _encode_pfsc_into_handle(
                     out=out,
