@@ -1154,6 +1154,143 @@ def _analyze_pfsc_file_storage(
     return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
 
 
+def _encode_pfsc_into_handle(
+    *,
+    out: BinaryIO,
+    base_offset: int,
+    source_path: Path,
+    threshold_gain: int,
+    min_file_gain: int,
+    zlib_level: int,
+    logical_block_size: int,
+    block_worker_count: int = 1,
+    progress_callback: Callable[[int], None] | None = None,
+) -> tuple[int, bool, float, int]:
+    """Encode a file's PFSC payload directly into an open handle at ``base_offset``.
+
+    Streams one logical block at a time, recording block offsets, then seeks back
+    to ``base_offset`` to write the PFSC header and offset table. The caller owns
+    the handle's final size; this function never truncates.
+
+    Args:
+        out: Open writable and seekable binary handle.
+        base_offset: Absolute byte offset where the PFSC payload begins.
+        source_path: Source file path.
+        threshold_gain: Minimum per-block gain percent to keep compressed bytes.
+        min_file_gain: Minimum whole-file gain percent required to store PFSC.
+        zlib_level: zlib compression level.
+        logical_block_size: PFSC logical block size.
+        block_worker_count: Number of worker processes to use for block-level
+            compression of this file.
+        progress_callback: Optional callback receiving processed raw byte deltas.
+
+    Returns:
+        Tuple ``(stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size)``.
+    """
+    raw_size: int = source_path.stat().st_size
+    if not (0 <= min_file_gain <= 100):
+        raise ValueError(f"min_file_gain must be between 0 and 100 inclusive, got {min_file_gain}")
+    if raw_size == 0:
+        return 0, False, 0.0, 0
+
+    block_count: int = ceil_div(raw_size, logical_block_size)
+    header_size: int = _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size)
+    offsets: list[int] = [header_size]
+    all_compressed_size: int = 0
+    compressed_blocks: int = 0
+    effective_block_workers: int = max(1, min(block_worker_count, block_count))
+
+    # Write payload blocks after the reserved header region for this payload.
+    out.seek(base_offset + header_size)
+    if effective_block_workers == 1:
+        with source_path.open("rb") as source_file:
+            for _idx in range(block_count):
+                chunk: bytes = source_file.read(logical_block_size)
+                padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
+                compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+                all_compressed_size += len(compressed_chunk)
+                gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
+                store_compressed: bool = _should_store_pfsc_block_compressed(
+                    compressed_block_size=len(compressed_chunk),
+                    logical_block_size=logical_block_size,
+                    gain_pct=gain_pct,
+                    threshold_gain=threshold_gain,
+                )
+                selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
+                if store_compressed:
+                    compressed_blocks += 1
+                out.write(selected_chunk)
+                offsets.append(offsets[-1] + len(selected_chunk))
+                if progress_callback is not None:
+                    progress_callback(len(chunk))
+    else:
+        worker_args_iter: Iterator[tuple[Path, int, int, int]] = _iter_pfsc_block_worker_args(
+            abs_path=source_path,
+            block_count=block_count,
+            logical_block_size=logical_block_size,
+            zlib_level=zlib_level,
+        )
+        with mp.Pool(processes=effective_block_workers) as pool:
+            results_iter = pool.imap(_compress_pfsc_block_payload_worker, worker_args_iter, chunksize=1)
+            raw_chunk: bytes
+            compressed_chunk: bytes
+            for raw_chunk, compressed_chunk in results_iter:
+                padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
+                all_compressed_size += len(compressed_chunk)
+                gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
+                store_compressed: bool = _should_store_pfsc_block_compressed(
+                    compressed_block_size=len(compressed_chunk),
+                    logical_block_size=logical_block_size,
+                    gain_pct=gain_pct,
+                    threshold_gain=threshold_gain,
+                )
+                selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
+                if store_compressed:
+                    compressed_blocks += 1
+                out.write(selected_chunk)
+                offsets.append(offsets[-1] + len(selected_chunk))
+                if progress_callback is not None:
+                    progress_callback(len(raw_chunk))
+
+    encoded_payload_size: int = offsets[-1]
+    hypothetical_all_compressed_size: int = header_size + all_compressed_size
+    if compressed_blocks == 0 or encoded_payload_size >= raw_size:
+        return raw_size, False, 0.0, hypothetical_all_compressed_size
+
+    effective_gain_pct: float = ((raw_size - encoded_payload_size) / raw_size) * 100.0
+    if effective_gain_pct < min_file_gain:
+        return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
+
+    # Backfill the PFSC header and block offset table at the payload base.
+    header: PFSCHeader = PFSCHeader(
+        magic=consts.PFSC_MAGIC,
+        unk4=consts.PFSC_UNK4,
+        unk8=consts.PFSC_UNK8,
+        logical_block_size=logical_block_size,
+        block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
+        data_offset=header_size,
+        data_length=block_count * logical_block_size,
+    )
+    header_area: bytearray = bytearray(header_size)
+    struct.pack_into(
+        "<iiiiqqQq",
+        header_area,
+        0,
+        header.magic,
+        header.unk4,
+        header.unk8,
+        header.logical_block_size,
+        header.logical_block_size,
+        header.block_offsets_offset,
+        header.data_offset,
+        header.data_length,
+    )
+    struct.pack_into(f"<{block_count + 1}Q", header_area, consts.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
+    out.seek(base_offset)
+    out.write(header_area)
+    return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
+
+
 def _encode_pfsc_file_to_spool(
     *,
     abs_path: Path,
@@ -1166,6 +1303,9 @@ def _encode_pfsc_file_to_spool(
     progress_callback: Callable[[int], None] | None = None,
 ) -> tuple[int, bool, float, int]:
     """Write a file's PFSC payload to a spool file using low-memory streaming.
+
+    Thin wrapper around :func:`_encode_pfsc_into_handle` that targets a fresh
+    spool file at offset zero and trims it to the encoded payload size.
 
     Args:
         abs_path: Source file path.
@@ -1181,109 +1321,24 @@ def _encode_pfsc_file_to_spool(
     Returns:
         Tuple ``(stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size)``.
     """
-    raw_size: int = abs_path.stat().st_size
-    if not (0 <= min_file_gain <= 100):
-        raise ValueError(f"min_file_gain must be between 0 and 100 inclusive, got {min_file_gain}")
-    if raw_size == 0:
-        return 0, False, 0.0, 0
-
-    block_count: int = ceil_div(raw_size, logical_block_size)
-    header_size: int = _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size)
-    offsets: list[int] = [header_size]
-    all_compressed_size: int = 0
-    compressed_blocks: int = 0
-    effective_block_workers: int = max(1, min(block_worker_count, block_count))
-
     with spool_path.open("w+b") as spool_file:
-        spool_file.seek(header_size)
-        if effective_block_workers == 1:
-            with abs_path.open("rb") as source_file:
-                for _idx in range(block_count):
-                    chunk: bytes = source_file.read(logical_block_size)
-                    padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
-                    compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
-                    all_compressed_size += len(compressed_chunk)
-                    gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
-                    store_compressed: bool = _should_store_pfsc_block_compressed(
-                        compressed_block_size=len(compressed_chunk),
-                        logical_block_size=logical_block_size,
-                        gain_pct=gain_pct,
-                        threshold_gain=threshold_gain,
-                    )
-                    selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
-                    if store_compressed:
-                        compressed_blocks += 1
-                    spool_file.write(selected_chunk)
-                    offsets.append(offsets[-1] + len(selected_chunk))
-                    if progress_callback is not None:
-                        progress_callback(len(chunk))
-        else:
-            worker_args_iter: Iterator[tuple[Path, int, int, int]] = _iter_pfsc_block_worker_args(
-                abs_path=abs_path,
-                block_count=block_count,
-                logical_block_size=logical_block_size,
-                zlib_level=zlib_level,
-            )
-            with mp.Pool(processes=effective_block_workers) as pool:
-                results_iter = pool.imap(_compress_pfsc_block_payload_worker, worker_args_iter, chunksize=1)
-                raw_chunk: bytes
-                compressed_chunk: bytes
-                for raw_chunk, compressed_chunk in results_iter:
-                    padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-                    all_compressed_size += len(compressed_chunk)
-                    gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
-                    store_compressed: bool = _should_store_pfsc_block_compressed(
-                        compressed_block_size=len(compressed_chunk),
-                        logical_block_size=logical_block_size,
-                        gain_pct=gain_pct,
-                        threshold_gain=threshold_gain,
-                    )
-                    selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
-                    if store_compressed:
-                        compressed_blocks += 1
-                    spool_file.write(selected_chunk)
-                    offsets.append(offsets[-1] + len(selected_chunk))
-                    if progress_callback is not None:
-                        progress_callback(len(raw_chunk))
-
-        encoded_payload_size: int = offsets[-1]
-        hypothetical_all_compressed_size: int = header_size + all_compressed_size
-        if compressed_blocks == 0 or encoded_payload_size >= raw_size:
-            return raw_size, False, 0.0, hypothetical_all_compressed_size
-
-        effective_gain_pct: float = ((raw_size - encoded_payload_size) / raw_size) * 100.0
-        if effective_gain_pct < min_file_gain:
-            return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
-
-        header: PFSCHeader = PFSCHeader(
-            magic=consts.PFSC_MAGIC,
-            unk4=consts.PFSC_UNK4,
-            unk8=consts.PFSC_UNK8,
+        stored_size: int
+        is_compressed: bool
+        gain_pct: float
+        hypothetical_all_compressed_size: int
+        stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size = _encode_pfsc_into_handle(
+            out=spool_file,
+            base_offset=0,
+            source_path=abs_path,
+            threshold_gain=threshold_gain,
+            min_file_gain=min_file_gain,
+            zlib_level=zlib_level,
             logical_block_size=logical_block_size,
-            block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
-            data_offset=header_size,
-            data_length=block_count * logical_block_size,
+            block_worker_count=block_worker_count,
+            progress_callback=progress_callback,
         )
-        header_area: bytearray = bytearray(header_size)
-        struct.pack_into(
-            "<iiiiqqQq",
-            header_area,
-            0,
-            header.magic,
-            header.unk4,
-            header.unk8,
-            header.logical_block_size,
-            header.logical_block_size,
-            header.block_offsets_offset,
-            header.data_offset,
-            header.data_length,
-        )
-        struct.pack_into(f"<{block_count + 1}Q", header_area, consts.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
-        spool_file.seek(0)
-        spool_file.write(header_area)
-        spool_file.truncate(encoded_payload_size)
-
-    return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
+        spool_file.truncate(stored_size)
+    return stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size
 
 
 def _copy_exact_bytes(*, source_file: BinaryIO, destination_file: BinaryIO, byte_count: int, chunk_size: int) -> None:

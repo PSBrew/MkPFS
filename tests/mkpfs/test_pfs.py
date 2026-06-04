@@ -2222,3 +2222,40 @@ class TestSourceTreeScanning(PfsTestCase):
             (src / f"small_{idx}.bin").write_bytes(b"x" * 100)
 
         assert pfs_mod.choose_auto_fit_block_size(src) == 4096
+
+
+class TestEncodePfscIntoHandle(PfsTestCase):
+    """Tests for the reusable PFSC handle encoder shared with the spool path."""
+
+    def test_encode_pfsc_into_handle_matches_spool(self) -> None:
+        """Encoding into an open handle at a base offset matches the spool encoder bytes."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "src.bin"
+        src.write_bytes(b"AB" * 100_000 + b"\x00" * 50_000)
+
+        spool: Path = tmp_path / "out.pfsc"
+        spool_size, spool_comp, _spool_gain, _spool_hyp = pfs_mod._encode_pfsc_file_to_spool(
+            abs_path=src,
+            spool_path=spool,
+            threshold_gain=0,
+            min_file_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+            block_worker_count=1,
+        )
+
+        buf: io.BytesIO = io.BytesIO()
+        buf.write(b"\x00" * 4096)
+        handle_size, handle_comp, _handle_gain, _handle_hyp = pfs_mod._encode_pfsc_into_handle(
+            out=buf,
+            base_offset=4096,
+            source_path=src,
+            threshold_gain=0,
+            min_file_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+            block_worker_count=1,
+        )
+
+        assert (handle_size, handle_comp) == (spool_size, spool_comp)
+        assert buf.getvalue()[4096 : 4096 + spool_size] == spool.read_bytes()[:spool_size]
