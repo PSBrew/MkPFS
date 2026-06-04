@@ -945,13 +945,17 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
         return 0
 
     info("Running post-create check...")
-    errors, warnings, _tree, _uroot = run_image_check(
-        output_path,
-        source_file,
-        print_tree=False,
-        ekpfs=ekpfs_key,
-        new_crypt=new_crypt,
-    )
+    # Stage the single file into a temp directory (hardlink, no data copy) so the
+    # check compares against a directory tree, mirroring the verify command.
+    temp_folder: Path = _resolve_pack_temp_folder(args)
+    with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
+        errors, warnings, _tree, _uroot = run_image_check(
+            output_path,
+            staging_root,
+            print_tree=False,
+            ekpfs=ekpfs_key,
+            new_crypt=new_crypt,
+        )
     for w in warnings:
         warning(w)
     for e in errors:

@@ -1506,3 +1506,32 @@ class TestCliPackFileNoSpool(CliTestCase):
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         with self.assertRaises(SystemExit):
             parser.parse_args(["pack", "folder", "src", "out", "--no-spool"])
+
+    def test_pack_file_no_spool_with_verify_succeeds(self) -> None:
+        """`pack file --no-spool --verify` completes the post-create check without errors."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        src.write_bytes(b"GAMEDATA" * 20000 + b"\x00" * 200000)
+        out: Path = tmp_path / "PPSA.ffpfsc"
+        buffer: StringIO = StringIO()
+        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(buffer), redirect_stderr(
+            StringIO()
+        ):
+            rc: int = cli_mkpfs_main(
+                [
+                    "pack",
+                    "file",
+                    str(src),
+                    str(out),
+                    "--version",
+                    "PS5",
+                    "--inode-bits",
+                    "32",
+                    "--no-spool",
+                    "--verify",
+                    "--temp-folder",
+                    str(tmp_path / "temp"),
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+        self.assertEqual(rc, 0)
