@@ -3142,6 +3142,57 @@ def build_pfs(
     return stats
 
 
+def _single_file_build_stats(
+    *,
+    source_file: Path,
+    output_path: Path,
+    raw_size: int,
+    stored_size: int,
+    is_compressed: bool,
+    hypothetical_size: int,
+    block_size: int,
+    gain_pct: float,
+    elapsed_seconds: float,
+    verbose: bool,
+) -> BuildStats:
+    """Build single-file pack statistics shared by the dry-run and write paths.
+
+    Args:
+        source_file: Source file packed.
+        output_path: Output image path.
+        raw_size: Raw file size in bytes.
+        stored_size: Stored payload size in bytes.
+        is_compressed: Whether the payload is stored PFSC-compressed.
+        hypothetical_size: Hypothetical all-blocks-compressed size.
+        block_size: Filesystem block size in bytes.
+        gain_pct: Effective whole-file gain percent, used for the verbose line.
+        elapsed_seconds: Elapsed build time in seconds.
+        verbose: Whether to emit the per-file decision line.
+
+    Returns:
+        Populated build statistics for the single-file pack.
+    """
+    stats = BuildStats(input_path=source_file, output_path=output_path)
+    stats.total_files = 1
+    stats.uncompressed_total_size = raw_size
+    stats.stored_total_size = stored_size
+    stats.all_compressed_total_size = hypothetical_size
+    stats.compressed_files = 1 if is_compressed else 0
+    stats.uncompressed_files = 0 if is_compressed else 1
+    stats.block_size = block_size
+    stats.block_alignment_waste = (
+        (ceil_div(stored_size, block_size) * block_size - stored_size) if stored_size > 0 else block_size
+    )
+    stats.elapsed_seconds = elapsed_seconds
+    if verbose:
+        state: str = "compressed" if is_compressed else "raw"
+        info(
+            f"[file] {source_file.name}: raw={raw_size} stored={stored_size} gain={gain_pct:.2f}% mode={state}",
+            icon_name="file",
+        )
+    return stats
+
+
 def build_pfs_stream_single_file(
     *,
     source_file: Path,
@@ -3159,6 +3210,8 @@ def build_pfs_stream_single_file(
     new_crypt: bool = False,
     ekpfs: bytes | None = None,
     verbose: bool = False,
+    skip_executable_compression: bool = False,
+    dry_run: bool = False,
 ) -> BuildStats:
     """Build an unsigned PFS container from one file, streaming the payload with no spool.
 
@@ -3183,6 +3236,8 @@ def build_pfs_stream_single_file(
         new_crypt: Whether to use the alternate EKPFS derivation.
         ekpfs: Optional EKPFS key bytes.
         verbose: Whether to emit a verbose per-file decision line.
+        skip_executable_compression: Whether to store executable-like files raw.
+        dry_run: When True, report the layout and stats without writing an image.
 
     Returns:
         Build statistics for the completed image.
@@ -3198,6 +3253,44 @@ def build_pfs_stream_single_file(
     now: int = int(time.time())
     resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)
     seed: bytes = consts.ZERO_PFS_SEED
+
+    # Decide whether this file is eligible for PFSC compression at all.
+    should_compress: bool = (
+        compress
+        and raw_size > 0
+        and raw_size >= min_compress_size
+        and not (skip_executable_compression and should_skip_executable_compression(source_file.name))
+    )
+    block_workers: int = resolve_block_compression_worker_count(
+        requested_cpu_count=resolve_compression_worker_count(requested_cpu_count=cpu_count),
+        file_size=raw_size,
+    )
+
+    # Dry run: measure the storage decision and report stats without writing.
+    if dry_run:
+        if should_compress:
+            dry_stored, dry_compressed, dry_gain, dry_hyp = _analyze_pfsc_file_storage(
+                abs_path=source_file,
+                threshold_gain=threshold_gain,
+                min_file_gain=min_file_gain,
+                zlib_level=zlib_level,
+                logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                block_worker_count=block_workers,
+            )
+        else:
+            dry_stored, dry_compressed, dry_gain, dry_hyp = raw_size, False, 0.0, 0
+        return _single_file_build_stats(
+            source_file=source_file,
+            output_path=output_path,
+            raw_size=raw_size,
+            stored_size=dry_stored,
+            is_compressed=dry_compressed,
+            hypothetical_size=dry_hyp,
+            block_size=block_size,
+            gain_pct=dry_gain,
+            elapsed_seconds=time.time() - start,
+            verbose=verbose,
+        )
 
     # Build the four unsigned inodes (super_root, fpt, uroot, file).
     super_root_inode = Inode(
@@ -3365,11 +3458,7 @@ def build_pfs_stream_single_file(
                 processed += delta
                 progress.step("compress", min(processed, total_units), total_units, bytes_processed=processed)
 
-            if compress and raw_size > 0 and raw_size >= min_compress_size:
-                block_workers: int = resolve_block_compression_worker_count(
-                    requested_cpu_count=resolve_compression_worker_count(requested_cpu_count=cpu_count),
-                    file_size=raw_size,
-                )
+            if should_compress:
                 progress.status(
                     f"\nCompressing 1 file ({human_readable_size(raw_size)}) "
                     f"using {block_workers} CPU core{'s' if block_workers != 1 else ''}..."
@@ -3460,25 +3549,18 @@ def build_pfs_stream_single_file(
                 tmp_path.unlink()
         raise
 
-    stats = BuildStats(input_path=source_file, output_path=output_path)
-    stats.total_files = 1
-    stats.uncompressed_total_size = raw_size
-    stats.stored_total_size = stored_size
-    stats.all_compressed_total_size = hypothetical_size
-    stats.compressed_files = 1 if is_compressed else 0
-    stats.uncompressed_files = 0 if is_compressed else 1
-    stats.block_size = block_size
-    stats.block_alignment_waste = (
-        (ceil_div(stored_size, block_size) * block_size - stored_size) if stored_size > 0 else block_size
+    return _single_file_build_stats(
+        source_file=source_file,
+        output_path=output_path,
+        raw_size=raw_size,
+        stored_size=stored_size,
+        is_compressed=is_compressed,
+        hypothetical_size=hypothetical_size,
+        block_size=block_size,
+        gain_pct=gain_pct,
+        elapsed_seconds=time.time() - start,
+        verbose=verbose,
     )
-    stats.elapsed_seconds = time.time() - start
-    if verbose:
-        state: str = "compressed" if is_compressed else "raw"
-        info(
-            f"[file] {source_file.name}: raw={raw_size} stored={stored_size} gain={gain_pct:.2f}% mode={state}",
-            icon_name="file",
-        )
-    return stats
 
 
 def validate_image_quick(

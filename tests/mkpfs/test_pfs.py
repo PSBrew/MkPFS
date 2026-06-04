@@ -2392,6 +2392,58 @@ class TestStreamSingleFileBuilder(PfsTestCase):
         assert not result.errors
         assert (dest / "enc.exfat").read_bytes() == src.read_bytes()
 
+    def test_stream_single_file_dry_run_writes_nothing(self) -> None:
+        """The streaming builder dry-run returns stats without creating the image."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "blob.exfat"
+        src.write_bytes((b"GAMEDATA" * 4000) + b"\x00" * 200_000)
+        out: Path = tmp_path / "blob.ffpfsc"
+        stats = pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+            dry_run=True,
+        )
+        self.assertFalse(out.exists())
+        self.assertEqual(stats.total_files, 1)
+        self.assertEqual(stats.uncompressed_total_size, src.stat().st_size)
+
+    def test_stream_single_file_skips_executable_compression(self) -> None:
+        """Executable-like files are stored raw when skip_executable_compression is set."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "eboot.bin"
+        src.write_bytes((b"GAMEDATA" * 4000) + b"\x00" * 200_000)  # compressible
+        out: Path = tmp_path / "eboot.ffpfsc"
+        stats = pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+            skip_executable_compression=True,
+        )
+        self.assertEqual(stats.compressed_files, 0)
+        dest: Path = tmp_path / "u"
+        result = extract_pfs_image(image=out, output_path=dest)
+        assert not result.errors
+        self.assertEqual((dest / "eboot.bin").read_bytes(), src.read_bytes())
+
 
 class TestStreamingDecode(PfsTestCase):
     """Tests for flat-memory block-streaming decode of inode payloads."""

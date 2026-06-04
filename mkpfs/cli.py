@@ -1016,6 +1016,10 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
 
     # Resolve block size (single-file path: auto or explicit, no auto-fit).
     block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
+    if block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}:
+        raise BuildError(
+            "--block-size auto-fit is not supported for single-file packing; use 'auto' or an explicit size"
+        )
     if block_size_arg in {"auto", ""}:
         block_size: int = 65536
     else:
@@ -1033,10 +1037,10 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
         temp_folder=temp_folder,
         signed=False,
         require_game_files=False,
-        dry_run=False,
+        dry_run=args.dry_run,
     )
 
-    if not prompt_overwrite(output_path):
+    if not args.dry_run and not prompt_overwrite(output_path):
         info("Operation cancelled.")
         return 0
 
@@ -1056,10 +1060,12 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
         new_crypt=config.new_crypt,
         ekpfs=config.ekpfs_key,
         verbose=args.verbose,
+        skip_executable_compression=config.skip_executable_compression,
+        dry_run=args.dry_run,
     )
     stats.input_path = source_file
     print_summary(stats)
-    if not args.verify:
+    if args.dry_run or not args.verify:
         return 0
 
     # Stage the single file into a temp directory (hardlink, no data copy) so the
@@ -1091,6 +1097,8 @@ def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
     if getattr(args, "no_spool", False):
         if args.signed:
             raise BuildError("--no-spool does not support --signed images")
+        if getattr(args, "inode_bits", 32) != 32:
+            raise BuildError("--no-spool only supports 32-bit inodes (use --inode-bits 32)")
         return _run_stream_pack_file(args=args, source_file=source_file)
 
     with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:

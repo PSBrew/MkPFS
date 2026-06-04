@@ -1568,3 +1568,59 @@ class TestCliPackFileNoSpool(CliTestCase):
         self.assertIn("PFS Image Builder - Parameters", combined)
         self.assertIn("Source path:", combined)
         self.assertIn("Compressing 1 file", combined)
+
+    def test_pack_file_no_spool_rejects_inode_bits_64(self) -> None:
+        """--no-spool only supports 32-bit inodes; --inode-bits 64 is rejected."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "x.exfat"
+        src.write_bytes(b"x" * 1000)
+        out: Path = tmp_path / "x.ffpfsc"
+        with self.assertRaises(BuildError):
+            cli_mkpfs_main(
+                [
+                    "pack",
+                    "file",
+                    str(src),
+                    str(out),
+                    "--no-spool",
+                    "--inode-bits",
+                    "64",
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+
+    def test_pack_file_no_spool_rejects_auto_fit_block_size(self) -> None:
+        """--no-spool rejects auto-fit block size, which is meaningless for one file."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "x.exfat"
+        src.write_bytes(b"x" * 1000)
+        out: Path = tmp_path / "x.ffpfsc"
+        with self.assertRaises(BuildError):
+            cli_mkpfs_main(
+                [
+                    "pack",
+                    "file",
+                    str(src),
+                    str(out),
+                    "--no-spool",
+                    "--block-size",
+                    "auto-fit",
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+
+    def test_pack_file_no_spool_dry_run_writes_nothing(self) -> None:
+        """--no-spool --dry-run reports layout without writing an image."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        src.write_bytes(b"DATA" * 20000 + b"\x00" * 60000)
+        out: Path = tmp_path / "PPSA.ffpfsc"
+        buffer: StringIO = StringIO()
+        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(buffer), redirect_stderr(
+            StringIO()
+        ):
+            rc: int = cli_mkpfs_main(
+                ["pack", "file", str(src), str(out), "--no-spool", "--dry-run", "--no-adjust-output-file-extension"]
+            )
+        self.assertEqual(rc, 0)
+        self.assertFalse(out.exists())
