@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
-from . import consts
+from . import __version__, consts
 from .logging import error, info, warning
 from .pfs import (
     BuildError,
@@ -51,6 +51,45 @@ from .utils import (
     read_param_json,
     resolve_temp_root,
 )
+
+PROJECT_URL: str = "https://github.com/PSBrew/MkPFS"
+
+
+def get_help_title() -> str:
+    """Build the version line shown at the top of CLI help output.
+
+    Returns:
+        Human-readable MkPFS title with the current package version.
+    """
+    return f"MkPFS {__version__}"
+
+
+def get_output_title() -> str:
+    """Build the title line shown at the top of text command output.
+
+    Returns:
+        Human-readable MkPFS title with the current package version and project URL.
+    """
+    return f"{get_help_title()} - {PROJECT_URL}"
+
+
+class MkPFSArgumentParser(argparse.ArgumentParser):
+    """Argument parser that prepends the MkPFS version to help output."""
+
+    def format_help(self) -> str:
+        """Return help text prefixed with the MkPFS version banner.
+
+        Returns:
+            Complete help text with a version banner at the top.
+        """
+        return f"{'=' * 70}\n{get_output_title()}\n{'=' * 70}\n\n{super().format_help()}"
+
+
+def print_version_header() -> None:
+    """Print the standard MkPFS text-output banner."""
+    info("=" * 70)
+    info(get_output_title())
+    info("=" * 70)
 
 
 def print_build_parameters(
@@ -97,12 +136,13 @@ def print_build_parameters(
         require_game_files: Whether strict game-file validation is enabled.
         skip_executable_compression: Whether executable-like files are stored raw.
     """
+    print_version_header()
     mode: int = compose_pfs_mode_with_sign(inode_bits, case_insensitive, signed)
     if encrypted:
         mode |= consts.PFS_MODE_ENCRYPTED
-    info("" + "=" * 70)
+    info("=" * 70)
     info("PFS Image Builder - Parameters")
-    info("" + "=" * 70)
+    info("=" * 70)
     info(f"  Source path:       {source_path}")
     info(f"  Output path:       {output_path}")
     info(f"  Temp folder:       {temp_folder}")
@@ -453,9 +493,10 @@ def run_image_check(
 
             if emit_report:
                 payload_magic: str = describe_magic(magic=consts.PFSC_MAGIC) if compressed_count > 0 else "none"
-                info("" + "=" * 70)
+                print_version_header()
+                info("=" * 70)
                 info("PFS Check Report")
-                info("" + "=" * 70)
+                info("=" * 70)
                 info(f"Image:                 {image}")
                 ver_label: str = "PS5" if header.version == consts.PFS_VERSION_PS5 else "PS4"
                 info(f"Version:               {header.version} ({ver_label})")
@@ -548,7 +589,7 @@ def cli_mkpfs_add_create_args(
         "--temp-folder",
         help="Directory for temporary pack artifacts (defaults to the system temp folder)",
     )
-    parser.add_argument("--version", choices=["PS4", "PS5"], default="PS4", help="PFS profile version (default: PS4)")
+    parser.add_argument("--version", choices=("PS4", "PS5"), default="PS5", help="PFS profile version (default: PS5)")
     parser.add_argument(
         "--inode-bits", type=int, choices=[32, 64], default=32, help="Inode width mode bit (32 or 64, default: 32)"
     )
@@ -1016,6 +1057,7 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
         for e in errors:
             error(e)
         return 1
+    print_version_header()
     info("/")
     for line in render_tree(tree, uroot):
         info(line)
@@ -1032,6 +1074,7 @@ def cli_mkpfs_info_run(args: argparse.Namespace) -> int:
     info_result: PFSImageInfo = read_pfs_info(image)
 
     # Print header-level metadata and any warnings/errors
+    print_version_header()
     info("=" * 70)
     info("PFS Image Info")
     info("=" * 70)
@@ -1091,6 +1134,7 @@ def cli_mkpfs_analyze_run(args: argparse.Namespace) -> int:
     )
 
     # Emit report
+    print_version_header()
     info("=" * 70)
     info("PFS Image Inspection")
     info("=" * 70)
@@ -1147,6 +1191,7 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
     if result.errors:
         return 1
 
+    print_version_header()
     info("Extraction complete:")
     info(f"  Output:       {result.output_path}")
     info(f"  Files written: {result.files_written}")
@@ -1156,14 +1201,15 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
 
 
 def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = MkPFSArgumentParser(
         prog="mkpfs",
         description="CLI for pack folder/file, verify, inspect, tree, and unpack PFS operations",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("-V", action="version", version=get_help_title(), help="Show version and exit")
+    sub = parser.add_subparsers(dest="command", required=True, parser_class=MkPFSArgumentParser)
 
     pack_parser = sub.add_parser("pack", help="Pack a folder or file into an image")
-    pack_sub = pack_parser.add_subparsers(dest="pack_command", required=True)
+    pack_sub = pack_parser.add_subparsers(dest="pack_command", required=True, parser_class=MkPFSArgumentParser)
 
     folder_parser = pack_sub.add_parser("folder", help="Build image from a source directory")
     cli_mkpfs_add_create_args(folder_parser)
@@ -1265,6 +1311,22 @@ def normalize_cli_argv_for_pack_compat(argv: list[str] | None = None) -> list[st
 
 
 def cli_mkpfs_main(argv: list[str] | None = None) -> int:
+    """Run the mkpfs CLI, dispatching to the appropriate subcommand.
+
+    Args:
+        argv: Optional argument list; defaults to sys.argv[1:] when None.
+
+    Returns:
+        Integer process exit code.
+    """
+    # Intercept -V before argparse processes subcommand requirements.
+    # Argparse's required=True subparsers cause a parse error before version
+    # actions run, so we handle them early here.
+    effective_argv: list[str] = list(sys.argv[1:] if argv is None else argv)
+    if effective_argv and effective_argv[0] in ("-V"):
+        print(f"MkPFS {__version__}")
+        return 0
+
     parser: argparse.ArgumentParser = cli_mkpfs_main_parsers()
     normalized_argv: list[str] | None = normalize_cli_argv_for_pack_compat(argv)
     args = parser.parse_args(normalized_argv)
@@ -1302,6 +1364,7 @@ def cli_mkpfs_inspect_run(args: argparse.Namespace) -> int:
         }
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
+        print_version_header()
         info("=" * 70)
         info("PFS Image Inspection")
         info("=" * 70)
