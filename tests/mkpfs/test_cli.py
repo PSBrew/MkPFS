@@ -1513,6 +1513,54 @@ class TestRunImageCheck(CliTestCase):
         self.assertEqual(uroot, 0)
         mocked_checklist.assert_not_called()
 
+    def test_run_image_check_runs_game_file_checklist_when_requested(self) -> None:
+        """Image checks should run the game-file checklist when explicitly requested."""
+        tmp_path: Path = self.make_temp_path()
+        image_path: Path = tmp_path / "image.ffpfs"
+        image_path.write_bytes(b"x")
+        header: SimpleNamespace = SimpleNamespace(
+            mode=consts.PFS_MODE_CASE_INSENSITIVE,
+            version=consts.PFS_VERSION_PS5,
+            magic=123,
+            readonly=1,
+            block_size=65536,
+        )
+        inodes: list[SimpleNamespace] = [
+            SimpleNamespace(
+                number=0,
+                is_compressed=False,
+                size=100,
+                size_compressed=90,
+                logical_size=100,
+                stored_size=90,
+            )
+        ]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(cli, "parse_image_header", return_value=header))
+            stack.enter_context(patch.object(cli, "parse_image_inodes", return_value=inodes))
+            stack.enter_context(patch.object(cli, "validate_inode_layout", return_value=None))
+            stack.enter_context(patch.object(cli, "verify_signed_image_signatures", return_value=None))
+            stack.enter_context(patch.object(cli, "parse_superroot_and_indexes", return_value=(0, {1: 2}, {}, {0})))
+            stack.enter_context(
+                patch.object(cli, "build_tree_from_uroot", return_value=({"file.bin": 0}, {"": 0}, {0: []}))
+            )
+            stack.enter_context(patch.object(cli, "build_expected_fpt", return_value={1: []}))
+            stack.enter_context(patch.object(cli, "validate_fpt_maps", return_value=None))
+            mocked_checklist = stack.enter_context(patch.object(cli, "validate_ps5_checklist", return_value=None))
+            stack.enter_context(patch.object(cli, "verify_file_payload_hashes", return_value=(1, 0x1234, "a" * 64)))
+            errors, warnings, tree, uroot = cli.run_image_check(
+                image=image_path,
+                source=None,
+                print_tree=False,
+                emit_report=False,
+                require_game_files=True,
+            )
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+        self.assertEqual(tree, {0: []})
+        self.assertEqual(uroot, 0)
+        mocked_checklist.assert_called_once()
+
     def test_run_image_check_reports_crc_manifest_and_orphan_mismatches(self) -> None:
         """Image check should report checksum mismatches and orphan inodes when validation finds them."""
         tmp_path: Path = self.make_temp_path()
