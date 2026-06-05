@@ -28,20 +28,22 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 ## 🚀 Quick Start
 
 ```bash
-# Install using pip
-pip install mkpfs
+# Install/Update using pip
+python -m pip install -U "mkpfs"
 
-# Convert an .exfat or .ffpkg file into a PFSC compressed image .ffpfsc
-mkpfs pack file --compress --verify ./GAME1234.exfat ./GAME1234.ffpfsc
+# Creating Images: Option 1 - .exfat -> .ffpfsc (Compatible with ShadowMountPlus) (Maximum compatibility and best performance!)
+python -m mkpfs pack file './BREW1234.exfat' './BREW1234.exfat.ffpfsc'
 
-# Convert a homebrew folder into a PFS image with compression and verification
-mkpfs pack folder --compress --verify ./GAME1234-app ./GAME1234.ffpfs
+# Creating Images: Option 2 - .ffpkg -> .ffpfsc (Compatible with ShadowMountPlus)
+python -m mkpfs pack file './BREW1234.ffpkg' './BREW1234.ffpkg.ffpfsc'
 
-# Inspect the generated image
-mkpfs inspect ./GAME1234.ffpfs
+# Creating Images: Option 3 - Game folder wrapped twice into .ffpfsc (Compatible with ShadowMountPlus) 
+python -m mkpfs pack folder --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
+python -m mkpfs pack file './pfs_image.dat' './PPSA12345.ffpfsc'
+rm './pfs_image.dat'
 
-# Unpack the image back into a folder
-mkpfs unpack ./GAME1234.ffpfs ./GAME1234-extracted/
+# Extracting Existing Images (Reverse operation)
+python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
 ```
 
 > **Note on conversion speed:** Antivirus scanning can reduce conversion speed, especially during the writing phase or when processing many loose files.

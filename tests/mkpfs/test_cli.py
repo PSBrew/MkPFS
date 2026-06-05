@@ -126,7 +126,7 @@ class TestCliSmokeIntegration(CliTestCase):
             cli_mkpfs_main(["-h"])
 
         self.assertEqual(excinfo.exception.code, 0)
-        self.assertIn("MkPFS 0.0.5 - https://github.com/PSBrew/MkPFS", buffer.getvalue())
+        self.assertIn(cli.get_output_title(), buffer.getvalue())
         self.assertIn("CLI for pack folder/file, verify, inspect, tree, and unpack PFS operations", buffer.getvalue())
 
     def test_top_level_version_flag_prints_version_and_exits_successfully(self) -> None:
@@ -136,7 +136,7 @@ class TestCliSmokeIntegration(CliTestCase):
             exit_code: int = cli_mkpfs_main(["-V"])
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(buffer.getvalue().strip(), "MkPFS 0.0.5")
+        self.assertEqual(buffer.getvalue().strip(), cli.get_help_title())
 
     def test_verify_subcommand_help_lists_expected_options(self) -> None:
         """The verify subcommand help should list the image and source options."""
@@ -147,7 +147,7 @@ class TestCliSmokeIntegration(CliTestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("MkPFS 0.0.5", result.stdout)
+        self.assertIn(cli.get_help_title(), result.stdout)
         self.assertIn("image_file", result.stdout)
         self.assertIn("--source-dir", result.stdout)
         self.assertIn("--require-game-files", result.stdout)
@@ -161,7 +161,7 @@ class TestCliSmokeIntegration(CliTestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("MkPFS 0.0.5", result.stdout)
+        self.assertIn(cli.get_help_title(), result.stdout)
         self.assertIn("source_dir", result.stdout)
         self.assertIn("image_file", result.stdout)
         self.assertIn("--require-game-files", result.stdout)
@@ -173,7 +173,7 @@ class TestCliSmokeIntegration(CliTestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("MkPFS 0.0.5", result.stdout)
+        self.assertIn(cli.get_help_title(), result.stdout)
         self.assertIn("source_file", result.stdout)
         self.assertIn("image_file", result.stdout)
         self.assertNotIn("--require-game-files", result.stdout)
@@ -625,7 +625,7 @@ class TestCliOutputFormatting(CliTestCase):
             exit_code: int = cli.cli_mkpfs_inspect_run(SimpleNamespace(image_file="img.ffpfs", format="text"))
         self.assertEqual(exit_code, 1)
         output_text: str = stdout_buffer.getvalue()
-        self.assertIn("MkPFS 0.0.5 - https://github.com/PSBrew/MkPFS", output_text)
+        self.assertIn(cli.get_output_title(), output_text)
         self.assertIn("PFS Image Inspection", output_text)
         self.assertIn("Magic:    PFS (20130315)", output_text)
         self.assertIn("warn", output_text)
@@ -643,7 +643,7 @@ class TestCliOutputFormatting(CliTestCase):
 
         self.assertEqual(exit_code, 0)
         output_text: str = stdout_buffer.getvalue()
-        self.assertIn("MkPFS 0.0.5 - https://github.com/PSBrew/MkPFS", output_text)
+        self.assertIn(cli.get_output_title(), output_text)
         self.assertIn("/", output_text)
         self.assertIn("child", output_text)
 
@@ -666,7 +666,7 @@ class TestCliOutputFormatting(CliTestCase):
 
         self.assertEqual(exit_code, 0)
         output_text: str = stdout_buffer.getvalue()
-        self.assertIn("MkPFS 0.0.5 - https://github.com/PSBrew/MkPFS", output_text)
+        self.assertIn(cli.get_output_title(), output_text)
         self.assertIn("Extraction complete:", output_text)
 
 
