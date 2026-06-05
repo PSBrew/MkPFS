@@ -1,8 +1,6 @@
 name: CI
-
 permissions:
   contents: read
-
 on:
   push:
     branches:
@@ -14,7 +12,6 @@ on:
       - '**'
   release:
       types: [published]
-
 jobs:
   build:
     name: 📦 Builds the package
@@ -40,7 +37,6 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
-
   publish-to-pypi:
     name: 🐍 Publish Python distribution to PyPI
     if: github.event_name == 'release' && github.event.release.prerelease == false
