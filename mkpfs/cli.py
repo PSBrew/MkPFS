@@ -787,7 +787,7 @@ def _run_pack_build(
 
 @contextmanager
 def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | None = None) -> Iterator[Path]:
-    """Yield a temporary source root exposing one file without copying data.
+    """Yield a temporary source root exposing one file while avoiding data copies when possible.
 
     The staged file is created as a hard link when possible, with a symlink
     fallback when hard linking is unavailable in the current environment.
