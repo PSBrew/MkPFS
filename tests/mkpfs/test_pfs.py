@@ -2049,6 +2049,13 @@ def assert_scan_source_tree(tmp_path: Path) -> None:
 class TestDirentSerialization(PfsTestCase):
     """Tests for dirent serialization behavior and encoded sizes."""
 
+    def test_non_ascii_filename_raises_value_error(self) -> None:
+        """Serializing a dirent with a non-ASCII name must raise ValueError."""
+        d: Dirent = Dirent(inode_number=1, type_code=2, name="café.bin")
+        with self.assertRaises(ValueError) as ctx:
+            d.to_bytes()
+        assert "non-ASCII" in str(ctx.exception)
+
     def test_file_dirent_matches_the_known_encoding_vector(self) -> None:
         """A file dirent should serialize to the expected known byte vector."""
         assert_dirent_to_bytes_known_vector()
@@ -2212,6 +2219,25 @@ class TestSourceTreeScanning(PfsTestCase):
     def test_scan_source_tree_returns_expected_directory_and_file_maps(self) -> None:
         """Scanning a small source tree should return the expected files, directories, and count."""
         assert_scan_source_tree(self.make_temp_path())
+
+    def test_scan_source_tree_raises_build_error_for_non_ascii_filenames(self) -> None:
+        """Scanning a tree with non-ASCII filenames must raise BuildError before compression."""
+        tmp_path: Path = self.make_temp_path()
+        root: Path = tmp_path / "src"
+        root.mkdir()
+        (root / "valid.bin").write_bytes(b"\x00" * 8)
+        (root / "münchen.bin").write_bytes(b"\x00" * 8)
+        sub: Path = root / "data"
+        sub.mkdir()
+        (sub / "résumé.txt").write_bytes(b"\x00" * 8)
+
+        progress: Progress = Progress(enabled=False)
+        with self.assertRaises(BuildError) as ctx:
+            scan_source_tree(root=root, progress=progress)
+        msg: str = str(ctx.exception)
+        assert "non-ASCII" in msg
+        assert "münchen.bin" in msg
+        assert "résumé.txt" in msg
 
     def test_auto_fit_block_size_prefers_small_blocks_for_small_files(self) -> None:
         """Auto-fit block-size selection should minimize estimated file-data footprint."""

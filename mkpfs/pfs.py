@@ -588,8 +588,15 @@ class Dirent:
 
         Returns:
             Bytes suitable for writing into a directory payload block.
+
+        Raises:
+            ValueError: If the name contains non-ASCII characters.
         """
-        name_bytes: bytes = self.name.encode("ascii", errors="strict")
+        if not self.name.isascii():
+            raise ValueError(
+                f"Filename {self.name!r} contains non-ASCII characters and cannot be stored in a PFS image"
+            )
+        name_bytes: bytes = self.name.encode("ascii")
         out: bytearray = bytearray()
         out += struct.pack("<Iiii", self.inode_number, self.type_code, self.name_length, self.ent_size)
         out += name_bytes
@@ -1985,6 +1992,22 @@ def scan_source_tree(root: Path, progress: Progress) -> tuple[dict[str, DirNode]
     progress.status("\nDiscovering files...")
     abs_files: list[Path] = [p for p in root.rglob("*") if p.is_file()]
     abs_files.sort(key=lambda p: p.relative_to(root).as_posix().lower())
+
+    # Validate filenames before compression work begins; non-ASCII names are unsupported.
+    non_ascii_paths: list[str] = []
+    for abs_path in abs_files:
+        rel_path: Path = abs_path.relative_to(root)
+        rel_str: str = rel_path.as_posix()
+        for part in rel_path.parts:
+            if not part.isascii():
+                non_ascii_paths.append(rel_str)
+                break
+    if non_ascii_paths:
+        offenders: str = "\n  ".join(non_ascii_paths)
+        raise BuildError(
+            f"Source tree contains {len(non_ascii_paths)} file(s) with non-ASCII names."
+            f" PFS images only support ASCII filenames:\n  {offenders}"
+        )
 
     dirs: dict[str, DirNode] = {"": DirNode(rel_dir="", name="uroot", parent_rel_dir=None)}
     files: dict[str, FileNode] = {}
