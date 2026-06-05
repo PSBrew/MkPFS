@@ -126,7 +126,17 @@ class TestCliSmokeIntegration(CliTestCase):
             cli_mkpfs_main(["-h"])
 
         self.assertEqual(excinfo.exception.code, 0)
+        self.assertIn("MkPFS 0.0.5 - https://github.com/PSBrew/MkPFS", buffer.getvalue())
         self.assertIn("CLI for pack folder/file, verify, inspect, tree, and unpack PFS operations", buffer.getvalue())
+
+    def test_top_level_version_flag_prints_version_and_exits_successfully(self) -> None:
+        """The top-level CLI should print the package version for -V."""
+        buffer: StringIO = StringIO()
+        with redirect_stdout(buffer):
+            exit_code: int = cli_mkpfs_main(["-V"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(buffer.getvalue().strip(), "MkPFS 0.0.5")
 
     def test_verify_subcommand_help_lists_expected_options(self) -> None:
         """The verify subcommand help should list the image and source options."""
@@ -137,6 +147,7 @@ class TestCliSmokeIntegration(CliTestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0)
+        self.assertIn("MkPFS 0.0.5", result.stdout)
         self.assertIn("image_file", result.stdout)
         self.assertIn("--source-dir", result.stdout)
         self.assertIn("--require-game-files", result.stdout)
@@ -150,6 +161,7 @@ class TestCliSmokeIntegration(CliTestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0)
+        self.assertIn("MkPFS 0.0.5", result.stdout)
         self.assertIn("source_dir", result.stdout)
         self.assertIn("image_file", result.stdout)
         self.assertIn("--require-game-files", result.stdout)
@@ -161,6 +173,7 @@ class TestCliSmokeIntegration(CliTestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0)
+        self.assertIn("MkPFS 0.0.5", result.stdout)
         self.assertIn("source_file", result.stdout)
         self.assertIn("image_file", result.stdout)
         self.assertNotIn("--require-game-files", result.stdout)
@@ -258,7 +271,7 @@ class TestCliArgumentHelpers(CliTestCase):
         self.assertEqual(parsed_args.inode_bits, 32)
 
     def test_pack_parser_uses_ps4_as_default_version(self) -> None:
-        """The pack parser should expose PS4 as the default pack profile version."""
+        """The pack parser should expose PS5 as the default pack profile version."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
             action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
@@ -270,7 +283,7 @@ class TestCliArgumentHelpers(CliTestCase):
         version_action: argparse.Action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "version"
         )
-        self.assertEqual(version_action.default, "PS4")
+        self.assertEqual(version_action.default, "PS5")
 
     def test_pack_parser_exposes_executable_compression_skip_flag(self) -> None:
         """The pack parser should default to skipping executable compression."""
@@ -612,10 +625,49 @@ class TestCliOutputFormatting(CliTestCase):
             exit_code: int = cli.cli_mkpfs_inspect_run(SimpleNamespace(image_file="img.ffpfs", format="text"))
         self.assertEqual(exit_code, 1)
         output_text: str = stdout_buffer.getvalue()
+        self.assertIn("MkPFS 0.0.5 - https://github.com/PSBrew/MkPFS", output_text)
         self.assertIn("PFS Image Inspection", output_text)
         self.assertIn("Magic:    PFS (20130315)", output_text)
         self.assertIn("warn", output_text)
         self.assertIn("err", output_text)
+
+    def test_tree_run_prints_version_header_before_tree_output(self) -> None:
+        """Tree output should include the standard MkPFS banner before the rendered tree."""
+        stdout_buffer: StringIO = StringIO()
+        with patch.object(cli, "run_image_check", return_value=([], [], {}, 1)), patch.object(
+            cli, "render_tree", return_value=["child"]
+        ), redirect_stdout(stdout_buffer):
+            exit_code: int = cli.cli_mkpfs_ls_run(
+                SimpleNamespace(image_file="img.ffpfs", ekpfs_key=None, new_crypt=False)
+            )
+
+        self.assertEqual(exit_code, 0)
+        output_text: str = stdout_buffer.getvalue()
+        self.assertIn("MkPFS 0.0.5 - https://github.com/PSBrew/MkPFS", output_text)
+        self.assertIn("/", output_text)
+        self.assertIn("child", output_text)
+
+    def test_extract_run_prints_version_header_before_summary(self) -> None:
+        """Extraction summary output should include the standard MkPFS banner."""
+        extraction_result: PFSExtractionResult = PFSExtractionResult(
+            image=Path("img.ffpfs"),
+            output_path=Path("out"),
+        )
+        extraction_result.files_written = 3
+        extraction_result.directories_created = 2
+        extraction_result.bytes_written = 1234
+        stdout_buffer: StringIO = StringIO()
+        with patch.object(cli, "extract_pfs_image", return_value=extraction_result), redirect_stdout(stdout_buffer):
+            exit_code: int = cli.cli_mkpfs_extract_run(
+                SimpleNamespace(
+                    image_file="img.ffpfs", output_dir="out", overwrite=True, ekpfs_key=None, new_crypt=False
+                )
+            )
+
+        self.assertEqual(exit_code, 0)
+        output_text: str = stdout_buffer.getvalue()
+        self.assertIn("MkPFS 0.0.5 - https://github.com/PSBrew/MkPFS", output_text)
+        self.assertIn("Extraction complete:", output_text)
 
 
 class TestCliCreateRun(CliTestCase):
@@ -1103,7 +1155,9 @@ class TestCliCreateRun(CliTestCase):
 
         with patch.object(cli.os, "link", side_effect=OSError("hard links unavailable")), patch.object(
             Path, "symlink_to", side_effect=OSError("symlinks unavailable")
-        ), patch.object(cli.shutil, "copyfile", wraps=cli.shutil.copyfile) as mocked_copy, cli._stage_single_file_source_root(
+        ), patch.object(
+            cli.shutil, "copyfile", wraps=cli.shutil.copyfile
+        ) as mocked_copy, cli._stage_single_file_source_root(
             source_file=source_file, temp_folder=tmp_path
         ) as staging_root:
             staged_file: Path = staging_root / source_file.name
