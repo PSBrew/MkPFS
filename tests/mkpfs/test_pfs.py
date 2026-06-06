@@ -650,6 +650,68 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         assert out.is_file()
         assert out.stat().st_size > 0
 
+    def test_validate_source_match_can_skip_payload_comparison(self) -> None:
+        """Source comparison should support hierarchy-only verification."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        out: Path = tmp_path / "hierarchy-source-match.ffpfs"
+        build_pfs(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            inode_bits=32,
+            case_insensitive=True,
+            signed=False,
+            compress=False,
+            threshold_gain=1,
+            cpu_count=1,
+            zlib_level=9,
+            dry_run=False,
+            verbose=False,
+            encrypted=False,
+        )
+
+        with out.open("rb") as fh:
+            header: pfs_mod.ParsedHeader = parse_image_header(fh)
+            inodes: list[pfs_mod.ParsedInode] = parse_image_inodes(fh, header)
+            errors: list[str] = []
+            uroot_inode: int
+            uroot_inode, _fpt_map, _collision_map, _special_inodes = pfs_mod.parse_superroot_and_indexes(
+                fh,
+                header,
+                inodes,
+                errors,
+            )
+            file_inodes: dict[str, int]
+            file_inodes, _dir_inodes, _tree = pfs_mod.build_tree_from_uroot(
+                fh,
+                header,
+                inodes,
+                uroot_inode,
+                errors,
+            )
+            with patch.object(
+                pfs_mod,
+                "read_image_inode_payload",
+                side_effect=AssertionError("hierarchy-only comparison should not read image payloads"),
+            ), patch.object(
+                Path,
+                "open",
+                side_effect=AssertionError("hierarchy-only comparison should not read source payloads"),
+            ):
+                pfs_mod.validate_source_match(
+                    fh,
+                    header,
+                    inodes,
+                    file_inodes,
+                    src,
+                    errors,
+                    compare_payloads=False,
+                )
+
+        assert errors == []
+
     def test_pfsc_encode_decode_round_trip(self) -> None:
         """PFSC payload encoding and decoding should preserve logical bytes."""
         raw: bytes = (b"A" * 65536) + (b"B" * 65536) + (b"C" * 1234)

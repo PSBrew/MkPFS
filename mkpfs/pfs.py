@@ -4692,6 +4692,7 @@ def validate_source_match(
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
     progress: Progress | None = None,
+    compare_payloads: bool = True,
 ) -> None:
     if not source.exists() or not source.is_dir():
         errors.append(f"source path does not exist or is not a directory: {source}")
@@ -4705,6 +4706,9 @@ def validate_source_match(
         errors.append(f"missing in image: {rel}")
     for rel in sorted(image_rel - source_rel):
         errors.append(f"extra in image: {rel}")
+
+    if not compare_payloads:
+        return
 
     common = sorted(source_rel & image_rel)
     # Report progress against the total logical bytes to compare, throttled by volume.

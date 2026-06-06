@@ -85,6 +85,7 @@ class CliTestCase(unittest.TestCase):
             verbose=False,
             dry_run=dry_run,
             verify=verify,
+            structure_only=False,
         )
 
     def make_pack_file_args(
@@ -114,6 +115,7 @@ class CliTestCase(unittest.TestCase):
             verbose=False,
             dry_run=dry_run,
             verify=verify,
+            structure_only=False,
         )
 
 
@@ -1007,8 +1009,60 @@ class TestCliCreateRun(CliTestCase):
             cli,
             "run_image_check",
             return_value=(["error"], ["warning"], {}, -1),
-        ):
+        ) as mocked_run_image_check:
             self.assertEqual(cli.cli_mkpfs_create_run(args), 1)
+        _pos_args, keyword_args = mocked_run_image_check.call_args
+        self.assertTrue(keyword_args["verify_payloads"])
+        self.assertTrue(keyword_args["compare_source_payloads"])
+
+    def test_create_run_structure_only_disables_payload_checks(self) -> None:
+        """Create run should skip payload and source bytes for structure-only verify."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        output_path: Path = tmp_path / "out.ffpfs"
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=output_path,
+            dry_run=False,
+            verify=True,
+        )
+        args.structure_only = True
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(
+            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
+        ), patch.object(
+            cli,
+            "run_image_check",
+            return_value=([], [], {}, -1),
+        ) as mocked_run_image_check:
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
+        _pos_args, keyword_args = mocked_run_image_check.call_args
+        self.assertFalse(keyword_args["verify_payloads"])
+        self.assertFalse(keyword_args["compare_source_payloads"])
+
+    def test_create_run_rejects_structure_only_without_verify(self) -> None:
+        """Structure-only is only meaningful when post-pack verification runs."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        output_path: Path = tmp_path / "out.ffpfs"
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=output_path,
+            dry_run=False,
+            verify=False,
+        )
+        args.structure_only = True
+        stderr_buffer: StringIO = StringIO()
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "build_pfs",
+            side_effect=AssertionError("build should not run"),
+        ), redirect_stderr(stderr_buffer):
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 1)
+        self.assertIn("--structure-only requires --verify", stderr_buffer.getvalue())
 
     def test_create_run_supports_signed_64_bit_inode_dry_run(self) -> None:
         """Create run should accept the signed 64-bit inode combination during a real dry run."""
@@ -1204,6 +1258,40 @@ class TestCliReadOnlyCommands(CliTestCase):
             self.assertEqual(cli.cli_mkpfs_check_run(args), 0)
         self.assertTrue(mocked_run.call_args.kwargs["require_game_files"])
 
+    def test_check_run_structure_only_disables_payload_checks(self) -> None:
+        """Verify structure-only should skip payload and source byte comparison."""
+        args: SimpleNamespace = SimpleNamespace(
+            image_file="img.ffpfs",
+            source_dir=None,
+            source_file=None,
+            expect_crc32=None,
+            expect_manifest_sha256=None,
+            structure_only=True,
+            require_game_files=False,
+            ekpfs_key=None,
+            new_crypt=False,
+        )
+        with patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_run_image_check:
+            self.assertEqual(cli.cli_mkpfs_check_run(args), 0)
+        _pos_args, keyword_args = mocked_run_image_check.call_args
+        self.assertFalse(keyword_args["verify_payloads"])
+        self.assertFalse(keyword_args["compare_source_payloads"])
+
+    def test_check_run_rejects_structure_only_with_expected_hashes(self) -> None:
+        """Verify structure-only should reject expected payload hash checks."""
+        args: SimpleNamespace = SimpleNamespace(
+            image_file="img.ffpfs",
+            source_dir=None,
+            source_file=None,
+            expect_crc32="0x1234",
+            expect_manifest_sha256=None,
+            structure_only=True,
+            ekpfs_key=None,
+            new_crypt=False,
+        )
+        with patch.object(cli, "run_image_check", side_effect=AssertionError("verify should not run")):
+            self.assertEqual(cli.cli_mkpfs_check_run(args), 2)
+
     def test_check_run_supports_source_file_by_staging_single_file_tree(self) -> None:
         """Verify should stage a single source file as root content without copying bytes."""
         tmp_path: Path = self.make_temp_path()
@@ -1221,8 +1309,11 @@ class TestCliReadOnlyCommands(CliTestCase):
             require_game_files: bool = False,
             ekpfs: bytes | None = None,
             new_crypt: bool = False,
+            verify_payloads: bool = True,
+            compare_source_payloads: bool = True,
         ) -> tuple[list[str], list[str], dict[int, list[ParsedDirent]], int]:
             del image, print_tree, expected_crc32, expected_manifest_sha256, emit_report, ekpfs, new_crypt
+            del verify_payloads, compare_source_payloads
             self.assertFalse(require_game_files)
             seen_source.append(source)
             assert source is not None

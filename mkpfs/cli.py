@@ -435,6 +435,7 @@ def run_image_check(
     new_crypt: bool = False,
     require_game_files: bool = False,
     verify_payloads: bool = True,
+    compare_source_payloads: bool = True,
 ) -> tuple[list[str], list[str], dict[int, list[ParsedDirent]], int]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -534,6 +535,7 @@ def run_image_check(
                     ekpfs=ekpfs,
                     new_crypt=new_crypt,
                     progress=progress,
+                    compare_payloads=compare_source_payloads,
                 )
 
             compressed_count = sum(1 for i in file_inodes.values() if inodes[i].is_compressed)
@@ -695,6 +697,11 @@ def cli_mkpfs_add_create_args(
     parser.add_argument("--verbose", action="store_true", help="Verbose per-file decisions")
     parser.add_argument("--dry-run", action="store_true", help="Scan/layout/report only; do not write image")
     parser.add_argument("--verify", action="store_true", help="Run 'verify' after a successful pack")
+    parser.add_argument(
+        "--structure-only",
+        action="store_true",
+        help="When used with --verify, skip payload hashing and compare only image structure",
+    )
 
 
 def _resolve_pack_temp_folder(args: argparse.Namespace) -> Path:
@@ -793,7 +800,6 @@ def _resolve_pack_build_config(args: argparse.Namespace, *, block_size: int) -> 
         raise BuildError("--max-compressed-ratio must be within 0..100")
     if args.min_compress_size < 0:
         raise BuildError("--min-compress-size must be non-negative")
-
     min_compress_size: int = args.min_compress_size if args.min_compress_size > 0 else block_size
 
     encrypted: bool = bool(getattr(args, "encrypted", False))
@@ -871,6 +877,7 @@ def _run_post_pack_verify(
     ekpfs_key: bytes,
     new_crypt: bool,
     require_game_files: bool = False,
+    structure_only: bool = False,
 ) -> int:
     """Run the post-pack image check and report warnings and errors.
 
@@ -880,11 +887,15 @@ def _run_post_pack_verify(
         ekpfs_key: EKPFS key material for encrypted images.
         new_crypt: Whether to use the alternate newCrypt derivation.
         require_game_files: Whether to enable the optional game-file checklist.
+        structure_only: Whether to skip payload bytes and compare structure only.
 
     Returns:
         ``1`` when the check reports errors, otherwise ``0``.
     """
-    info("Running post-create check...")
+    if structure_only:
+        info("Running structural post-create check...")
+    else:
+        info("Running full post-create check with payload hashing...")
     errors, warnings, _tree, _uroot = run_image_check(
         output_path,
         source,
@@ -892,6 +903,8 @@ def _run_post_pack_verify(
         ekpfs=ekpfs_key,
         new_crypt=new_crypt,
         require_game_files=require_game_files,
+        verify_payloads=not structure_only,
+        compare_source_payloads=not structure_only,
     )
     for w in warnings:
         warning(w)
@@ -937,6 +950,10 @@ def _run_pack_build(
 
     if output_changed:
         info(output_adjustment_message)
+
+    if bool(getattr(args, "structure_only", False)) and not bool(getattr(args, "verify", False)):
+        error("--structure-only requires --verify")
+        return 1
 
     # Resolve block size (folder path additionally supports auto-fit over the tree).
     block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
@@ -1026,6 +1043,7 @@ def _run_pack_build(
         ekpfs_key=config.ekpfs_key,
         new_crypt=config.new_crypt,
         require_game_files=require_game_files,
+        structure_only=bool(getattr(args, "structure_only", False)),
     )
 
 
@@ -1327,6 +1345,10 @@ def _run_verify_check(
             info("--expected-manifest-sha256 must be a 64-hex SHA256 digest")
             return 2
         expected_manifest_sha256 = digest
+    structure_only: bool = bool(getattr(args, "structure_only", False))
+    if structure_only and (expected_crc32 is not None or expected_manifest_sha256 is not None):
+        info("--structure-only cannot be combined with expected payload hash options")
+        return 2
     ekpfs_key: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
     new_crypt: bool = bool(getattr(args, "new_crypt", False))
 
@@ -1339,6 +1361,8 @@ def _run_verify_check(
         require_game_files=require_game_files,
         ekpfs=ekpfs_key,
         new_crypt=new_crypt,
+        verify_payloads=not structure_only,
+        compare_source_payloads=not structure_only,
     )
     for w in warnings:
         warning(w)
@@ -1564,6 +1588,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     check_parser.add_argument(
         "--expect-manifest-sha256",
         help="Expected manifest SHA256 (64 hex chars), fails if different",
+    )
+    check_parser.add_argument(
+        "--structure-only",
+        action="store_true",
+        help="Validate metadata, tree, FPT, and optional source hierarchy without hashing payload bytes",
     )
     check_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     check_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
