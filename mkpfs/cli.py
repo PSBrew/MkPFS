@@ -31,6 +31,7 @@ from .pfs import (
     choose_auto_fit_block_size,
     compose_pfs_mode_with_sign,
     estimate_file_data_footprint,
+    estimate_pfsc_spool_size,
     extract_pfs_image,
     human_readable_size,
     inspect_pfs_image,
@@ -359,6 +360,36 @@ def get_destination_space_error_message(*, source_root: Path, output_path: Path)
     return (
         "ERROR: The destination file is on a disk that does not have enough space "
         f"({required_size_gb:.1f} GB) to perform the operation.\n"
+        "Operation cancelled."
+    )
+
+
+def get_temp_space_error_message(*, source_root: Path, temp_folder: Path) -> str | None:
+    """Build an insufficient-temp-space error for PFSC spool preflight.
+
+    Args:
+        source_root: Source directory whose raw file bytes may be spooled during
+            PFSC compression.
+        temp_folder: Temporary directory used for PFSC spool files.
+
+    Returns:
+        Error text when free temp space is insufficient, otherwise ``None``.
+    """
+    required_spool_size_bytes: int = 0
+    candidate_path: Path
+    for candidate_path in source_root.rglob("*"):
+        if candidate_path.is_file():
+            raw_size: int = candidate_path.stat().st_size
+            required_spool_size_bytes += estimate_pfsc_spool_size(raw_size=raw_size)
+    free_space_bytes: int = shutil.disk_usage(path=temp_folder).free
+    if free_space_bytes >= required_spool_size_bytes:
+        return None
+    required_size_gb: float = required_spool_size_bytes / float(1024**3)
+    free_size_gb: float = free_space_bytes / float(1024**3)
+    return (
+        "ERROR: The temp folder does not have enough free space for PFSC compression "
+        f"spool files (requires up to {required_size_gb:.1f} GB, has {free_size_gb:.1f} GB).\n"
+        "Use --temp-folder on a filesystem with more free space or free space in the current temp folder.\n"
         "Operation cancelled."
     )
 
@@ -985,6 +1016,14 @@ def _run_pack_build(
         if destination_space_error is not None:
             error(destination_space_error)
             return 1
+        if config.compress:
+            temp_space_error: str | None = get_temp_space_error_message(
+                source_root=build_source_root,
+                temp_folder=temp_folder,
+            )
+            if temp_space_error is not None:
+                error(temp_space_error)
+                return 1
 
     if not args.dry_run:
         cleanup_pack_temp_artifacts(output_path=output_path, temp_folder=temp_folder)

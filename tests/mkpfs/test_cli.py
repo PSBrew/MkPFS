@@ -986,6 +986,42 @@ class TestCliCreateRun(CliTestCase):
         )
         self.assertIn("Operation cancelled.", stderr_buffer.getvalue())
 
+    def test_create_run_returns_error_when_temp_disk_is_too_small(self) -> None:
+        """Create run should fail early when PFSC temp free space is below raw source size."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=tmp_path / "out.ffpfs",
+            dry_run=False,
+            verify=False,
+        )
+        stderr_buffer: StringIO = StringIO()
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "cleanup_pack_temp_artifacts",
+            side_effect=AssertionError("cleanup should not run"),
+        ), patch.object(
+            cli,
+            "prompt_overwrite",
+            side_effect=AssertionError("prompt should not run"),
+        ), patch.object(
+            cli,
+            "build_pfs",
+            side_effect=AssertionError("build should not run"),
+        ), patch.object(
+            cli.shutil,
+            "disk_usage",
+            side_effect=[
+                SimpleNamespace(total=100, used=1, free=100),
+                SimpleNamespace(total=10, used=9, free=1),
+            ],
+        ), redirect_stderr(stderr_buffer):
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 1)
+        self.assertIn("ERROR: The temp folder does not have enough free space", stderr_buffer.getvalue())
+        self.assertIn("Use --temp-folder", stderr_buffer.getvalue())
+        self.assertIn("Operation cancelled.", stderr_buffer.getvalue())
+
     def test_create_run_runs_post_verify_and_returns_error_when_check_fails(self) -> None:
         """Create run should perform post-verify and return a failure code when verification reports errors."""
         tmp_path: Path = self.make_temp_path()
