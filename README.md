@@ -49,20 +49,18 @@ python -m mkpfs pack folder './BREW1234-app/' './BREW1234.ffpfsc'
 python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
 ```
 
-**Note on conversion speed:**
+## ⚠️ Limitations and Known Issues
 
-- Antivirus scanning can reduce conversion speed, especially during the writing phase or when processing many loose
-  files.
-  If you plan to convert many titles in bulk and you trust this software in your environment, you may temporarily
-  disable
-  real-time antivirus protection to speed up the process. If you are unsure, keep antivirus enabled and expect slower
-  conversions.
-
-**Notes on stability:**
-
-- `exfat->ffpfsc` is the most stable solution at this moment.
-- raw folder compression works, but has limitations for large game backups or if the folder contains too many small
-  files. In that case, use `exfat->ffpfsc` instead.
+- `exfat->ffpfsc` is currently the most stable workflow.
+- Direct raw-folder compression works, but it can be less efficient for large backups with many small files.
+- With the default `--block-size 65536`, very small files can cause significant block-alignment waste, which may make
+  the resulting image larger than the source in corner cases.
+    - For small-file-heavy folders, prefer the two-pass strategy (`raw-folder -> .dat -> .ffpfsc`) or try a smaller
+      block
+      size such as `--block-size 16384` or `--block-size 32768`.
+- Antivirus scanning can reduce conversion speed, especially during the write phase or when processing many loose
+  files. If you trust this software in your environment and need higher throughput, temporarily disabling real-time
+  scanning can help. If you are unsure, keep antivirus enabled and expect slower conversions.
 
 ## 💖 Sponsorship
 
