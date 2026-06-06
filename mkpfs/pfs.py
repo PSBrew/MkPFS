@@ -1161,6 +1161,143 @@ def _analyze_pfsc_file_storage(
     return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
 
 
+def _encode_pfsc_into_handle(
+    *,
+    out: BinaryIO,
+    base_offset: int,
+    source_path: Path,
+    threshold_gain: int,
+    min_file_gain: int,
+    zlib_level: int,
+    logical_block_size: int,
+    block_worker_count: int = 1,
+    progress_callback: Callable[[int], None] | None = None,
+) -> tuple[int, bool, float, int]:
+    """Encode a file's PFSC payload directly into an open handle at ``base_offset``.
+
+    Streams one logical block at a time, recording block offsets, then seeks back
+    to ``base_offset`` to write the PFSC header and offset table. The caller owns
+    the handle's final size; this function never truncates.
+
+    Args:
+        out: Open writable and seekable binary handle.
+        base_offset: Absolute byte offset where the PFSC payload begins.
+        source_path: Source file path.
+        threshold_gain: Minimum per-block gain percent to keep compressed bytes.
+        min_file_gain: Minimum whole-file gain percent required to store PFSC.
+        zlib_level: zlib compression level.
+        logical_block_size: PFSC logical block size.
+        block_worker_count: Number of worker processes to use for block-level
+            compression of this file.
+        progress_callback: Optional callback receiving processed raw byte deltas.
+
+    Returns:
+        Tuple ``(stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size)``.
+    """
+    raw_size: int = source_path.stat().st_size
+    if not (0 <= min_file_gain <= 100):
+        raise ValueError(f"min_file_gain must be between 0 and 100 inclusive, got {min_file_gain}")
+    if raw_size == 0:
+        return 0, False, 0.0, 0
+
+    block_count: int = ceil_div(raw_size, logical_block_size)
+    header_size: int = _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size)
+    offsets: list[int] = [header_size]
+    all_compressed_size: int = 0
+    compressed_blocks: int = 0
+    effective_block_workers: int = max(1, min(block_worker_count, block_count))
+
+    # Write payload blocks after the reserved header region for this payload.
+    out.seek(base_offset + header_size)
+    if effective_block_workers == 1:
+        with source_path.open("rb") as source_file:
+            for _idx in range(block_count):
+                chunk: bytes = source_file.read(logical_block_size)
+                padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
+                compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+                all_compressed_size += len(compressed_chunk)
+                gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
+                store_compressed: bool = _should_store_pfsc_block_compressed(
+                    compressed_block_size=len(compressed_chunk),
+                    logical_block_size=logical_block_size,
+                    gain_pct=gain_pct,
+                    threshold_gain=threshold_gain,
+                )
+                selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
+                if store_compressed:
+                    compressed_blocks += 1
+                out.write(selected_chunk)
+                offsets.append(offsets[-1] + len(selected_chunk))
+                if progress_callback is not None:
+                    progress_callback(len(chunk))
+    else:
+        worker_args_iter: Iterator[tuple[Path, int, int, int]] = _iter_pfsc_block_worker_args(
+            abs_path=source_path,
+            block_count=block_count,
+            logical_block_size=logical_block_size,
+            zlib_level=zlib_level,
+        )
+        with mp.Pool(processes=effective_block_workers) as pool:
+            results_iter = pool.imap(_compress_pfsc_block_payload_worker, worker_args_iter, chunksize=1)
+            raw_chunk: bytes
+            compressed_chunk: bytes
+            for raw_chunk, compressed_chunk in results_iter:
+                padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
+                all_compressed_size += len(compressed_chunk)
+                gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
+                store_compressed: bool = _should_store_pfsc_block_compressed(
+                    compressed_block_size=len(compressed_chunk),
+                    logical_block_size=logical_block_size,
+                    gain_pct=gain_pct,
+                    threshold_gain=threshold_gain,
+                )
+                selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
+                if store_compressed:
+                    compressed_blocks += 1
+                out.write(selected_chunk)
+                offsets.append(offsets[-1] + len(selected_chunk))
+                if progress_callback is not None:
+                    progress_callback(len(raw_chunk))
+
+    encoded_payload_size: int = offsets[-1]
+    hypothetical_all_compressed_size: int = header_size + all_compressed_size
+    if compressed_blocks == 0 or encoded_payload_size >= raw_size:
+        return raw_size, False, 0.0, hypothetical_all_compressed_size
+
+    effective_gain_pct: float = ((raw_size - encoded_payload_size) / raw_size) * 100.0
+    if effective_gain_pct < min_file_gain:
+        return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
+
+    # Backfill the PFSC header and block offset table at the payload base.
+    header: PFSCHeader = PFSCHeader(
+        magic=consts.PFSC_MAGIC,
+        unk4=consts.PFSC_UNK4,
+        unk8=consts.PFSC_UNK8,
+        logical_block_size=logical_block_size,
+        block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
+        data_offset=header_size,
+        data_length=block_count * logical_block_size,
+    )
+    header_area: bytearray = bytearray(header_size)
+    struct.pack_into(
+        "<iiiiqqQq",
+        header_area,
+        0,
+        header.magic,
+        header.unk4,
+        header.unk8,
+        header.logical_block_size,
+        header.logical_block_size,
+        header.block_offsets_offset,
+        header.data_offset,
+        header.data_length,
+    )
+    struct.pack_into(f"<{block_count + 1}Q", header_area, consts.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
+    out.seek(base_offset)
+    out.write(header_area)
+    return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
+
+
 def _encode_pfsc_file_to_spool(
     *,
     abs_path: Path,
@@ -1173,6 +1310,9 @@ def _encode_pfsc_file_to_spool(
     progress_callback: Callable[[int], None] | None = None,
 ) -> tuple[int, bool, float, int]:
     """Write a file's PFSC payload to a spool file using low-memory streaming.
+
+    Thin wrapper around :func:`_encode_pfsc_into_handle` that targets a fresh
+    spool file at offset zero and trims it to the encoded payload size.
 
     Args:
         abs_path: Source file path.
@@ -1188,109 +1328,24 @@ def _encode_pfsc_file_to_spool(
     Returns:
         Tuple ``(stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size)``.
     """
-    raw_size: int = abs_path.stat().st_size
-    if not (0 <= min_file_gain <= 100):
-        raise ValueError(f"min_file_gain must be between 0 and 100 inclusive, got {min_file_gain}")
-    if raw_size == 0:
-        return 0, False, 0.0, 0
-
-    block_count: int = ceil_div(raw_size, logical_block_size)
-    header_size: int = _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size)
-    offsets: list[int] = [header_size]
-    all_compressed_size: int = 0
-    compressed_blocks: int = 0
-    effective_block_workers: int = max(1, min(block_worker_count, block_count))
-
     with spool_path.open("w+b") as spool_file:
-        spool_file.seek(header_size)
-        if effective_block_workers == 1:
-            with abs_path.open("rb") as source_file:
-                for _idx in range(block_count):
-                    chunk: bytes = source_file.read(logical_block_size)
-                    padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
-                    compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
-                    all_compressed_size += len(compressed_chunk)
-                    gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
-                    store_compressed: bool = _should_store_pfsc_block_compressed(
-                        compressed_block_size=len(compressed_chunk),
-                        logical_block_size=logical_block_size,
-                        gain_pct=gain_pct,
-                        threshold_gain=threshold_gain,
-                    )
-                    selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
-                    if store_compressed:
-                        compressed_blocks += 1
-                    spool_file.write(selected_chunk)
-                    offsets.append(offsets[-1] + len(selected_chunk))
-                    if progress_callback is not None:
-                        progress_callback(len(chunk))
-        else:
-            worker_args_iter: Iterator[tuple[Path, int, int, int]] = _iter_pfsc_block_worker_args(
-                abs_path=abs_path,
-                block_count=block_count,
-                logical_block_size=logical_block_size,
-                zlib_level=zlib_level,
-            )
-            with mp.Pool(processes=effective_block_workers) as pool:
-                results_iter = pool.imap(_compress_pfsc_block_payload_worker, worker_args_iter, chunksize=1)
-                raw_chunk: bytes
-                compressed_chunk: bytes
-                for raw_chunk, compressed_chunk in results_iter:
-                    padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-                    all_compressed_size += len(compressed_chunk)
-                    gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
-                    store_compressed: bool = _should_store_pfsc_block_compressed(
-                        compressed_block_size=len(compressed_chunk),
-                        logical_block_size=logical_block_size,
-                        gain_pct=gain_pct,
-                        threshold_gain=threshold_gain,
-                    )
-                    selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
-                    if store_compressed:
-                        compressed_blocks += 1
-                    spool_file.write(selected_chunk)
-                    offsets.append(offsets[-1] + len(selected_chunk))
-                    if progress_callback is not None:
-                        progress_callback(len(raw_chunk))
-
-        encoded_payload_size: int = offsets[-1]
-        hypothetical_all_compressed_size: int = header_size + all_compressed_size
-        if compressed_blocks == 0 or encoded_payload_size >= raw_size:
-            return raw_size, False, 0.0, hypothetical_all_compressed_size
-
-        effective_gain_pct: float = ((raw_size - encoded_payload_size) / raw_size) * 100.0
-        if effective_gain_pct < min_file_gain:
-            return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
-
-        header: PFSCHeader = PFSCHeader(
-            magic=consts.PFSC_MAGIC,
-            unk4=consts.PFSC_UNK4,
-            unk8=consts.PFSC_UNK8,
+        stored_size: int
+        is_compressed: bool
+        gain_pct: float
+        hypothetical_all_compressed_size: int
+        stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size = _encode_pfsc_into_handle(
+            out=spool_file,
+            base_offset=0,
+            source_path=abs_path,
+            threshold_gain=threshold_gain,
+            min_file_gain=min_file_gain,
+            zlib_level=zlib_level,
             logical_block_size=logical_block_size,
-            block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
-            data_offset=header_size,
-            data_length=block_count * logical_block_size,
+            block_worker_count=block_worker_count,
+            progress_callback=progress_callback,
         )
-        header_area: bytearray = bytearray(header_size)
-        struct.pack_into(
-            "<iiiiqqQq",
-            header_area,
-            0,
-            header.magic,
-            header.unk4,
-            header.unk8,
-            header.logical_block_size,
-            header.logical_block_size,
-            header.block_offsets_offset,
-            header.data_offset,
-            header.data_length,
-        )
-        struct.pack_into(f"<{block_count + 1}Q", header_area, consts.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
-        spool_file.seek(0)
-        spool_file.write(header_area)
-        spool_file.truncate(encoded_payload_size)
-
-    return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
+        spool_file.truncate(stored_size)
+    return stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size
 
 
 def _copy_exact_bytes(*, source_file: BinaryIO, destination_file: BinaryIO, byte_count: int, chunk_size: int) -> None:
@@ -1556,22 +1611,20 @@ def _compress_files_in_process(
         )
 
 
-def decode_pfsc_payload(payload: bytes, expected_logical_size: int | None = None) -> bytes:
-    """Decode PFSC block-compressed payload bytes.
+def _parse_pfsc_header(head: bytes) -> tuple[int, int, int, int, int]:
+    """Parse and validate the fixed PFSC header fields.
 
     Args:
-        payload: Stored PFSC payload bytes.
-        expected_logical_size: Optional expected logical size from inode metadata.
+        head: At least ``PFSC_HEADER_SIZE`` bytes from the start of a PFSC payload.
 
     Returns:
-        Decoded logical file payload.
+        Tuple ``(logical_block_size, block_count, block_offsets_offset, data_offset, logical_size)``.
 
     Raises:
-        ValueError: If PFSC payload structure or per-block decoding is invalid.
+        ValueError: If any PFSC header field is invalid.
     """
-    if len(payload) < consts.PFSC_HEADER_SIZE:
+    if len(head) < consts.PFSC_HEADER_SIZE:
         raise ValueError("PFSC payload is too small for header")
-
     magic: int
     unk4: int
     unk8: int
@@ -1589,7 +1642,7 @@ def decode_pfsc_payload(payload: bytes, expected_logical_size: int | None = None
         block_offsets_offset,
         data_offset,
         logical_size,
-    ) = struct.unpack_from("<iiiiqqQq", payload, 0)
+    ) = struct.unpack_from("<iiiiqqQq", head, 0)
 
     if magic != consts.PFSC_MAGIC:
         raise ValueError(f"invalid PFSC magic 0x{magic:08X}")
@@ -1616,10 +1669,57 @@ def decode_pfsc_payload(payload: bytes, expected_logical_size: int | None = None
         )
     if data_offset < consts.PFSC_INITIAL_DATA_OFFSET:
         raise ValueError("PFSC data offset is smaller than the minimum compatible header span")
+
+    block_count: int = logical_size // logical_block_size
+    return logical_block_size, block_count, block_offsets_offset, data_offset, logical_size
+
+
+def _decode_pfsc_block(stored_block: bytes, logical_block_size: int, idx: int) -> bytes:
+    """Decode one stored PFSC block to its logical bytes.
+
+    Args:
+        stored_block: Stored block bytes (compressed when shorter than the logical size).
+        logical_block_size: Expected logical block size.
+        idx: Block index, used for error messages.
+
+    Returns:
+        Logical block bytes of length ``logical_block_size``.
+
+    Raises:
+        ValueError: If the block fails to decompress or has an unexpected size.
+    """
+    if len(stored_block) == logical_block_size:
+        return stored_block
+    if len(stored_block) < logical_block_size:
+        try:
+            logical_block: bytes = zlib.decompress(stored_block)
+        except zlib.error as exc:
+            raise ValueError(f"PFSC block {idx} failed to decompress: {exc}") from exc
+        if len(logical_block) != logical_block_size:
+            raise ValueError(
+                f"PFSC block {idx} decompressed to {len(logical_block)} bytes, expected {logical_block_size}"
+            )
+        return logical_block
+    raise ValueError(f"PFSC block {idx} stored size {len(stored_block)} exceeds logical size {logical_block_size}")
+
+
+def decode_pfsc_payload(payload: bytes, expected_logical_size: int | None = None) -> bytes:
+    """Decode PFSC block-compressed payload bytes.
+
+    Args:
+        payload: Stored PFSC payload bytes.
+        expected_logical_size: Optional expected logical size from inode metadata.
+
+    Returns:
+        Decoded logical file payload.
+
+    Raises:
+        ValueError: If PFSC payload structure or per-block decoding is invalid.
+    """
+    logical_block_size, block_count, block_offsets_offset, data_offset, logical_size = _parse_pfsc_header(payload)
     if data_offset > len(payload):
         raise ValueError("PFSC data offset exceeds payload length")
 
-    block_count: int = logical_size // logical_block_size
     offsets_size: int = (block_count + 1) * consts.PFSC_OFFSET_ENTRY_SIZE
     offsets_end: int = block_offsets_offset + offsets_size
     if offsets_end > data_offset or offsets_end > len(payload):
@@ -1635,29 +1735,9 @@ def decode_pfsc_payload(payload: bytes, expected_logical_size: int | None = None
             raise ValueError("PFSC block offsets are not monotonic")
 
     logical_out: bytearray = bytearray()
-
     for idx in range(block_count):
-        start: int = offsets[idx]
-        end: int = offsets[idx + 1]
-        stored_block: bytes = payload[start:end]
-        block_expected_size: int = logical_block_size
-
-        if len(stored_block) == block_expected_size:
-            logical_block: bytes = stored_block
-        elif len(stored_block) < block_expected_size:
-            try:
-                logical_block = zlib.decompress(stored_block)
-            except zlib.error as exc:
-                raise ValueError(f"PFSC block {idx} failed to decompress: {exc}") from exc
-            if len(logical_block) != block_expected_size:
-                raise ValueError(
-                    f"PFSC block {idx} decompressed to {len(logical_block)} bytes, expected {block_expected_size}"
-                )
-        else:
-            raise ValueError(
-                f"PFSC block {idx} stored size {len(stored_block)} exceeds logical size {block_expected_size}"
-            )
-        logical_out.extend(logical_block)
+        stored_block: bytes = payload[offsets[idx] : offsets[idx + 1]]
+        logical_out.extend(_decode_pfsc_block(stored_block, logical_block_size, idx))
 
     logical_payload: bytes = bytes(logical_out)
     if len(logical_payload) != logical_size:
@@ -2277,6 +2357,92 @@ def assign_signed_inode_layout(
     return next_block
 
 
+def _pack_pfs_header_block(
+    *,
+    block_size: int,
+    pfs_version: int,
+    mode: int,
+    nblock: int,
+    inode_count: int,
+    final_ndblock: int,
+    inode_block_count: int,
+    now: int,
+    signed: bool,
+    encrypted: bool,
+    seed: bytes,
+) -> bytes:
+    """Build the plaintext PFS header block (block 0).
+
+    Args:
+        block_size: Filesystem block size in bytes; length of the returned block.
+        pfs_version: PFS profile version.
+        mode: Composed PFS mode bits.
+        nblock: Number of leading blocks (always 1 today).
+        inode_count: Total inode count.
+        final_ndblock: Total data block count for the image.
+        inode_block_count: Number of inode blocks.
+        now: Build timestamp in seconds.
+        signed: Whether the image is signed.
+        encrypted: Whether the image is encrypted.
+        seed: PFS seed value.
+
+    Returns:
+        A ``block_size``-length header block.
+    """
+    hdr: bytearray = bytearray(block_size)
+    struct.pack_into("<q", hdr, 0x00, pfs_version)
+    struct.pack_into("<q", hdr, 0x08, consts.PFS_MAGIC)
+    struct.pack_into("<q", hdr, 0x10, 0)
+    struct.pack_into("<BBBB", hdr, 0x18, 0, 0, 1, 0)
+    struct.pack_into("<H", hdr, 0x1C, mode)
+    struct.pack_into("<H", hdr, 0x1E, 0)
+    struct.pack_into("<I", hdr, 0x20, block_size)
+    struct.pack_into("<I", hdr, 0x24, 0)
+    struct.pack_into("<q", hdr, 0x28, nblock)
+    struct.pack_into("<q", hdr, 0x30, inode_count)
+    struct.pack_into("<q", hdr, 0x38, final_ndblock)
+    struct.pack_into("<q", hdr, 0x40, inode_block_count)
+    ib_sig_bytes: bytes = build_inode_block_sig_s64(inode_block_count, block_size, now, signed=signed)
+    hdr[0x50 : 0x50 + len(ib_sig_bytes)] = ib_sig_bytes
+    if signed or encrypted:
+        struct.pack_into("<I", hdr, 0x36C, 1)
+        hdr[0x370 : 0x370 + len(seed)] = seed
+    else:
+        struct.pack_into("<I", hdr, 0x368, 1)
+    return bytes(hdr)
+
+
+def _write_inode_table(
+    *,
+    out: BinaryIO,
+    inodes: list[Inode],
+    signed: bool,
+    signed_inode_bits: int,
+    block_size: int,
+    inode_size: int,
+) -> None:
+    """Write the inode table starting at the current handle position.
+
+    Mirrors the per-block packing used by ``build_pfs``: when the remaining space
+    in the current block is smaller than one inode, skip to the next block.
+
+    Args:
+        out: Open writable and seekable handle positioned at the inode table start.
+        inodes: Inodes in image order.
+        signed: Whether to use the signed inode layout.
+        signed_inode_bits: Signed inode width (32 or 64) when ``signed``.
+        block_size: Filesystem block size.
+        inode_size: Serialized inode size in bytes.
+    """
+    for ino in inodes:
+        if signed:
+            out.write(ino.to_bytes_signed64() if signed_inode_bits == 64 else ino.to_bytes_signed32())
+        else:
+            out.write(ino.to_bytes())
+        if (out.tell() % block_size) > (block_size - inode_size):
+            out.seek(out.tell() + (block_size - (out.tell() % block_size)))
+
+
 def build_pfs(
     source_root: Path,
     output_path: Path,
@@ -2842,41 +3008,31 @@ def build_pfs(
         with tmp_path.open("w+b") as out:
             out.truncate(image_size)
 
-            hdr = bytearray(block_size)
-            struct.pack_into("<q", hdr, 0x00, pfs_version)
-            struct.pack_into("<q", hdr, 0x08, consts.PFS_MAGIC)
-            struct.pack_into("<q", hdr, 0x10, 0)
-            struct.pack_into("<BBBB", hdr, 0x18, 0, 0, 1, 0)
-            struct.pack_into("<H", hdr, 0x1C, mode)
-            struct.pack_into("<H", hdr, 0x1E, 0)
-            struct.pack_into("<I", hdr, 0x20, block_size)
-            struct.pack_into("<I", hdr, 0x24, 0)
-            struct.pack_into("<q", hdr, 0x28, nblock)
-            struct.pack_into("<q", hdr, 0x30, inode_count)
-            struct.pack_into("<q", hdr, 0x38, final_ndblock)
-            struct.pack_into("<q", hdr, 0x40, inode_block_count)
-            ib_sig_bytes = build_inode_block_sig_s64(inode_block_count, block_size, now, signed=signed)
-            hdr[0x50 : 0x50 + len(ib_sig_bytes)] = ib_sig_bytes
-            if signed or encrypted:
-                struct.pack_into("<I", hdr, 0x36C, 1)
-                hdr[0x370 : 0x370 + len(seed)] = seed
-            else:
-                struct.pack_into("<I", hdr, 0x368, 1)
-
+            hdr = _pack_pfs_header_block(
+                block_size=block_size,
+                pfs_version=pfs_version,
+                mode=mode,
+                nblock=nblock,
+                inode_count=inode_count,
+                final_ndblock=final_ndblock,
+                inode_block_count=inode_block_count,
+                now=now,
+                signed=signed,
+                encrypted=encrypted,
+                seed=seed,
+            )
             out.seek(0)
             out.write(hdr)
 
             out.seek(block_size)
-            for ino in inodes:
-                if signed:
-                    if signed_inode_bits == 64:
-                        out.write(ino.to_bytes_signed64())
-                    else:
-                        out.write(ino.to_bytes_signed32())
-                else:
-                    out.write(ino.to_bytes())
-                if (out.tell() % block_size) > (block_size - inode_size):
-                    out.seek(out.tell() + (block_size - (out.tell() % block_size)))
+            _write_inode_table(
+                out=out,
+                inodes=inodes,
+                signed=signed,
+                signed_inode_bits=signed_inode_bits,
+                block_size=block_size,
+                inode_size=inode_size,
+            )
 
             out.seek(block_size * (inode_block_count + 1))
             for d in super_root_dirents:
@@ -3007,6 +3163,431 @@ def build_pfs(
 
     stats.elapsed_seconds = time.time() - start
     return stats
+
+
+def _single_file_build_stats(
+    *,
+    source_file: Path,
+    output_path: Path,
+    raw_size: int,
+    stored_size: int,
+    is_compressed: bool,
+    hypothetical_size: int,
+    block_size: int,
+    gain_pct: float,
+    elapsed_seconds: float,
+    verbose: bool,
+) -> BuildStats:
+    """Build single-file pack statistics shared by the dry-run and write paths.
+
+    Args:
+        source_file: Source file packed.
+        output_path: Output image path.
+        raw_size: Raw file size in bytes.
+        stored_size: Stored payload size in bytes.
+        is_compressed: Whether the payload is stored PFSC-compressed.
+        hypothetical_size: Hypothetical all-blocks-compressed size.
+        block_size: Filesystem block size in bytes.
+        gain_pct: Effective whole-file gain percent, used for the verbose line.
+        elapsed_seconds: Elapsed build time in seconds.
+        verbose: Whether to emit the per-file decision line.
+
+    Returns:
+        Populated build statistics for the single-file pack.
+    """
+    stats = BuildStats(input_path=source_file, output_path=output_path)
+    stats.total_files = 1
+    stats.uncompressed_total_size = raw_size
+    stats.stored_total_size = stored_size
+    stats.all_compressed_total_size = hypothetical_size
+    stats.compressed_files = 1 if is_compressed else 0
+    stats.uncompressed_files = 0 if is_compressed else 1
+    stats.block_size = block_size
+    stats.block_alignment_waste = (
+        (ceil_div(stored_size, block_size) * block_size - stored_size) if stored_size > 0 else block_size
+    )
+    stats.elapsed_seconds = elapsed_seconds
+    if verbose:
+        state: str = "compressed" if is_compressed else "raw"
+        info(
+            f"[file] {source_file.name}: raw={raw_size} stored={stored_size} gain={gain_pct:.2f}% mode={state}",
+            icon_name="file",
+        )
+    return stats
+
+
+def build_pfs_stream_single_file(
+    *,
+    source_file: Path,
+    output_path: Path,
+    block_size: int,
+    pfs_version: int,
+    case_insensitive: bool,
+    zlib_level: int,
+    threshold_gain: int,
+    min_file_gain: int,
+    min_compress_size: int,
+    cpu_count: int,
+    compress: bool,
+    encrypted: bool = False,
+    new_crypt: bool = False,
+    ekpfs: bytes | None = None,
+    verbose: bool = False,
+    skip_executable_compression: bool = False,
+    dry_run: bool = False,
+) -> BuildStats:
+    """Build an unsigned PFS container from one file, streaming the payload with no spool.
+
+    Writes provisional front metadata, streams the file's PFSC payload directly into
+    its final block region in a single compression pass, then back-patches the file
+    inode and the header total-block count and truncates. Output is byte-identical to
+    the spool path for the same input.
+
+    Args:
+        source_file: Existing single source file to pack.
+        output_path: Final image path.
+        block_size: Filesystem block size in bytes.
+        pfs_version: PFS profile version.
+        case_insensitive: Whether to set the case-insensitive mode bit.
+        zlib_level: zlib compression level.
+        threshold_gain: Minimum per-block gain percent to keep PFSC blocks.
+        min_file_gain: Minimum whole-file gain percent required to store PFSC.
+        min_compress_size: Minimum raw size eligible for PFSC.
+        cpu_count: Requested CPU budget for block-level compression.
+        compress: Whether PFSC compression is enabled.
+        encrypted: Whether to encrypt filesystem blocks.
+        new_crypt: Whether to use the alternate EKPFS derivation.
+        ekpfs: Optional EKPFS key bytes.
+        verbose: Whether to emit a verbose per-file decision line.
+        skip_executable_compression: Whether to store executable-like files raw.
+        dry_run: When True, report the layout and stats without writing an image.
+
+    Returns:
+        Build statistics for the completed image.
+
+    Raises:
+        BuildError: If the source is missing or an unexpected FPT collision occurs.
+    """
+    start: float = time.time()
+    progress: Progress = Progress(enabled=True)
+    if not source_file.is_file():
+        raise BuildError(f"source file does not exist: {source_file}")
+    raw_size: int = source_file.stat().st_size
+    now: int = int(time.time())
+    resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)
+    seed: bytes = consts.ZERO_PFS_SEED
+
+    # Decide whether this file is eligible for PFSC compression at all.
+    should_compress: bool = (
+        compress
+        and raw_size > 0
+        and raw_size >= min_compress_size
+        and not (skip_executable_compression and should_skip_executable_compression(source_file.name))
+    )
+    block_workers: int = resolve_block_compression_worker_count(
+        requested_cpu_count=resolve_compression_worker_count(requested_cpu_count=cpu_count),
+        file_size=raw_size,
+    )
+
+    # Dry run: measure the storage decision and report stats without writing.
+    if dry_run:
+        if should_compress:
+            dry_stored, dry_compressed, dry_gain, dry_hyp = _analyze_pfsc_file_storage(
+                abs_path=source_file,
+                threshold_gain=threshold_gain,
+                min_file_gain=min_file_gain,
+                zlib_level=zlib_level,
+                logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                block_worker_count=block_workers,
+            )
+        else:
+            dry_stored, dry_compressed, dry_gain, dry_hyp = raw_size, False, 0.0, 0
+        return _single_file_build_stats(
+            source_file=source_file,
+            output_path=output_path,
+            raw_size=raw_size,
+            stored_size=dry_stored,
+            is_compressed=dry_compressed,
+            hypothetical_size=dry_hyp,
+            block_size=block_size,
+            gain_pct=dry_gain,
+            elapsed_seconds=time.time() - start,
+            verbose=verbose,
+        )
+
+    # Build the four unsigned inodes (super_root, fpt, uroot, file).
+    super_root_inode = Inode(
+        number=0,
+        mode=consts.INODE_MODE_DIR | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_INTERNAL | consts.INODE_FLAG_READONLY,
+        size=block_size,
+        size_compressed=block_size,
+        blocks=1,
+        time_sec=now,
+    )
+    fpt_inode = Inode(
+        number=1,
+        mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_INTERNAL | consts.INODE_FLAG_READONLY,
+        size=0,
+        size_compressed=0,
+        blocks=1,
+        time_sec=now,
+    )
+    uroot_inode = Inode(
+        number=2,
+        mode=consts.INODE_MODE_DIR | consts.INODE_RX_ONLY,
+        nlink=3,
+        flags=consts.INODE_FLAG_READONLY,
+        size=block_size,
+        size_compressed=block_size,
+        blocks=1,
+        time_sec=now,
+    )
+    file_inode = Inode(
+        number=3,
+        mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_READONLY,
+        size=0,
+        size_compressed=0,
+        blocks=1,
+        time_sec=now,
+    )
+    inodes: list[Inode] = [super_root_inode, fpt_inode, uroot_inode, file_inode]
+
+    # Synthesize the single-file directory model and the flat path table.
+    file_node = FileNode(
+        rel_path=source_file.name,
+        abs_path=source_file,
+        parent_rel_dir="",
+        name=source_file.name,
+        raw_size=raw_size,
+    )
+    file_node.inode = file_inode
+    uroot_dir = DirNode(rel_dir="", name="", parent_rel_dir=None, children_files=[source_file.name])
+    uroot_dir.inode = uroot_inode
+    inode_by_path: dict[str, Inode] = {"dir:": uroot_inode, f"file:{source_file.name}": file_inode}
+    fpt_blob: bytes
+    has_collision: bool
+    fpt_blob, _collision_blob, has_collision = make_fpt_and_collision_blob(
+        [uroot_dir],
+        [file_node],
+        inode_by_path,
+        case_insensitive=case_insensitive,
+    )
+    if has_collision:
+        raise BuildError("unexpected FPT collision in single-file streaming builder")
+
+    uroot_dirents: list[Dirent] = [
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DOT, "."),
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DOTDOT, ".."),
+        Dirent(file_inode.number, consts.DIRENT_TYPE_FILE, source_file.name),
+    ]
+    uroot_blob: bytes = b"".join(d.to_bytes() for d in uroot_dirents)
+    super_root_dirents: list[Dirent] = [
+        Dirent(fpt_inode.number, consts.DIRENT_TYPE_FILE, "flat_path_table"),
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DIRECTORY, "uroot"),
+    ]
+
+    inode_count: int = len(inodes)
+    inode_size: int = consts.INODE_D32_SIZE
+    inodes_per_block: int = block_size // inode_size
+    inode_block_count: int = ceil_div(inode_count, inodes_per_block)
+
+    # Front layout (unsigned, contiguous). file.db[0] is known without the payload size.
+    ndblock: int = 1 + inode_block_count
+    super_root_inode.db[0] = ndblock
+    ndblock += super_root_inode.blocks
+    fpt_inode.size = len(fpt_blob)
+    fpt_inode.size_compressed = len(fpt_blob)
+    fpt_inode.blocks = max(1, ceil_div(len(fpt_blob), block_size))
+    fpt_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        fpt_inode.db[i] = -1
+    ndblock += fpt_inode.blocks
+    ndblock += 1  # reserved empty block (no collision resolver)
+    reserved_empty_blocks: set[int] = {ndblock - 1}
+    uroot_inode.blocks = max(1, ceil_div(len(uroot_blob), block_size))
+    uroot_inode.size = uroot_inode.blocks * block_size
+    uroot_inode.size_compressed = uroot_inode.size
+    uroot_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        uroot_inode.db[i] = -1
+    ndblock += uroot_inode.blocks
+    file_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        file_inode.db[i] = -1
+    payload_base: int = file_inode.db[0] * block_size
+
+    mode: int = compose_pfs_mode_with_options(
+        inode_bits=32,
+        case_insensitive=case_insensitive,
+        signed=False,
+        encrypted=encrypted,
+    )
+
+    progress.status(f"\nWriting PFS image to {output_path} (streaming, no spool)...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path = Path(str(output_path) + ".tmp")
+    stored_size: int = raw_size
+    is_compressed: bool = False
+    gain_pct: float = 0.0
+    hypothetical_size: int = 0
+    try:
+        with tmp_path.open("w+b") as out:
+            # Provisional metadata; final_ndblock and the file inode are patched after streaming.
+            out.write(
+                _pack_pfs_header_block(
+                    block_size=block_size,
+                    pfs_version=pfs_version,
+                    mode=mode,
+                    nblock=1,
+                    inode_count=inode_count,
+                    final_ndblock=0,
+                    inode_block_count=inode_block_count,
+                    now=now,
+                    signed=False,
+                    encrypted=encrypted,
+                    seed=seed,
+                )
+            )
+            out.seek(block_size)
+            _write_inode_table(
+                out=out,
+                inodes=inodes,
+                signed=False,
+                signed_inode_bits=32,
+                block_size=block_size,
+                inode_size=inode_size,
+            )
+            out.seek(super_root_inode.db[0] * block_size)
+            for d in super_root_dirents:
+                out.write(d.to_bytes())
+            out.seek(fpt_inode.db[0] * block_size)
+            out.write(fpt_blob)
+            out.seek(uroot_inode.db[0] * block_size)
+            out.write(uroot_blob)
+
+            # Stream the payload directly into its final region (single compression pass).
+            total_units: int = max(raw_size, 1)
+            processed: int = 0
+
+            def report(delta: int) -> None:
+                """Forward block progress to the compression bar."""
+                nonlocal processed
+                processed += delta
+                progress.step("compress", min(processed, total_units), total_units, bytes_processed=processed)
+
+            if should_compress:
+                progress.status(
+                    f"\nCompressing 1 file ({human_readable_size(raw_size)}) "
+                    f"using {block_workers} CPU core{'s' if block_workers != 1 else ''}..."
+                )
+                stored_size, is_compressed, gain_pct, hypothetical_size = _encode_pfsc_into_handle(
+                    out=out,
+                    base_offset=payload_base,
+                    source_path=source_file,
+                    threshold_gain=threshold_gain,
+                    min_file_gain=min_file_gain,
+                    zlib_level=zlib_level,
+                    logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                    block_worker_count=block_workers,
+                    progress_callback=report,
+                )
+
+            # Disabled, too small, or not worth compressing: store raw over the same region.
+            if not is_compressed:
+                write_source_to_offset(
+                    out=out,
+                    source_path=source_file,
+                    payload_size=raw_size,
+                    offset=payload_base,
+                )
+                raw_padding_size: int = (file_inode.blocks * block_size) - raw_size
+                if raw_padding_size > 0:
+                    out.seek(payload_base + raw_size)
+                    out.write(b"\x00" * raw_padding_size)
+                stored_size = raw_size
+
+            # Finalize sizes and back-patch metadata.
+            file_inode.blocks = max(1, ceil_div(stored_size, block_size)) if stored_size > 0 else 1
+            file_inode.size = stored_size
+            file_inode.flags = consts.INODE_FLAG_READONLY | (consts.INODE_FLAG_COMPRESSED if is_compressed else 0)
+            file_inode.size_compressed = raw_size if is_compressed else stored_size
+            final_ndblock: int = file_inode.db[0] + file_inode.blocks
+
+            validate_d32_ranges(inodes, final_ndblock)
+
+            out.seek(0)
+            out.write(
+                _pack_pfs_header_block(
+                    block_size=block_size,
+                    pfs_version=pfs_version,
+                    mode=mode,
+                    nblock=1,
+                    inode_count=inode_count,
+                    final_ndblock=final_ndblock,
+                    inode_block_count=inode_block_count,
+                    now=now,
+                    signed=False,
+                    encrypted=encrypted,
+                    seed=seed,
+                )
+            )
+            out.seek(block_size)
+            _write_inode_table(
+                out=out,
+                inodes=inodes,
+                signed=False,
+                signed_inode_bits=32,
+                block_size=block_size,
+                inode_size=inode_size,
+            )
+            out.truncate(final_ndblock * block_size)
+
+            if encrypted:
+                encrypt_image_filesystem(
+                    out,
+                    block_size=block_size,
+                    total_blocks=final_ndblock,
+                    ekpfs=resolved_ekpfs,
+                    seed=seed,
+                    new_crypt=new_crypt,
+                    skip_block_numbers=reserved_empty_blocks,
+                )
+
+        validate_image_quick(
+            tmp_path,
+            block_size,
+            mode,
+            pfs_version,
+            ekpfs=resolved_ekpfs if encrypted else None,
+            new_crypt=new_crypt,
+        )
+        shutil.move(str(tmp_path), str(output_path))
+        progress.status(f"Successfully wrote {human_readable_size(final_ndblock * block_size)} image")
+    except Exception:
+        # Remove the partial temp image on any failure, then re-raise the original error.
+        if tmp_path.exists():
+            with suppress(FileNotFoundError):
+                tmp_path.unlink()
+        raise
+
+    return _single_file_build_stats(
+        source_file=source_file,
+        output_path=output_path,
+        raw_size=raw_size,
+        stored_size=stored_size,
+        is_compressed=is_compressed,
+        hypothetical_size=hypothetical_size,
+        block_size=block_size,
+        gain_pct=gain_pct,
+        elapsed_seconds=time.time() - start,
+        verbose=verbose,
+    )
 
 
 def validate_image_quick(
@@ -3596,6 +4177,100 @@ def read_image_inode_payload(
     return data
 
 
+def iter_inode_logical_blocks(
+    fh: BinaryIO,
+    header: ParsedHeader,
+    inode: ParsedInode,
+    ekpfs: bytes | None = None,
+    new_crypt: bool = False,
+    chunk_size: int = 4 * 1024 * 1024,
+) -> Iterator[bytes]:
+    """Yield an inode's logical payload in bounded-memory chunks.
+
+    Streams the decoded payload without ever holding the whole file in memory:
+    for unsigned PFSC payloads it reads and decompresses one logical block at a
+    time; for unsigned raw payloads it copies fixed-size chunks; signed payloads
+    (size-limited by the signed layout) fall back to a single buffered decode.
+
+    Args:
+        fh: Open image file handle.
+        header: Parsed image header.
+        inode: Parsed inode whose payload should be streamed.
+        ekpfs: Optional EKPFS key material. Defaults to the all-zero key.
+        new_crypt: When True, use the alternate newCrypt key derivation path.
+        chunk_size: Read chunk size for raw (uncompressed) payloads.
+
+    Yields:
+        Logical payload byte chunks in order; concatenation equals the decoded file.
+
+    Raises:
+        ValueError: If the stored payload structure is invalid.
+    """
+    if inode.blocks <= 0 or inode.logical_size <= 0:
+        return
+
+    # Signed payloads are bounded by the signed-layout size limit; decode buffered.
+    if inode.db_sig or inode.ib_sig:
+        payload: bytes = read_image_inode_payload(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
+        yield decode_inode_payload(payload=payload, inode=inode)
+        return
+
+    base: int = inode.db[0] * header.block_size
+    expected: int = inode.logical_size
+
+    # Raw (uncompressed) contiguous payload: stored bytes equal logical bytes.
+    if not inode.is_compressed:
+        remaining: int = expected
+        offset: int = base
+        while remaining > 0:
+            take: int = min(chunk_size, remaining)
+            yield read_image_bytes(fh, header, offset, take, ekpfs=ekpfs, new_crypt=new_crypt)
+            offset += take
+            remaining -= take
+        return
+
+    # Compressed PFSC payload stored contiguously from ``base``.
+    stored_size: int = inode.stored_size
+    head: bytes = read_image_bytes(fh, header, base, consts.PFSC_HEADER_SIZE, ekpfs=ekpfs, new_crypt=new_crypt)
+    logical_block_size, block_count, block_offsets_offset, data_offset, pfsc_logical_size = _parse_pfsc_header(head)
+    if data_offset > stored_size:
+        raise ValueError("PFSC data offset exceeds stored payload length")
+    offsets_size: int = (block_count + 1) * consts.PFSC_OFFSET_ENTRY_SIZE
+    if block_offsets_offset + offsets_size > data_offset or block_offsets_offset + offsets_size > stored_size:
+        raise ValueError("PFSC payload is truncated before block offset table")
+
+    offset_table: bytes = read_image_bytes(
+        fh, header, base + block_offsets_offset, offsets_size, ekpfs=ekpfs, new_crypt=new_crypt
+    )
+    offsets: list[int] = list(struct.unpack_from(f"<{block_count + 1}Q", offset_table, 0))
+    if offsets[0] != data_offset:
+        raise ValueError("PFSC block offsets must start at data_start")
+    if offsets[-1] > stored_size:
+        raise ValueError("PFSC block offsets exceed payload size")
+    for idx in range(1, len(offsets)):
+        if offsets[idx] < offsets[idx - 1]:
+            raise ValueError("PFSC block offsets are not monotonic")
+    if expected > pfsc_logical_size:
+        raise ValueError(f"PFSC logical size {pfsc_logical_size} is smaller than inode size {expected}")
+
+    # Read, decompress, and emit one logical block at a time, trimming to the file size.
+    emitted: int = 0
+    for idx in range(block_count):
+        if emitted >= expected:
+            break
+        stored_block: bytes = read_image_bytes(
+            fh, header, base + offsets[idx], offsets[idx + 1] - offsets[idx], ekpfs=ekpfs, new_crypt=new_crypt
+        )
+        logical_block: bytes = _decode_pfsc_block(stored_block, logical_block_size, idx)
+        if emitted + len(logical_block) > expected:
+            logical_block = logical_block[: expected - emitted]
+        emitted += len(logical_block)
+        yield logical_block
+
+    if emitted != expected:
+        raise ValueError(f"PFSC streamed output size {emitted} does not match inode size {expected}")
+
+
 def parse_superroot_and_indexes(
     fh: BinaryIO,
     header: ParsedHeader,
@@ -3789,33 +4464,50 @@ def verify_file_payload_hashes(
     errors: list[str],
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
+    progress: Progress | None = None,
 ) -> tuple[int, int, str]:
     manifest = hashlib.sha256()
     cumulative_crc = 0
     checked = 0
+
+    # Report progress against the total logical bytes to hash, throttled by volume.
+    total_bytes: int = sum(max(0, inodes[n].logical_size) for n in file_inodes.values())
+    progress_total: int = max(total_bytes, 1)
+    processed: int = 0
+    last_reported: int = 0
+    update_interval: int = 8 * 1024 * 1024
+    if progress is not None:
+        progress.step("verify", 0, progress_total, bytes_processed=0)
+
     for rel in sorted(file_inodes.keys()):
         inode_num = file_inodes[rel]
         inode = inodes[inode_num]
+        # Stream the logical payload one block at a time to keep memory flat.
+        file_hash = hashlib.sha256()
+        file_len = 0
         try:
-            payload = read_image_inode_payload(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
-        except Exception as exc:
+            for chunk in iter_inode_logical_blocks(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt):
+                file_hash.update(chunk)
+                cumulative_crc = zlib.crc32(chunk, cumulative_crc) & 0xFFFFFFFF
+                file_len += len(chunk)
+                processed += len(chunk)
+                if progress is not None and processed - last_reported >= update_interval:
+                    last_reported = processed
+                    progress.step("verify", min(processed, total_bytes), progress_total, bytes_processed=processed)
+        except (ValueError, OSError) as exc:
             errors.append(f"failed to read file payload '{rel}' (inode {inode_num}): {exc}")
             continue
 
-        try:
-            logical_data = decode_inode_payload(payload=payload, inode=inode)
-        except ValueError as exc:
-            errors.append(f"file '{rel}' payload decode failed: {exc}")
-            continue
-        if inode.logical_size >= 0 and len(logical_data) != inode.logical_size:
-            errors.append(f"file '{rel}' size {len(logical_data)} does not match inode size {inode.logical_size}")
+        if inode.logical_size >= 0 and file_len != inode.logical_size:
+            errors.append(f"file '{rel}' size {file_len} does not match inode size {inode.logical_size}")
 
-        file_hash = hashlib.sha256(logical_data).digest()
         manifest.update(rel.encode("utf-8", errors="replace"))
         manifest.update(b"\0")
-        manifest.update(file_hash)
-        cumulative_crc = zlib.crc32(logical_data, cumulative_crc) & 0xFFFFFFFF
+        manifest.update(file_hash.digest())
         checked += 1
+
+    if progress is not None:
+        progress.step("verify", progress_total, progress_total, bytes_processed=total_bytes)
 
     return checked, cumulative_crc, manifest.hexdigest()
 
@@ -3973,6 +4665,7 @@ def validate_source_match(
     errors: list[str],
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
+    progress: Progress | None = None,
 ) -> None:
     if not source.exists() or not source.is_dir():
         errors.append(f"source path does not exist or is not a directory: {source}")
@@ -3987,19 +4680,44 @@ def validate_source_match(
     for rel in sorted(image_rel - source_rel):
         errors.append(f"extra in image: {rel}")
 
-    for rel in sorted(source_rel & image_rel):
-        inode = inodes[file_inodes[rel]]
-        payload = read_image_inode_payload(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
-        if inode.is_compressed:
-            try:
-                payload = decode_inode_payload(payload=payload, inode=inode)
-            except ValueError as exc:
-                errors.append(f"file '{rel}' marked compressed but failed to decode payload: {exc}")
-                continue
+    common = sorted(source_rel & image_rel)
+    # Report progress against the total logical bytes to compare, throttled by volume.
+    total_bytes: int = sum(max(0, inodes[file_inodes[rel]].logical_size) for rel in common)
+    progress_total: int = max(total_bytes, 1)
+    processed: int = 0
+    last_reported: int = 0
+    update_interval: int = 8 * 1024 * 1024
+    if progress is not None:
+        progress.step("compare", 0, progress_total, bytes_processed=0)
 
-        src_data = (source / rel).read_bytes()
-        if hashlib.sha256(src_data).digest() != hashlib.sha256(payload).digest():
+    for rel in common:
+        inode = inodes[file_inodes[rel]]
+        # Hash the decoded image payload and the source file by streaming both.
+        image_hash = hashlib.sha256()
+        try:
+            for chunk in iter_inode_logical_blocks(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt):
+                image_hash.update(chunk)
+                processed += len(chunk)
+                if progress is not None and processed - last_reported >= update_interval:
+                    last_reported = processed
+                    progress.step("compare", min(processed, total_bytes), progress_total, bytes_processed=processed)
+        except (ValueError, OSError) as exc:
+            errors.append(f"file '{rel}' failed to read payload: {exc}")
+            continue
+
+        source_hash = hashlib.sha256()
+        with (source / rel).open("rb") as src_fh:
+            while True:
+                src_chunk: bytes = src_fh.read(4 * 1024 * 1024)
+                if not src_chunk:
+                    break
+                source_hash.update(src_chunk)
+
+        if image_hash.digest() != source_hash.digest():
             errors.append(f"content mismatch for file: {rel}")
+
+    if progress is not None:
+        progress.step("compare", progress_total, progress_total, bytes_processed=total_bytes)
 
 
 @dataclass
@@ -4420,18 +5138,20 @@ def extract_pfs_image(
             total_files: int = len(file_targets)
             for index, (rel_path, file_target, inode_num) in enumerate(file_targets, start=1):
                 inode: ParsedInode = inspection.inodes[inode_num]
-                payload = read_image_inode_payload(fh, inspection.header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
-                if inode.is_compressed:
-                    try:
-                        payload = decode_inode_payload(payload=payload, inode=inode)
-                    except ValueError as exc:
-                        result.errors.append(f"failed to decode file '{rel_path}' payload: {exc}")
-                        return result
-
                 file_target.parent.mkdir(parents=True, exist_ok=True)
-                file_target.write_bytes(payload)
+                # Stream logical blocks straight to disk to keep memory flat for large files.
+                try:
+                    with file_target.open("wb") as out_fh:
+                        for chunk in iter_inode_logical_blocks(
+                            fh, inspection.header, inode, ekpfs=ekpfs, new_crypt=new_crypt
+                        ):
+                            out_fh.write(chunk)
+                            result.bytes_written += len(chunk)
+                except ValueError as exc:
+                    result.errors.append(f"failed to decode file '{rel_path}' payload: {exc}")
+                    return result
+
                 result.files_written += 1
-                result.bytes_written += len(payload)
 
                 if progress is not None:
                     progress.step("extract", index, total_files, bytes_processed=result.bytes_written)

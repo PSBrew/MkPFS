@@ -110,6 +110,7 @@ class CliTestCase(unittest.TestCase):
             signed=False,
             encrypted=False,
             ekpfs_key=None,
+            no_spool=False,
             verbose=False,
             dry_run=dry_run,
             verify=verify,
@@ -1045,8 +1046,8 @@ class TestCliCreateRun(CliTestCase):
         self.assertTrue(mocked_build.call_args.kwargs["encrypted"])
         self.assertEqual(mocked_build.call_args.kwargs["ekpfs"], bytes.fromhex("12" * 32))
 
-    def test_pack_file_run_stages_a_single_root_file_without_copy_and_disables_game_file_checks(self) -> None:
-        """Pack file should stage one root file without byte-copying and force relaxed validation."""
+    def test_pack_file_run_prefers_streaming_by_default_when_supported(self) -> None:
+        """Pack file should use the streaming builder by default for supported options."""
         tmp_path: Path = self.make_temp_path()
         source_file: Path = tmp_path / "sample.bin"
         source_file.write_bytes(b"payload")
@@ -1057,45 +1058,42 @@ class TestCliCreateRun(CliTestCase):
             dry_run=True,
             verify=False,
         )
-        seen_require_game_files: list[bool] = []
-        stdout_buffer: StringIO = StringIO()
-
-        def fake_validate_input(path: Path, require_game_files: bool = True) -> tuple[str | None, list[str]]:
-            seen_require_game_files.append(require_game_files)
-            self.assertTrue(path.is_dir())
-            return None, []
-
-        def fake_build_pfs(**kwargs: object) -> BuildStats:
-            staged_root_value: object = kwargs["source_root"]
-            output_value: object = kwargs["output_path"]
-            self.assertIsInstance(staged_root_value, Path)
-            self.assertIsInstance(output_value, Path)
-            staged_root: Path = staged_root_value
-            adjusted_output: Path = output_value
-            staged_file: Path = staged_root / source_file.name
-            self.assertTrue(staged_file.exists())
-            self.assertTrue(staged_file.samefile(source_file))
-            self.assertEqual(adjusted_output.suffix, ".ffpfsc")
-            return BuildStats(input_path=staged_root, output_path=adjusted_output)
-
-        with patch.object(cli, "validate_input", side_effect=fake_validate_input), patch.object(
+        with patch.object(cli, "_run_stream_pack_file", return_value=0) as mocked_stream, patch.object(
             cli,
-            "build_pfs",
-            side_effect=fake_build_pfs,
-        ), patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(stdout_buffer):
+            "_run_pack_build",
+            side_effect=AssertionError("legacy fallback should not run"),
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
-        self.assertEqual(seen_require_game_files, [False])
-        self.assertIn(
-            (
-                "Single file compression mode enabled, adjusting output file extension "
-                "to match the container mode .ffpfsc"
-            ),
-            stdout_buffer.getvalue(),
-        )
+        mocked_stream.assert_called_once_with(args=args, source_file=source_file.resolve())
 
-    def test_pack_file_run_uses_custom_temp_folder_for_staging_and_build(self) -> None:
-        """Pack file should stage the source file inside the configured temp folder."""
+    def test_pack_file_run_uses_legacy_fallback_for_signed_images(self) -> None:
+        """Single-file packing should fall back to the legacy builder for signed images."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "sample.bin"
+        source_file.write_bytes(b"payload")
+        args: SimpleNamespace = self.make_pack_file_args(
+            source_path=source_file,
+            image_path=tmp_path / "out",
+            dry_run=True,
+            verify=False,
+        )
+        args.signed = True
+
+        with patch.object(
+            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
+        ), patch.object(
+            cli,
+            "_run_pack_build",
+            return_value=0,
+        ) as mocked_pack:
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+
+        mocked_pack.assert_called_once()
+        self.assertFalse(mocked_pack.call_args.kwargs["require_game_files"])
+
+    def test_pack_file_run_uses_custom_temp_folder_for_legacy_staging_and_build(self) -> None:
+        """Legacy fallback should stage the source file inside the configured temp folder."""
         tmp_path: Path = self.make_temp_path()
         source_file: Path = tmp_path / "sample.bin"
         source_file.write_bytes(b"payload")
@@ -1106,22 +1104,26 @@ class TestCliCreateRun(CliTestCase):
             dry_run=True,
             verify=False,
         )
+        args.signed = True
         args.temp_folder = str(temp_folder)
 
-        def fake_build_pfs(**kwargs: object) -> BuildStats:
-            staged_root_value: object = kwargs["source_root"]
-            output_value: object = kwargs["output_path"]
+        def fake_run_pack_build(**kwargs: object) -> int:
+            staged_root_value: object = kwargs["build_source_root"]
             self.assertIsInstance(staged_root_value, Path)
-            self.assertIsInstance(output_value, Path)
             staged_root: Path = staged_root_value
-            output_path_value: Path = output_value
+            staged_file: Path = staged_root / source_file.name
             self.assertTrue(staged_root.parent.samefile(temp_folder.resolve()))
-            self.assertEqual(kwargs["temp_folder"], temp_folder.resolve())
-            return BuildStats(input_path=staged_root, output_path=output_path_value)
+            self.assertTrue(staged_file.is_file())
+            self.assertTrue(staged_file.samefile(source_file))
+            return 0
 
-        with patch.object(cli, "validate_input", return_value=(None, [])), patch.object(
-            cli, "build_pfs", side_effect=fake_build_pfs
-        ), patch.object(cli, "prompt_overwrite", return_value=True):
+        with patch.object(
+            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
+        ), patch.object(
+            cli,
+            "_run_pack_build",
+            side_effect=fake_run_pack_build,
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
     def test_pack_file_run_disables_game_file_checks_during_post_create_verify(self) -> None:
@@ -1137,13 +1139,15 @@ class TestCliCreateRun(CliTestCase):
             verify=True,
         )
 
-        with patch.object(cli, "validate_input", return_value=(None, [])), patch.object(
+        with patch.object(
             cli,
-            "build_pfs",
-            return_value=BuildStats(input_path=source_file.parent, output_path=output_path),
-        ), patch.object(cli, "prompt_overwrite", return_value=True), patch.object(
-            cli, "run_image_check", return_value=([], [], {}, -1)
-        ) as mocked_check:
+            "build_pfs_stream_single_file",
+            return_value=BuildStats(input_path=source_file, output_path=output_path),
+        ), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check:
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
         self.assertFalse(mocked_check.call_args.kwargs["require_game_files"])
@@ -1667,3 +1671,212 @@ class TestRunImageCheck(CliTestCase):
         self.assertTrue(any("CRC32 mismatch" in item for item in errors))
         self.assertTrue(any("Manifest SHA256 mismatch" in item for item in errors))
         self.assertTrue(any("orphan inodes" in item for item in errors))
+
+
+class TestCliPackFileNoSpool(CliTestCase):
+    """Tests for the spool-free streaming flag on the file pack path."""
+
+    def test_pack_file_no_spool_creates_image_without_spool(self) -> None:
+        """`pack file --no-spool` writes the image and leaves no spool in the temp folder."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        src.write_bytes(b"DATA" * 20000 + b"\x00" * 60000)
+        temp: Path = tmp_path / "temp"
+        temp.mkdir()
+        out: Path = tmp_path / "PPSA.ffpfsc"
+        buffer: StringIO = StringIO()
+        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(buffer), redirect_stderr(
+            StringIO()
+        ):
+            rc: int = cli_mkpfs_main(
+                [
+                    "pack",
+                    "file",
+                    str(src),
+                    str(out),
+                    "--version",
+                    "PS5",
+                    "--inode-bits",
+                    "32",
+                    "--no-spool",
+                    "--temp-folder",
+                    str(temp),
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.exists())
+        self.assertEqual(list(temp.glob("mkpfs-*.pfsc")), [])
+
+    def test_pack_file_no_spool_falls_back_for_signed(self) -> None:
+        """Combining --no-spool with --signed should fall back to the legacy builder."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "x.exfat"
+        src.write_bytes(b"x" * 1000)
+        out: Path = tmp_path / "x.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
+        args.no_spool = True
+        args.signed = True
+        with patch.object(
+            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
+        ), patch.object(
+            cli,
+            "_run_pack_build",
+            return_value=0,
+        ) as mocked_pack:
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+        mocked_pack.assert_called_once()
+
+    def test_pack_folder_does_not_accept_no_spool(self) -> None:
+        """The --no-spool flag is only available on the file path, not the folder path."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["pack", "folder", "src", "out", "--no-spool"])
+
+    def test_pack_file_no_spool_with_verify_succeeds(self) -> None:
+        """`pack file --no-spool --verify` completes the post-create check without errors."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        src.write_bytes(b"GAMEDATA" * 20000 + b"\x00" * 200000)
+        out: Path = tmp_path / "PPSA.ffpfsc"
+        buffer: StringIO = StringIO()
+        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(buffer), redirect_stderr(
+            StringIO()
+        ):
+            rc: int = cli_mkpfs_main(
+                [
+                    "pack",
+                    "file",
+                    str(src),
+                    str(out),
+                    "--version",
+                    "PS5",
+                    "--inode-bits",
+                    "32",
+                    "--no-spool",
+                    "--verify",
+                    "--temp-folder",
+                    str(tmp_path / "temp"),
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+        self.assertEqual(rc, 0)
+
+    def test_pack_file_no_spool_prints_parameters_and_progress(self) -> None:
+        """The streaming path prints the parameters banner and a compression status line."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        src.write_bytes(b"GAMEDATA" * 20000 + b"\x00" * 200000)
+        out: Path = tmp_path / "PPSA.ffpfsc"
+        stdout_buffer: StringIO = StringIO()
+        stderr_buffer: StringIO = StringIO()
+        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(stdout_buffer), redirect_stderr(
+            stderr_buffer
+        ):
+            rc: int = cli_mkpfs_main(
+                [
+                    "pack",
+                    "file",
+                    str(src),
+                    str(out),
+                    "--version",
+                    "PS5",
+                    "--inode-bits",
+                    "32",
+                    "--no-spool",
+                    "--temp-folder",
+                    str(tmp_path / "temp"),
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        combined: str = stdout_buffer.getvalue() + stderr_buffer.getvalue()
+        self.assertIn("PFS Image Builder - Parameters", combined)
+        self.assertIn("Source path:", combined)
+        self.assertIn("Compressing 1 file", combined)
+
+    def test_pack_file_no_spool_falls_back_for_inode_bits_64(self) -> None:
+        """64-bit inode requests should fall back to the legacy single-file builder."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "x.exfat"
+        src.write_bytes(b"x" * 1000)
+        out: Path = tmp_path / "x.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
+        args.no_spool = True
+        args.inode_bits = 64
+        with patch.object(
+            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
+        ), patch.object(
+            cli,
+            "_run_pack_build",
+            return_value=0,
+        ) as mocked_pack:
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+        mocked_pack.assert_called_once()
+
+    def test_pack_file_no_spool_falls_back_for_auto_fit_block_size(self) -> None:
+        """Auto-fit block size requests should fall back to the legacy single-file builder."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "x.exfat"
+        src.write_bytes(b"x" * 1000)
+        out: Path = tmp_path / "x.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
+        args.no_spool = True
+        args.block_size = "auto-fit"
+        with patch.object(
+            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
+        ), patch.object(
+            cli,
+            "_run_pack_build",
+            return_value=0,
+        ) as mocked_pack:
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+        mocked_pack.assert_called_once()
+
+    def test_pack_file_no_spool_dry_run_writes_nothing(self) -> None:
+        """--no-spool --dry-run reports layout without writing an image."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        src.write_bytes(b"DATA" * 20000 + b"\x00" * 60000)
+        out: Path = tmp_path / "PPSA.ffpfsc"
+        buffer: StringIO = StringIO()
+        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(buffer), redirect_stderr(
+            StringIO()
+        ):
+            rc: int = cli_mkpfs_main(
+                ["pack", "file", str(src), str(out), "--no-spool", "--dry-run", "--no-adjust-output-file-extension"]
+            )
+        self.assertEqual(rc, 0)
+        self.assertFalse(out.exists())
+
+
+class TestCliTreeStructureOnly(CliTestCase):
+    """The tree command should render structure without decoding file payloads."""
+
+    def test_tree_does_not_decode_file_payloads(self) -> None:
+        """`mkpfs tree` builds the listing from metadata only, skipping payload hashing."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "blob.exfat"
+        src.write_bytes((b"GAMEDATA" * 4000) + b"\x00" * 200_000)
+        out: Path = tmp_path / "blob.ffpfsc"
+        cli.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=consts.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+        )
+        buffer: StringIO = StringIO()
+        with patch.object(cli, "verify_file_payload_hashes") as mock_verify, redirect_stdout(buffer), redirect_stderr(
+            StringIO()
+        ):
+            rc: int = cli_mkpfs_main(["tree", str(out)])
+        self.assertEqual(rc, 0)
+        mock_verify.assert_not_called()
+        self.assertIn("blob.exfat", buffer.getvalue())

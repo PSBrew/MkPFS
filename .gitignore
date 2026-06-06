@@ -212,3 +212,9 @@ docs/_build/
 # PyBuilder
 .pybuilder/
 target/
+
+# test files
+*.ffpfsc
+*.ffpfs
+*.exfat
+*.ffpkg

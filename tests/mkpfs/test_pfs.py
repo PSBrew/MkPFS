@@ -2248,3 +2248,357 @@ class TestSourceTreeScanning(PfsTestCase):
             (src / f"small_{idx}.bin").write_bytes(b"x" * 100)
 
         assert pfs_mod.choose_auto_fit_block_size(src) == 4096
+
+
+class TestEncodePfscIntoHandle(PfsTestCase):
+    """Tests for the reusable PFSC handle encoder shared with the spool path."""
+
+    def test_encode_pfsc_into_handle_matches_spool(self) -> None:
+        """Encoding into an open handle at a base offset matches the spool encoder bytes."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "src.bin"
+        src.write_bytes(b"AB" * 100_000 + b"\x00" * 50_000)
+
+        spool: Path = tmp_path / "out.pfsc"
+        spool_size, spool_comp, _spool_gain, _spool_hyp = pfs_mod._encode_pfsc_file_to_spool(
+            abs_path=src,
+            spool_path=spool,
+            threshold_gain=0,
+            min_file_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+            block_worker_count=1,
+        )
+
+        buf: io.BytesIO = io.BytesIO()
+        buf.write(b"\x00" * 4096)
+        handle_size, handle_comp, _handle_gain, _handle_hyp = pfs_mod._encode_pfsc_into_handle(
+            out=buf,
+            base_offset=4096,
+            source_path=src,
+            threshold_gain=0,
+            min_file_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+            block_worker_count=1,
+        )
+
+        assert (handle_size, handle_comp) == (spool_size, spool_comp)
+        assert buf.getvalue()[4096 : 4096 + spool_size] == spool.read_bytes()[:spool_size]
+
+
+class TestStreamSingleFileBuilder(PfsTestCase):
+    """Tests for the spool-free single-file streaming builder."""
+
+    def test_stream_single_file_byte_identical_to_spool(self) -> None:
+        """Streaming builder output is byte-identical to the spool path for the same input."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        src.write_bytes((b"GAMEDATA" * 4096) + b"\x00" * 200_000)
+
+        with patch("mkpfs.pfs.time.time", return_value=1_700_000_000.0):
+            staging: Path = tmp_path / "stage"
+            staging.mkdir()
+            (staging / "PPSA.exfat").write_bytes(src.read_bytes())
+            out_spool: Path = tmp_path / "spool.ffpfsc"
+            build_pfs(
+                source_root=staging,
+                output_path=out_spool,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS5,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=True,
+                threshold_gain=0,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+                temp_folder=tmp_path / "t1",
+            )
+
+            out_stream: Path = tmp_path / "stream.ffpfsc"
+            pfs_mod.build_pfs_stream_single_file(
+                source_file=src,
+                output_path=out_stream,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS5,
+                case_insensitive=True,
+                zlib_level=9,
+                threshold_gain=0,
+                min_file_gain=0,
+                min_compress_size=0,
+                cpu_count=1,
+                compress=True,
+                encrypted=False,
+            )
+
+        assert out_stream.read_bytes() == out_spool.read_bytes()
+
+    def test_stream_single_file_round_trip(self) -> None:
+        """A streamed image extracts back to the original file bytes."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "blob.exfat"
+        payload: bytes = bytes(range(256)) * 3000 + b"\x00" * 100_000
+        src.write_bytes(payload)
+        out: Path = tmp_path / "blob.ffpfsc"
+        pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+        )
+        dest: Path = tmp_path / "unpacked"
+        result = extract_pfs_image(image=out, output_path=dest)
+        assert not result.errors
+        assert (dest / "blob.exfat").read_bytes() == payload
+
+    def test_stream_single_file_incompressible_stores_raw(self) -> None:
+        """Random (incompressible) input falls back to raw storage and still round-trips."""
+        import os
+
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "rand.bin"
+        src.write_bytes(os.urandom(300_000))
+        out: Path = tmp_path / "rand.ffpfsc"
+        stats = pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+        )
+        assert stats.compressed_files == 0
+        dest: Path = tmp_path / "u"
+        result = extract_pfs_image(image=out, output_path=dest)
+        assert not result.errors
+        assert (dest / "rand.bin").read_bytes() == src.read_bytes()
+
+    def test_stream_single_file_encrypted_round_trip(self) -> None:
+        """An encrypted streamed image decrypts and extracts back to the source bytes."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "enc.exfat"
+        src.write_bytes(b"SECRET!!" * 5000 + b"\x00" * 80_000)
+        out: Path = tmp_path / "enc.ffpfsc"
+        key: bytes = b"\x11" * 32
+        pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=True,
+            ekpfs=key,
+        )
+        dest: Path = tmp_path / "u"
+        result = extract_pfs_image(image=out, output_path=dest, ekpfs=key)
+        assert not result.errors
+        assert (dest / "enc.exfat").read_bytes() == src.read_bytes()
+
+    def test_stream_single_file_dry_run_writes_nothing(self) -> None:
+        """The streaming builder dry-run returns stats without creating the image."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "blob.exfat"
+        src.write_bytes((b"GAMEDATA" * 4000) + b"\x00" * 200_000)
+        out: Path = tmp_path / "blob.ffpfsc"
+        stats = pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+            dry_run=True,
+        )
+        self.assertFalse(out.exists())
+        self.assertEqual(stats.total_files, 1)
+        self.assertEqual(stats.uncompressed_total_size, src.stat().st_size)
+
+    def test_stream_single_file_skips_executable_compression(self) -> None:
+        """Executable-like files are stored raw when skip_executable_compression is set."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "eboot.bin"
+        src.write_bytes((b"GAMEDATA" * 4000) + b"\x00" * 200_000)  # compressible
+        out: Path = tmp_path / "eboot.ffpfsc"
+        stats = pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+            skip_executable_compression=True,
+        )
+        self.assertEqual(stats.compressed_files, 0)
+        dest: Path = tmp_path / "u"
+        result = extract_pfs_image(image=out, output_path=dest)
+        assert not result.errors
+        self.assertEqual((dest / "eboot.bin").read_bytes(), src.read_bytes())
+
+
+class TestStreamingDecode(PfsTestCase):
+    """Tests for flat-memory block-streaming decode of inode payloads."""
+
+    def _build_single(
+        self, tmp_path: Path, payload: bytes, *, encrypted: bool = False, key: bytes | None = None
+    ) -> Path:
+        """Build a single-file image and return its path."""
+        src: Path = tmp_path / "blob.exfat"
+        src.write_bytes(payload)
+        out: Path = tmp_path / "blob.ffpfsc"
+        pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=encrypted,
+            ekpfs=key,
+        )
+        return out
+
+    def test_iter_blocks_matches_buffered_decode_compressed(self) -> None:
+        """Streaming a compressed multi-block payload equals the buffered decode and the source."""
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = (bytes(range(256)) * 4000) + b"\x00" * 200_000
+        out: Path = self._build_single(tmp_path, payload)
+        with out.open("rb") as fh:
+            header = pfs_mod.parse_image_header(fh)
+            inodes = pfs_mod.parse_image_inodes(fh, header)
+            file_inode = inodes[3]
+            self.assertTrue(file_inode.is_file)
+            self.assertTrue(file_inode.is_compressed)
+            buffered = pfs_mod.decode_inode_payload(
+                payload=pfs_mod.read_image_inode_payload(fh, header, file_inode), inode=file_inode
+            )
+            streamed = b"".join(pfs_mod.iter_inode_logical_blocks(fh, header, file_inode))
+        self.assertEqual(streamed, buffered)
+        self.assertEqual(streamed, payload)
+
+    def test_iter_blocks_matches_source_raw(self) -> None:
+        """Streaming an incompressible (raw) payload equals the source bytes."""
+        import os
+
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = os.urandom(200_000)
+        out: Path = self._build_single(tmp_path, payload)
+        with out.open("rb") as fh:
+            header = pfs_mod.parse_image_header(fh)
+            inodes = pfs_mod.parse_image_inodes(fh, header)
+            file_inode = inodes[3]
+            self.assertFalse(file_inode.is_compressed)
+            streamed = b"".join(pfs_mod.iter_inode_logical_blocks(fh, header, file_inode))
+        self.assertEqual(streamed, payload)
+
+    def test_iter_blocks_encrypted(self) -> None:
+        """Streaming decode works on an encrypted image with the EKPFS key."""
+        tmp_path: Path = self.make_temp_path()
+        key: bytes = b"\x22" * 32
+        payload: bytes = (b"ENCDATA!" * 6000) + b"\x00" * 90_000
+        out: Path = self._build_single(tmp_path, payload, encrypted=True, key=key)
+        with out.open("rb") as fh:
+            header = pfs_mod.parse_image_header(fh)
+            inodes = pfs_mod.parse_image_inodes(fh, header, ekpfs=key)
+            file_inode = inodes[3]
+            streamed = b"".join(pfs_mod.iter_inode_logical_blocks(fh, header, file_inode, ekpfs=key))
+        self.assertEqual(streamed, payload)
+
+
+class _RecordingProgress:
+    """Minimal Progress stand-in that records step() calls for assertions."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, int]] = []
+
+    def step(self, phase: str, done: int, total: int, bytes_processed: int = 0) -> None:
+        self.calls.append((phase, done, total))
+
+    def status(self, message: str) -> None:
+        pass
+
+
+class TestVerifyProgress(PfsTestCase):
+    """Tests that the verify stage reports progress when a Progress sink is supplied."""
+
+    def _build_single(self, tmp_path: Path, payload: bytes) -> Path:
+        src: Path = tmp_path / "blob.exfat"
+        src.write_bytes(payload)
+        out: Path = tmp_path / "blob.ffpfsc"
+        pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+        )
+        return out
+
+    def test_verify_file_payload_hashes_reports_progress(self) -> None:
+        """verify_file_payload_hashes drives a 'verify' progress phase to completion."""
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = (bytes(range(256)) * 4000) + b"\x00" * 200_000
+        out: Path = self._build_single(tmp_path, payload)
+        progress = _RecordingProgress()
+        with out.open("rb") as fh:
+            header = pfs_mod.parse_image_header(fh)
+            inodes = pfs_mod.parse_image_inodes(fh, header)
+            file_inodes = {"blob.exfat": 3}
+            errors: list[str] = []
+            checked, _crc, _manifest = pfs_mod.verify_file_payload_hashes(
+                fh, header, inodes, file_inodes, errors, progress=progress
+            )
+        self.assertEqual(checked, 1)
+        self.assertEqual(errors, [])
+        verify_calls = [ct for ct in progress.calls if ct[0] == "verify"]
+        self.assertTrue(verify_calls)
+        # Final verify update reaches 100% (done == total == logical size).
+        self.assertEqual(verify_calls[-1][1], verify_calls[-1][2])
+        self.assertEqual(verify_calls[-1][2], len(payload))

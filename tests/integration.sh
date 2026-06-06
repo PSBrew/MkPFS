@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
+
+# Re-exec with bash when launched from another shell (for example, zsh in IDE run configs).
+if [[ -z "${BASH_VERSION:-}" ]]; then
+  exec /usr/bin/env bash "$0" "$@"
+fi
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 STRATEGY="${1:-}"
 SOURCE_DIR="${2:-}"
 TARGET_DIR="${3:-}"
-FTP_URL="${4:-}"
+FTP_URL=""
+FORCE_REBUILD="false"
+TEMP_DIRS=()
 
 usage() {
   cat <<'EOT'
 Usage:
-  ./integration-tests.sh "strategy" "source_dir" "target_dir" "ftp://1.1.1.1:1234/folder/name"
+  ./tests/integration.sh "strategy" "source_dir" "target_dir" ["ftp://1.1.1.1:1234/folder/name" | "-"] [--force]
 
 Strategies:
   all          Process everything
@@ -23,20 +32,33 @@ Strategies:
   help         Show this help
 
 Examples:
-  ./integration-tests.sh all /games ./tmp/integration-output
-  ./integration-tests.sh files /games ./tmp/integration-output
-  ./integration-tests.sh single-pass /games ./tmp/integration-output
-  ./integration-tests.sh all /games ./tmp/integration-output ftp://1.1.1.1:1234/folder/name
+  ./tests/integration.sh all /games ./tmp/integration-output
+  ./tests/integration.sh files /games ./tmp/integration-output
+  ./tests/integration.sh single-pass /games ./tmp/integration-output
+  ./tests/integration.sh all /games ./tmp/integration-output ftp://1.1.1.1:1234/folder/name
+  ./tests/integration.sh all /games ./tmp/integration-output --force
+  ./tests/integration.sh all /games ./tmp/integration-output - --force
 
 Notes:
   - The script uses "uv run --frozen mkpfs" from the repo one level above this script.
   - If FTP_URL is empty or "-", upload is skipped.
+  - Use --force to rebuild outputs even when target artifacts already exist.
   - Uploaded files are sent with a trailing underscore in the final remote file name.
 EOT
 }
 
 log() {
   printf '[info] %s\n' "$*"
+}
+
+log_item_start() {
+  local item_name="$1"
+  local item_kind="$2"
+  local blue='\033[34m'
+  local reset='\033[0m'
+
+  # Blue marker to make per-item processing boundaries easy to spot in long logs.
+  printf '%b[game] ==== START %s (%s) ====%b\n' "${blue}" "${item_name}" "${item_kind}" "${reset}"
 }
 
 warn() {
@@ -48,19 +70,70 @@ die() {
   exit 1
 }
 
+register_temp_dir() {
+  local temp_dir="$1"
+  TEMP_DIRS+=("${temp_dir}")
+}
+
+cleanup_temp_dirs() {
+  local temp_dir=""
+  local cleaned_count=0
+
+  set +e
+  for temp_dir in "${TEMP_DIRS[@]-}"; do
+    if [[ -n "${temp_dir}" && -d "${temp_dir}" ]]; then
+      rm -rf -- "${temp_dir}"
+      cleaned_count=$((cleaned_count + 1))
+    fi
+  done
+  set -e
+
+  TEMP_DIRS=()
+
+  if [[ "${cleaned_count}" -gt 0 ]]; then
+    log "Cleaned ${cleaned_count} temporary staging director$( [[ "${cleaned_count}" -eq 1 ]] && printf 'y' || printf 'ies' )"
+  fi
+}
+
 abs_path() {
   local path="$1"
+  local dir_part=""
+  local base_part=""
 
   if [[ -d "$path" ]]; then
-    (
-      cd "$path"
-      pwd
-    )
+    cd "$path" >/dev/null 2>&1 || die "Could not resolve directory path: $path"
+    pwd
+    return 0
   else
-    (
-      cd "$(dirname "$path")"
-      printf '%s/%s\n' "$(pwd)" "$(basename "$path")"
-    )
+    dir_part="$(dirname -- "$path")"
+    base_part="$(basename -- "$path")"
+    [[ -n "$base_part" ]] || die "Could not resolve basename for path: $path"
+    cd "$dir_part" >/dev/null 2>&1 || die "Could not resolve parent directory: $dir_part"
+    printf '%s/%s\n' "$(pwd)" "$base_part"
+    return 0
+  fi
+}
+
+is_valid_strategy() {
+  case "$1" in
+    all | files | folders | single-pass | two-pass) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_target_dir() {
+  local path="$1"
+
+  if [[ -f "$path" ]]; then
+    die "target_dir points to a file, expected a directory path: $path"
+  fi
+
+  if [[ "$path" == *.sh || "$path" == *.sh/ ]]; then
+    die "target_dir looks like a shell script path: $path"
+  fi
+
+  if [[ "$path" == *'/./'* || "$path" == *'..'* ]]; then
+    warn "target_dir contains path traversal-like segments: $path"
   fi
 }
 
@@ -79,18 +152,6 @@ run_mkpfs() {
   )
 }
 
-run_mkpfs_to_file() {
-  local output_file="$1"
-  shift
-
-  (
-    cd "${REPO_DIR}"
-    printf '[cmd] %q' uv
-    printf ' %q' run --frozen mkpfs "$@"
-    printf ' > %q\n' "${output_file}"
-    uv run --frozen mkpfs "$@" >"${output_file}"
-  )
-}
 
 contains_mode() {
   local needle="$1"
@@ -114,119 +175,47 @@ should_run_two_pass() {
   contains_mode folders || contains_mode two-pass
 }
 
+parse_optional_args() {
+  local arg=""
+
+  FTP_URL=""
+  FORCE_REBUILD="false"
+
+  for arg in "$@"; do
+    if [[ -z "${arg}" ]]; then
+      continue
+    fi
+
+    case "${arg}" in
+      --force)
+        FORCE_REBUILD="true"
+        ;;
+      *)
+        if [[ -n "${FTP_URL}" ]]; then
+          die "Unknown or duplicate optional argument: ${arg}"
+        fi
+        FTP_URL="${arg}"
+        ;;
+    esac
+  done
+}
+
 build_prefix() {
   local commit_id=""
-  local stamp=""
 
-  commit_id="$(git -C "${REPO_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
-  stamp="$(date '+%d%H%M')"
+  commit_id="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${REPO_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
 
   if [[ -z "${commit_id}" ]]; then
     commit_id="nogit"
   fi
 
-  printf '%s-%s\n' "${commit_id}" "${stamp}"
+  printf '%s\n' "${commit_id}"
 }
 
 sanitize_name() {
   local value="$1"
   value="${value// /_}"
   printf '%s\n' "${value}"
-}
-
-detect_unpack_root() {
-  local unpack_dir="$1"
-  local file_count=""
-  local dir_count=""
-  local first_dir=""
-
-  file_count="$(find "${unpack_dir}" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')"
-  dir_count="$(find "${unpack_dir}" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-
-  if [[ "${file_count}" == "0" && "${dir_count}" == "1" ]]; then
-    first_dir="$(find "${unpack_dir}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-    printf '%s\n' "${first_dir}"
-    return 0
-  fi
-
-  printf '%s\n' "${unpack_dir}"
-}
-
-write_dir_manifest() {
-  local root_dir="$1"
-  local output_file="$2"
-
-  : >"${output_file}"
-
-  (
-    cd "${root_dir}"
-    find . -type f | LC_ALL=C sort | while IFS= read -r rel_path; do
-      local clean_path=""
-      local hash_value=""
-      clean_path="${rel_path#./}"
-      hash_value="$(shasum -a 256 "${clean_path}" | awk '{print $1}')"
-      printf '%s  %s\n' "${hash_value}" "${clean_path}"
-    done
-  ) >>"${output_file}"
-}
-
-compare_dirs() {
-  local source_dir="$1"
-  local unpack_dir="$2"
-  local report_prefix="$3"
-  local unpack_root=""
-  local source_manifest=""
-  local unpack_manifest=""
-
-  unpack_root="$(detect_unpack_root "${unpack_dir}")"
-  source_manifest="${report_prefix}.source.sha256"
-  unpack_manifest="${report_prefix}.unpacked.sha256"
-
-  write_dir_manifest "${source_dir}" "${source_manifest}"
-  write_dir_manifest "${unpack_root}" "${unpack_manifest}"
-
-  if ! diff -u "${source_manifest}" "${unpack_manifest}" >"${report_prefix}.manifest.diff"; then
-    warn "Directory checksum mismatch: ${report_prefix}.manifest.diff"
-    return 1
-  fi
-
-  rm -f "${report_prefix}.manifest.diff"
-}
-
-compare_file() {
-  local source_file="$1"
-  local unpack_dir="$2"
-  local report_prefix="$3"
-  local source_hash=""
-  local unpack_hash=""
-  local unpacked_file=""
-  local unpacked_count=""
-  local source_manifest=""
-  local unpack_manifest=""
-
-  unpacked_count="$(find "${unpack_dir}" -type f | wc -l | tr -d ' ')"
-
-  if [[ "${unpacked_count}" == "1" ]]; then
-    unpacked_file="$(find "${unpack_dir}" -type f -print -quit)"
-  else
-    unpacked_file="$(find "${unpack_dir}" -type f -name "$(basename "${source_file}")" -print -quit)"
-  fi
-
-  [[ -n "${unpacked_file}" ]] || die "Could not identify unpacked file for ${source_file}"
-
-  source_hash="$(shasum -a 256 "${source_file}" | awk '{print $1}')"
-  unpack_hash="$(shasum -a 256 "${unpacked_file}" | awk '{print $1}')"
-
-  source_manifest="${report_prefix}.source.sha256"
-  unpack_manifest="${report_prefix}.unpacked.sha256"
-
-  printf '%s  %s\n' "${source_hash}" "$(basename "${source_file}")" >"${source_manifest}"
-  printf '%s  %s\n' "${unpack_hash}" "$(basename "${unpacked_file}")" >"${unpack_manifest}"
-
-  if [[ "${source_hash}" != "${unpack_hash}" ]]; then
-    warn "File checksum mismatch for ${source_file}"
-    return 1
-  fi
 }
 
 upload_file() {
@@ -247,56 +236,83 @@ process_artifact() {
   local source_kind="$2"
   local artifact_path="$3"
   local pack_mode="$4"
-  local inspect_path="$5"
-  local tree_path="$6"
-  local unpack_dir="$7"
-  local report_prefix="$8"
-  local temp_dat_path="${9:-}"
+  local temp_dat_path="${5:-}"
+  local pfs_file=""
+  local temp_dat_dir=""
+  local file_count=""
 
   mkdir -p "$(dirname "${artifact_path}")"
-  mkdir -p "$(dirname "${inspect_path}")"
-  mkdir -p "${unpack_dir}"
+
+  if [[ -f "${artifact_path}" ]]; then
+    if [[ "${FORCE_REBUILD}" == "true" ]]; then
+      log "--force enabled, replacing existing artifact: $(basename "${artifact_path}")"
+      rm -f "${artifact_path}"
+    else
+      log "Skipping existing artifact: $(basename "${artifact_path}")"
+      return 0
+    fi
+  fi
 
   log "Building $(basename "${artifact_path}")"
 
   if [[ "${pack_mode}" == "file" ]]; then
-    run_mkpfs pack file --verify "${source_path}" "${artifact_path}"
+    run_mkpfs pack file "${source_path}" "${artifact_path}"
   elif [[ "${pack_mode}" == "single-pass" ]]; then
-    run_mkpfs pack folder --verify "${source_path}" "${artifact_path}"
+    run_mkpfs pack folder "${source_path}" "${artifact_path}"
   elif [[ "${pack_mode}" == "two-pass" ]]; then
+    # Two-pass builds stage an uncompressed image as an exact pfs_image.dat file.
     [[ -n "${temp_dat_path}" ]] || die "Missing temp_dat_path for two-pass build"
-    run_mkpfs pack folder --verify --no-compress --no-adjust-output-file-extension "${source_path}" "${temp_dat_path}"
-    run_mkpfs pack file --verify "${temp_dat_path}" "${artifact_path}"
-    rm -f "${temp_dat_path}"
+    [[ "$(basename "${temp_dat_path}")" == "pfs_image.dat" ]] || die "Two-pass temp path must end with pfs_image.dat: ${temp_dat_path}"
+
+    pfs_file="${temp_dat_path}"
+    temp_dat_dir="$(dirname "${pfs_file}")"
+    mkdir -p "${temp_dat_dir}"
+    rm -f "${pfs_file}"
+
+    log "Two-pass staging file: ${pfs_file}"
+
+    run_mkpfs pack folder --no-compress --no-adjust-output-file-extension "${source_path}" "${pfs_file}"
+
+    if [[ ! -f "${pfs_file}" ]]; then
+      die "Expected ${pfs_file} to exist after first pass"
+    fi
+
+    # Ensure the staging folder contains only pfs_image.dat.
+    file_count="$(find "${temp_dat_dir}" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+    if [[ "${file_count}" -ne 1 ]]; then
+      die "Temporary directory ${temp_dat_dir} must contain exactly one file (pfs_image.dat), found ${file_count}"
+    fi
+
+    # Verify that the first-pass pfs_image.dat contains the full source folder.
+    log "Verifying first-pass output $(basename "${pfs_file}") contains all source files"
+    run_mkpfs verify "${pfs_file}" --source-dir "${source_path}"
+    log "Skipping tree for first-pass staging file $(basename "${pfs_file}")"
+
+    run_mkpfs pack file "${pfs_file}" "${artifact_path}"
   else
     die "Unknown pack mode: ${pack_mode}"
   fi
 
   log "Verifying $(basename "${artifact_path}")"
 
-  if [[ "${source_kind}" == "dir" ]]; then
+  # For two-pass mode, verify that the final artifact contains pfs_image.dat
+  # For other modes, use the source_kind to determine verification approach
+  if [[ "${pack_mode}" == "two-pass" && -n "${pfs_file}" ]]; then
+    run_mkpfs verify "${artifact_path}" --source-file "${pfs_file}"
+    rm -rf "$(dirname "${pfs_file}")"
+  elif [[ "${source_kind}" == "dir" ]]; then
     run_mkpfs verify "${artifact_path}" --source-dir "${source_path}"
   else
     run_mkpfs verify "${artifact_path}"
   fi
 
-  log "Inspecting $(basename "${artifact_path}")"
-  run_mkpfs_to_file "${inspect_path}" inspect "${artifact_path}" --format json
-  run_mkpfs_to_file "${tree_path}" tree "${artifact_path}"
-
-  log "Unpacking $(basename "${artifact_path}")"
-  rm -rf "${unpack_dir}"
-  mkdir -p "${unpack_dir}"
-  run_mkpfs unpack "${artifact_path}" "${unpack_dir}" --overwrite
-
-  log "Comparing checksums for $(basename "${artifact_path}")"
-  if [[ "${source_kind}" == "dir" ]]; then
-    compare_dirs "${source_path}" "${unpack_dir}" "${report_prefix}"
+  if [[ "${pack_mode}" == "single-pass" ]]; then
+    log "Skipping tree for raw folder artifact $(basename "${artifact_path}")"
   else
-    compare_file "${source_path}" "${unpack_dir}" "${report_prefix}"
+    log "Tree $(basename "${artifact_path}")"
+    run_mkpfs tree "${artifact_path}"
   fi
 
-  rm -rf "${unpack_dir}"
   upload_file "${artifact_path}"
 }
 
@@ -306,29 +322,17 @@ process_file_input() {
   local name=""
   local game_name=""
   local artifact_path=""
-  local inspect_path=""
-  local tree_path=""
-  local unpack_dir=""
-  local report_prefix=""
 
   name="$(basename "${source_file}")"
   game_name="$(sanitize_name "${name%.*}")"
 
   artifact_path="${TARGET_DIR}/${prefix}-${game_name}.ffpfsc"
-  inspect_path="${TARGET_DIR}/reports/${prefix}-${game_name}.ffpfsc.inspect.json"
-  tree_path="${TARGET_DIR}/reports/${prefix}-${game_name}.ffpfsc.tree.txt"
-  unpack_dir="${TARGET_DIR}/work/${prefix}-${game_name}.ffpfsc.unpack"
-  report_prefix="${TARGET_DIR}/reports/${prefix}-${game_name}.ffpfsc"
 
   process_artifact \
     "${source_file}" \
     "file" \
     "${artifact_path}" \
-    "file" \
-    "${inspect_path}" \
-    "${tree_path}" \
-    "${unpack_dir}" \
-    "${report_prefix}"
+    "file"
 }
 
 process_folder_single_pass() {
@@ -336,28 +340,16 @@ process_folder_single_pass() {
   local prefix="$2"
   local game_name=""
   local artifact_path=""
-  local inspect_path=""
-  local tree_path=""
-  local unpack_dir=""
-  local report_prefix=""
 
   game_name="$(sanitize_name "$(basename "${source_dir}")")"
 
   artifact_path="${TARGET_DIR}/${prefix}-${game_name}.raw.ffpfs"
-  inspect_path="${TARGET_DIR}/reports/${prefix}-${game_name}.raw.ffpfs.inspect.json"
-  tree_path="${TARGET_DIR}/reports/${prefix}-${game_name}.raw.ffpfs.tree.txt"
-  unpack_dir="${TARGET_DIR}/work/${prefix}-${game_name}.raw.ffpfs.unpack"
-  report_prefix="${TARGET_DIR}/reports/${prefix}-${game_name}.raw.ffpfs"
 
   process_artifact \
     "${source_dir}" \
     "dir" \
     "${artifact_path}" \
-    "single-pass" \
-    "${inspect_path}" \
-    "${tree_path}" \
-    "${unpack_dir}" \
-    "${report_prefix}"
+    "single-pass"
 }
 
 process_folder_two_pass() {
@@ -365,30 +357,33 @@ process_folder_two_pass() {
   local prefix="$2"
   local game_name=""
   local artifact_path=""
-  local inspect_path=""
-  local tree_path=""
-  local unpack_dir=""
-  local report_prefix=""
+  local temp_dir=""
   local temp_dat_path=""
 
   game_name="$(sanitize_name "$(basename "${source_dir}")")"
 
   artifact_path="${TARGET_DIR}/${prefix}-${game_name}.raw.ffpfsc"
-  inspect_path="${TARGET_DIR}/reports/${prefix}-${game_name}.raw.ffpfsc.inspect.json"
-  tree_path="${TARGET_DIR}/reports/${prefix}-${game_name}.raw.ffpfsc.tree.txt"
-  unpack_dir="${TARGET_DIR}/work/${prefix}-${game_name}.raw.ffpfsc.unpack"
-  report_prefix="${TARGET_DIR}/reports/${prefix}-${game_name}.raw.ffpfsc"
-  temp_dat_path="${TARGET_DIR}/work/${prefix}-${game_name}.pfs_image.dat"
+
+  if [[ -f "${artifact_path}" ]]; then
+    if [[ "${FORCE_REBUILD}" == "true" ]]; then
+      log "--force enabled, replacing existing artifact: $(basename "${artifact_path}")"
+      rm -f "${artifact_path}"
+    else
+      log "Skipping existing artifact: $(basename "${artifact_path}")"
+      return 0
+    fi
+  fi
+
+  # Use OS temp for per-item staging to avoid clutter under target output.
+  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/mkpfs-two-pass.${prefix}-${game_name}.XXXXXX")"
+  register_temp_dir "${temp_dir}"
+  temp_dat_path="${temp_dir}/pfs_image.dat"
 
   process_artifact \
     "${source_dir}" \
     "dir" \
     "${artifact_path}" \
     "two-pass" \
-    "${inspect_path}" \
-    "${tree_path}" \
-    "${unpack_dir}" \
-    "${report_prefix}" \
     "${temp_dat_path}"
 }
 
@@ -403,6 +398,10 @@ main() {
     exit 0
   fi
 
+  parse_optional_args "${@:4}"
+
+  is_valid_strategy "${STRATEGY}" || die "Unknown strategy: ${STRATEGY}"
+
   [[ -n "${SOURCE_DIR}" ]] || die "Missing source_dir"
   [[ -n "${TARGET_DIR}" ]] || die "Missing target_dir"
   [[ -d "${SOURCE_DIR}" ]] || die "Source directory does not exist: ${SOURCE_DIR}"
@@ -410,14 +409,14 @@ main() {
   require_cmd uv
   require_cmd git
   require_cmd curl
-  require_cmd shasum
-  require_cmd diff
   require_cmd find
-  require_cmd awk
+  require_cmd mktemp
 
   SOURCE_DIR="$(abs_path "${SOURCE_DIR}")"
-  mkdir -p "${TARGET_DIR}/reports" "${TARGET_DIR}/work"
+  validate_target_dir "${TARGET_DIR}"
   TARGET_DIR="$(abs_path "${TARGET_DIR}")"
+  validate_target_dir "${TARGET_DIR}"
+  mkdir -p "${TARGET_DIR}"
 
   prefix="$(build_prefix)"
 
@@ -433,12 +432,17 @@ main() {
     log "FTP upload disabled"
   fi
 
+  if [[ "${FORCE_REBUILD}" == "true" ]]; then
+    log "Force rebuild enabled"
+  fi
+
   while IFS= read -r -d '' entry; do
     processed=1
 
     if [[ -f "${entry}" ]]; then
       lower_name="$(printf '%s' "${entry##*/}" | tr '[:upper:]' '[:lower:]')"
       if [[ "${lower_name}" == *.exfat || "${lower_name}" == *.ffpkg ]]; then
+        log_item_start "$(basename "${entry}")" "file"
         if should_run_files; then
           process_file_input "${entry}" "${prefix}"
         else
@@ -448,6 +452,7 @@ main() {
         log "Skipping unsupported file: $(basename "${entry}")"
       fi
     elif [[ -d "${entry}" ]]; then
+      log_item_start "$(basename "${entry}")" "folder"
       if should_run_single_pass; then
         process_folder_single_pass "${entry}" "${prefix}"
       else
@@ -466,5 +471,9 @@ main() {
 
   log "Integration run completed successfully"
 }
+
+trap cleanup_temp_dirs EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 main "$@"

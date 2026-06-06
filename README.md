@@ -220,6 +220,7 @@ mkpfs pack file [-h] [--adjust-output-file-extension | --no-adjust-output-file-e
                 [--compression-level COMPRESSION_LEVEL]
                 [--max-compressed-ratio MAX_COMPRESSED_RATIO]
                 [--min-compress-size MIN_COMPRESS_SIZE]
+                [--no-spool]
                 [--skip-executable-compression] [--signed] [--encrypted]
                 [--ekpfs-key EKPFS_KEY] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify]
                 source_file image_file
@@ -233,38 +234,44 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --verify
 mkpfs pack file ./payload.exfat ./payload.ffpfsc --temp-folder ./tmp/mkpfs
 ```
 
-| Parameter | Description |
-| --- | --- |
-| `source_file` | Single source file to pack. |
-| `image_file` | Output image file path. |
-| `-h`, `--help` | Show help and exit. |
-| `--adjust-output-file-extension` | Automatically adjust the output extension to match the detected pack mode. This is the default. |
-| `--no-adjust-output-file-extension` | Keep the requested output file name unchanged. |
-| `--compress` | Enable PFSC block compression. This is the default. |
-| `--no-compress` | Disable PFSC block compression. |
-| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `0`. |
-| `--block-size BLOCK_SIZE` | PFS block size in bytes, `auto`, or `auto-fit`. Default: `auto`, which resolves to `65536`; `auto-fit` picks 4096..65536 by estimated file-data padding. |
-| `--version {PS4,PS5}` | PFS profile version. Default: `PS4`. |
-| `--inode-bits {32,64}` | Inode width mode bit. Default: `32`. |
-| `--case-sensitive` | Build a case-sensitive image. |
-| `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior. |
-| `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count())`, non-zero uses `max(1, user value)`. |
-| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `7`. |
-| `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: disabled. |
-| `--min-compress-size MIN_COMPRESS_SIZE` | Store files smaller than this many bytes raw without trying PFSC compression. Use `65536` to skip files smaller than one PFSC logical block. Default: `0`. |
-| `--skip-executable-compression` | Store `eboot*.bin`, `*.prx`, and `*.sprx` files raw even when PFSC compression is enabled. Default: enabled. |
-| `--signed` | Build a signed PFS image using a zero EKPFS key and seed. |
-| `--encrypted` | Encrypt filesystem blocks with AES-XTS. |
-| `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
-| `--temp-folder TEMP_FOLDER` | Directory used for temporary pack artifacts, including the one-file staging tree and PFSC spool files. Default: the system temp folder. |
-| `--verbose` | Print verbose per-file decisions during packing. |
-| `--dry-run` | Scan, layout, and report only. Do not write an image file. |
-| `--verify` | Run `mkpfs verify` automatically after a successful pack. |
+| Parameter                                     | Description                                                                                                                                                                                             |
+|-----------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `source_file`                                 | Single source file to pack.                                                                                                                                                                             |
+| `image_file`                                  | Output image file path.                                                                                                                                                                                 |
+| `-h`, `--help`                                | Show help and exit.                                                                                                                                                                                     |
+| `--adjust-output-file-extension`              | Automatically adjust the output extension to match the detected pack mode. This is the default.                                                                                                         |
+| `--no-adjust-output-file-extension`           | Keep the requested output file name unchanged.                                                                                                                                                          |
+| `--compress`                                  | Enable PFSC block compression. This is the default.                                                                                                                                                     |
+| `--no-compress`                               | Disable PFSC block compression.                                                                                                                                                                         |
+| `--threshold-gain THRESHOLD_GAIN`             | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `0`.                                                                                                                   |
+| `--block-size BLOCK_SIZE`                     | PFS block size in bytes, `auto`, or `auto-fit`. Default: `auto`, which resolves to `65536`; `auto-fit` picks 4096..65536 by estimated file-data padding.                                                |
+| `--version {PS4,PS5}`                         | PFS profile version. Default: `PS4`.                                                                                                                                                                    |
+| `--inode-bits {32,64}`                        | Inode width mode bit. Default: `32`.                                                                                                                                                                    |
+| `--case-sensitive`                            | Build a case-sensitive image.                                                                                                                                                                           |
+| `--case-insensitive`                          | Set the case-insensitive mode bit. This is the default behavior.                                                                                                                                        |
+| `--cpu-count CPU_COUNT`                       | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count() - 1)`, non-zero uses `max(1, user value)`.                                                                          |
+| `--compression-level COMPRESSION_LEVEL`       | Zlib compression level from `0` to `9`. Default: `7`.                                                                                                                                                   |
+| `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: disabled.                                                            |
+| `--min-compress-size MIN_COMPRESS_SIZE`       | Store files smaller than this many bytes raw without trying PFSC compression. Use `65536` to skip files smaller than one PFSC logical block. Default: `0`.                                              |
+| `--no-spool`                                  | Keep preferring direct-to-image streaming for single-file packing. This is already the default when supported; unsupported option combinations transparently fall back to the legacy staged/spool path. |
+| `--skip-executable-compression`               | Store `eboot*.bin`, `*.prx`, and `*.sprx` files raw even when PFSC compression is enabled. Default: enabled.                                                                                            |
+| `--signed`                                    | Build a signed PFS image using a zero EKPFS key and seed.                                                                                                                                               |
+| `--encrypted`                                 | Encrypt filesystem blocks with AES-XTS.                                                                                                                                                                 |
+| `--ekpfs-key EKPFS_KEY`                       | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key.                                                                                                                 |
+| `--temp-folder TEMP_FOLDER`                   | Directory used for temporary pack artifacts, including the one-file staging tree and PFSC spool files. Default: the system temp folder.                                                                 |
+| `--verbose`                                   | Print verbose per-file decisions during packing.                                                                                                                                                        |
+| `--dry-run`                                   | Scan, layout, and report only. Do not write an image file.                                                                                                                                              |
+| `--verify`                                    | Run `mkpfs verify` automatically after a successful pack.                                                                                                                                               |
 
 Notes:
 
-- Single-file packing stages the file in a temporary one-file tree using links, so the source payload is not duplicated on disk.
-- Use `--temp-folder` when you want staged files and PFSC spool files to live somewhere other than the system temp directory.
+- `pack file` now uses the direct-to-image streaming builder by default for supported option combinations. It
+  automatically falls back to the legacy staged/spool path for `--signed`, `--inode-bits 64`, and
+  `--block-size auto-fit`.
+- Single-file fallback mode stages the file in a temporary one-file tree using links, so the source payload is not
+  duplicated on disk.
+- Use `--temp-folder` when you want fallback staged files and any legacy PFSC spool files to live somewhere other than
+  the system temp directory.
 - The default adjusted extension for single-file output is `.ffpfsc`.
 - If `pack file` fails on macOS with `OSError: [Errno 22] Invalid argument` during PFSC compression, rerun with `--cpu-count 1` to keep block compression in-process.
   If the source lives on a removable or network volume, also try a local `--temp-folder` on a writable APFS volume.
@@ -383,7 +390,7 @@ PFS Image Builder - Parameters
   Compression:       enabled
   Game-file checks:   disabled
   Threshold gain:    20%
-  CPU cores:         auto (max(1, cpu_count()))
+  CPU cores:         7 (auto)
   Zlib level:        7
   Dry run:           no
 ======================================================================

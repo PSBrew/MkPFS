@@ -11,10 +11,12 @@ import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__, consts
 from .logging import error, info, warning
+from .pbar import Progress
 from .pfs import (
     BuildError,
     BuildStats,
@@ -24,6 +26,7 @@ from .pfs import (
     PFSImageInspection,
     build_expected_fpt,
     build_pfs,
+    build_pfs_stream_single_file,
     build_tree_from_uroot,
     choose_auto_fit_block_size,
     compose_pfs_mode_with_sign,
@@ -336,14 +339,18 @@ def get_destination_space_error_message(*, source_root: Path, output_path: Path)
     """Build an insufficient-destination-space error for pack preflight.
 
     Args:
-        source_root: Source directory whose raw file bytes must fit.
+        source_root: Source directory or single source file whose raw bytes must fit.
         output_path: Requested output image destination.
 
     Returns:
         Error text when free destination space is insufficient, otherwise
         ``None``.
     """
-    required_raw_size_bytes: int = calculate_source_raw_size_bytes(source_root=source_root)
+    required_raw_size_bytes: int
+    if source_root.is_file():
+        required_raw_size_bytes = source_root.stat().st_size
+    else:
+        required_raw_size_bytes = calculate_source_raw_size_bytes(source_root=source_root)
     probe_path: Path = resolve_disk_usage_probe_path(output_path=output_path)
     free_space_bytes: int = shutil.disk_usage(path=probe_path).free
     if free_space_bytes >= required_raw_size_bytes:
@@ -427,11 +434,14 @@ def run_image_check(
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
     require_game_files: bool = False,
+    verify_payloads: bool = True,
 ) -> tuple[list[str], list[str], dict[int, list[ParsedDirent]], int]:
     errors: list[str] = []
     warnings: list[str] = []
     tree: dict[int, list[ParsedDirent]] = {}
     uroot_inode = -1
+    # Show verify/compare progress only for interactive report runs.
+    progress: Progress = Progress(enabled=emit_report)
 
     if not image.exists() or not image.is_file():
         return [f"image path does not exist or is not a file: {image}"], [], tree, uroot_inode
@@ -465,34 +475,44 @@ def run_image_check(
             case_insensitive = bool(header.mode & consts.PFS_MODE_CASE_INSENSITIVE)
             expected_fpt = build_expected_fpt(file_inodes, dir_inodes, case_insensitive)
             validate_fpt_maps(fpt_map, collision_map, expected_fpt, errors)
-            if require_game_files:
-                validate_ps5_checklist(
+            # Payload-content passes (decode every file). Skipped for structure-only
+            # callers such as the tree listing, which need only the directory layout.
+            checked_files: int = 0
+            data_crc32: int = 0
+            manifest_sha256: str = ""
+            if verify_payloads:
+                if require_game_files:
+                    validate_ps5_checklist(
+                        fh,
+                        header,
+                        inodes,
+                        file_inodes,
+                        warnings,
+                        errors,
+                        ekpfs=ekpfs,
+                        new_crypt=new_crypt,
+                    )
+                checked_files, data_crc32, manifest_sha256 = verify_file_payload_hashes(
                     fh,
                     header,
                     inodes,
                     file_inodes,
-                    warnings,
                     errors,
                     ekpfs=ekpfs,
                     new_crypt=new_crypt,
+                    progress=progress,
                 )
 
-            checked_files, data_crc32, manifest_sha256 = verify_file_payload_hashes(
-                fh,
-                header,
-                inodes,
-                file_inodes,
-                errors,
-                ekpfs=ekpfs,
-                new_crypt=new_crypt,
-            )
-
-            if expected_crc32 is not None and data_crc32 != expected_crc32:
-                errors.append(f"CRC32 mismatch: actual 0x{data_crc32:08X}, expected 0x{expected_crc32:08X}")
-            if expected_manifest_sha256 is not None and manifest_sha256.lower() != expected_manifest_sha256.lower():
-                errors.append(
-                    f"Manifest SHA256 mismatch: actual {manifest_sha256}, expected {expected_manifest_sha256.lower()}"
-                )
+                if expected_crc32 is not None and data_crc32 != expected_crc32:
+                    errors.append(f"CRC32 mismatch: actual 0x{data_crc32:08X}, expected 0x{expected_crc32:08X}")
+                if (
+                    expected_manifest_sha256 is not None
+                    and manifest_sha256.lower() != expected_manifest_sha256.lower()
+                ):
+                    errors.append(
+                        f"Manifest SHA256 mismatch: actual {manifest_sha256}, "
+                        f"expected {expected_manifest_sha256.lower()}"
+                    )
 
             reachable = set(file_inodes.values()) | set(dir_inodes.values()) | set(special_inodes)
             orphan_inodes = sorted(i.number for i in inodes if i.number not in reachable)
@@ -505,7 +525,15 @@ def run_image_check(
 
             if source is not None:
                 validate_source_match(
-                    fh, header, inodes, file_inodes, source, errors, ekpfs=ekpfs, new_crypt=new_crypt
+                    fh,
+                    header,
+                    inodes,
+                    file_inodes,
+                    source,
+                    errors,
+                    ekpfs=ekpfs,
+                    new_crypt=new_crypt,
+                    progress=progress,
                 )
 
             compressed_count = sum(1 for i in file_inodes.values() if inodes[i].is_compressed)
@@ -680,6 +708,193 @@ def _resolve_pack_temp_folder(args: argparse.Namespace) -> Path:
     return resolve_temp_root(temp_folder=temp_folder)
 
 
+def _can_stream_pack_file(*, args: argparse.Namespace) -> bool:
+    """Return whether single-file packing can use the streaming builder.
+
+    Args:
+        args: Parsed CLI arguments for the single-file pack workflow.
+
+    Returns:
+        True when the streaming builder supports the requested options.
+    """
+    block_size_arg: str = str(getattr(args, "block_size", "")).strip().lower()
+    return not (
+        bool(getattr(args, "signed", False))
+        or int(getattr(args, "inode_bits", 32)) != 32
+        or block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}
+    )
+
+
+@dataclass(frozen=True)
+class PackBuildConfig:
+    """Validated, derived pack options shared by folder and single-file flows.
+
+    Attributes:
+        block_size: Resolved filesystem block size in bytes.
+        compress: Whether PFSC compression is enabled.
+        threshold_gain: Minimum per-block gain percent to keep PFSC blocks.
+        min_file_gain: Minimum whole-file gain percent required to store PFSC.
+        min_compress_size: Minimum raw size eligible for PFSC.
+        case_insensitive: Whether the case-insensitive mode bit is set.
+        pfs_version: PFS profile version number.
+        encrypted: Whether filesystem blocks are encrypted.
+        new_crypt: Whether the alternate EKPFS derivation is used.
+        ekpfs_key: Resolved EKPFS key material.
+        zlib_level: Zlib compression level.
+        cpu_count: Requested CPU worker count.
+        skip_executable_compression: Whether executable-like files stay raw.
+        inode_bits: Inode width in bits.
+    """
+
+    block_size: int
+    compress: bool
+    threshold_gain: int
+    min_file_gain: int
+    max_compressed_ratio: int | None
+    min_compress_size: int
+    case_insensitive: bool
+    pfs_version: int
+    encrypted: bool
+    new_crypt: bool
+    ekpfs_key: bytes
+    zlib_level: int
+    cpu_count: int
+    skip_executable_compression: bool
+    inode_bits: int
+
+
+def _resolve_pack_build_config(args: argparse.Namespace, *, block_size: int) -> PackBuildConfig:
+    """Validate shared pack CLI options and derive the common build configuration.
+
+    Args:
+        args: Parsed pack CLI arguments.
+        block_size: Resolved block size (already chosen via auto/auto-fit/explicit).
+
+    Returns:
+        Validated configuration shared by the folder and single-file pack flows.
+
+    Raises:
+        BuildError: If any shared pack parameter is invalid.
+    """
+    if not is_power_of_two(block_size):
+        raise BuildError("--block-size must be a power of two")
+    if block_size < 0x1000 or block_size > 0x200000:
+        raise BuildError("--block-size must be between 4096 and 2097152")
+    if args.threshold_gain < 0 or args.threshold_gain > 100:
+        raise BuildError("--threshold-gain must be within 0..100")
+    if args.cpu_count < 0:
+        raise BuildError("--cpu-count must be non-negative")
+    if args.compression_level < 0 or args.compression_level > 9:
+        raise BuildError("--compression-level must be within 0..9")
+    if args.max_compressed_ratio is not None and (args.max_compressed_ratio < 0 or args.max_compressed_ratio > 100):
+        raise BuildError("--max-compressed-ratio must be within 0..100")
+    if args.min_compress_size < 0:
+        raise BuildError("--min-compress-size must be non-negative")
+
+    encrypted: bool = bool(getattr(args, "encrypted", False))
+    ekpfs_key: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
+    if getattr(args, "ekpfs_key", None) and not encrypted:
+        raise BuildError("--ekpfs-key requires --encrypted")
+
+    return PackBuildConfig(
+        block_size=block_size,
+        compress=not args.no_compress,
+        threshold_gain=args.threshold_gain,
+        min_file_gain=100 - int(args.max_compressed_ratio) if args.max_compressed_ratio is not None else 0,
+        max_compressed_ratio=args.max_compressed_ratio,
+        min_compress_size=args.min_compress_size,
+        case_insensitive=args.case_insensitive or not args.case_sensitive,
+        pfs_version=consts.PFS_VERSION_PS5 if args.version == "PS5" else consts.PFS_VERSION_PS4,
+        encrypted=encrypted,
+        new_crypt=bool(getattr(args, "new_crypt", False)),
+        ekpfs_key=ekpfs_key,
+        zlib_level=args.compression_level,
+        cpu_count=args.cpu_count,
+        skip_executable_compression=bool(getattr(args, "skip_executable_compression", False)),
+        inode_bits=args.inode_bits,
+    )
+
+
+def _print_pack_parameters(
+    *,
+    config: PackBuildConfig,
+    display_source_path: Path,
+    output_path: Path,
+    temp_folder: Path,
+    signed: bool,
+    require_game_files: bool,
+    dry_run: bool,
+) -> None:
+    """Print the build parameters banner from a resolved pack configuration.
+
+    Args:
+        config: Resolved pack build configuration.
+        display_source_path: Original user-facing source path.
+        output_path: Final output image path.
+        temp_folder: Temporary folder used for pack artifacts.
+        signed: Whether signed mode is enabled.
+        require_game_files: Whether strict game-file validation is enabled.
+        dry_run: Whether the build is a dry run.
+    """
+    print_build_parameters(
+        display_source_path,
+        output_path,
+        temp_folder,
+        config.block_size,
+        config.pfs_version,
+        config.inode_bits,
+        config.case_insensitive,
+        signed,
+        config.encrypted,
+        config.new_crypt,
+        config.compress,
+        config.threshold_gain,
+        config.cpu_count,
+        config.zlib_level,
+        config.max_compressed_ratio,
+        config.min_compress_size,
+        dry_run,
+        require_game_files,
+        config.skip_executable_compression,
+    )
+
+
+def _run_post_pack_verify(
+    *,
+    output_path: Path,
+    source: Path,
+    ekpfs_key: bytes,
+    new_crypt: bool,
+    require_game_files: bool = False,
+) -> int:
+    """Run the post-pack image check and report warnings and errors.
+
+    Args:
+        output_path: Written image to verify.
+        source: Source directory compared against the image.
+        ekpfs_key: EKPFS key material for encrypted images.
+        new_crypt: Whether to use the alternate newCrypt derivation.
+        require_game_files: Whether to enable the optional game-file checklist.
+
+    Returns:
+        ``1`` when the check reports errors, otherwise ``0``.
+    """
+    info("Running post-create check...")
+    errors, warnings, _tree, _uroot = run_image_check(
+        output_path,
+        source,
+        print_tree=False,
+        ekpfs=ekpfs_key,
+        new_crypt=new_crypt,
+        require_game_files=require_game_files,
+    )
+    for w in warnings:
+        warning(w)
+    for e in errors:
+        error(e)
+    return 1 if errors else 0
+
+
 def _run_pack_build(
     *,
     args: argparse.Namespace,
@@ -718,9 +933,7 @@ def _run_pack_build(
     if output_changed:
         info(output_adjustment_message)
 
-    if args.threshold_gain < 0 or args.threshold_gain > 100:
-        raise BuildError("--threshold-gain must be within 0..100")
-
+    # Resolve block size (folder path additionally supports auto-fit over the tree).
     block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
     if block_size_arg == "auto":
         block_size: int = 65536
@@ -741,21 +954,7 @@ def _run_pack_build(
         except (TypeError, ValueError) as exc:
             raise BuildError("--block-size must be an integer value, 'auto', or 'auto-fit'") from exc
 
-    if not is_power_of_two(block_size):
-        raise BuildError("--block-size must be a power of two")
-    if block_size < 0x1000 or block_size > 0x200000:
-        raise BuildError("--block-size must be between 4096 and 2097152")
-
-    if args.cpu_count < 0:
-        raise BuildError("--cpu-count must be non-negative")
-
-    if args.compression_level < 0 or args.compression_level > 9:
-        raise BuildError("--compression-level must be within 0..9")
-
-    if args.max_compressed_ratio is not None and (args.max_compressed_ratio < 0 or args.max_compressed_ratio > 100):
-        raise BuildError("--max-compressed-ratio must be within 0..100")
-    if args.min_compress_size < 0:
-        raise BuildError("--min-compress-size must be non-negative")
+    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
 
     _title_id: str | None
     warnings: list[str]
@@ -763,36 +962,14 @@ def _run_pack_build(
     for w in warnings:
         warning(w)
 
-    compress: bool = not args.no_compress
-    min_file_gain: int = 100 - int(args.max_compressed_ratio) if args.max_compressed_ratio is not None else 0
-    case_insensitive: bool = args.case_insensitive or not args.case_sensitive
-    pfs_version: int = consts.PFS_VERSION_PS5 if args.version == "PS5" else consts.PFS_VERSION_PS4
-    encrypted: bool = bool(getattr(args, "encrypted", False))
-    new_crypt: bool = bool(getattr(args, "new_crypt", False))
-    ekpfs_key: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
-    if getattr(args, "ekpfs_key", None) and not encrypted:
-        raise BuildError("--ekpfs-key requires --encrypted")
-
-    print_build_parameters(
-        display_source_path,
-        output_path,
-        temp_folder,
-        block_size,
-        pfs_version,
-        args.inode_bits,
-        case_insensitive,
-        args.signed,
-        encrypted,
-        new_crypt,
-        compress,
-        args.threshold_gain,
-        args.cpu_count,
-        args.compression_level,
-        args.max_compressed_ratio,
-        args.min_compress_size,
-        args.dry_run,
-        require_game_files,
-        bool(getattr(args, "skip_executable_compression", False)),
+    _print_pack_parameters(
+        config=config,
+        display_source_path=display_source_path,
+        output_path=output_path,
+        temp_folder=temp_folder,
+        signed=args.signed,
+        require_game_files=require_game_files,
+        dry_run=args.dry_run,
     )
 
     if not args.dry_run:
@@ -813,23 +990,23 @@ def _run_pack_build(
     stats: BuildStats = build_pfs(
         source_root=build_source_root,
         output_path=output_path,
-        block_size=block_size,
-        pfs_version=pfs_version,
-        inode_bits=args.inode_bits,
-        case_insensitive=case_insensitive,
+        block_size=config.block_size,
+        pfs_version=config.pfs_version,
+        inode_bits=config.inode_bits,
+        case_insensitive=config.case_insensitive,
         signed=args.signed,
-        compress=compress,
-        threshold_gain=args.threshold_gain,
-        cpu_count=args.cpu_count,
-        zlib_level=args.compression_level,
+        compress=config.compress,
+        threshold_gain=config.threshold_gain,
+        cpu_count=config.cpu_count,
+        zlib_level=config.zlib_level,
         dry_run=args.dry_run,
         verbose=args.verbose,
-        encrypted=encrypted,
-        new_crypt=new_crypt,
-        ekpfs=ekpfs_key,
-        skip_executable_compression=bool(getattr(args, "skip_executable_compression", False)),
-        min_file_gain=min_file_gain,
-        min_compress_size=args.min_compress_size,
+        encrypted=config.encrypted,
+        new_crypt=config.new_crypt,
+        ekpfs=config.ekpfs_key,
+        skip_executable_compression=config.skip_executable_compression,
+        min_file_gain=config.min_file_gain,
+        min_compress_size=config.min_compress_size,
         temp_folder=temp_folder,
     )
 
@@ -838,21 +1015,13 @@ def _run_pack_build(
     if args.dry_run or not args.verify:
         return 0
 
-    info("Running post-create check...")
-    errors, warnings, _tree, _uroot = run_image_check(
-        output_path,
-        compare_source_root,
-        print_tree=False,
+    return _run_post_pack_verify(
+        output_path=output_path,
+        source=compare_source_root,
+        ekpfs_key=config.ekpfs_key,
+        new_crypt=config.new_crypt,
         require_game_files=require_game_files,
-        ekpfs=ekpfs_key,
-        new_crypt=new_crypt,
     )
-
-    for w in warnings:
-        warning(w)
-    for e in errors:
-        error(e)
-    return 1 if errors else 0
 
 
 @contextmanager
@@ -946,6 +1115,106 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     )
 
 
+def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int:
+    """Pack a single file with the direct-to-image streaming builder.
+
+    Args:
+        args: Parsed CLI arguments for the file pack workflow.
+        source_file: Resolved source file path.
+
+    Returns:
+        Process exit code for the streaming file packing workflow.
+
+    Raises:
+        BuildError: If CLI parameters are invalid.
+    """
+    output_path: Path
+    output_changed: bool
+    output_path, output_changed = normalize_output_path(
+        args.image_file,
+        ".ffpfsc",
+        adjust=bool(getattr(args, "adjust_output_file_extension", True)),
+    )
+    output_path = output_path.expanduser().resolve()
+    if output_changed:
+        info("Single file streaming mode enabled, adjusting output file extension to .ffpfsc")
+
+    # Resolve block size (single-file path: auto or explicit, no auto-fit).
+    block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
+    if block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}:
+        raise BuildError(
+            "--block-size auto-fit is not supported for single-file packing; use 'auto' or an explicit size"
+        )
+    if block_size_arg in {"auto", ""}:
+        block_size: int = 65536
+    else:
+        try:
+            block_size = int(args.block_size)
+        except (TypeError, ValueError) as exc:
+            raise BuildError(
+                "--block-size must be an integer value or 'auto' for streaming single-file packing"
+            ) from exc
+
+    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
+    temp_folder: Path = _resolve_pack_temp_folder(args)
+    _print_pack_parameters(
+        config=config,
+        display_source_path=source_file,
+        output_path=output_path,
+        temp_folder=temp_folder,
+        signed=False,
+        require_game_files=False,
+        dry_run=args.dry_run,
+    )
+
+    if not args.dry_run:
+        destination_space_error: str | None = get_destination_space_error_message(
+            source_root=source_file,
+            output_path=output_path,
+        )
+        if destination_space_error is not None:
+            error(destination_space_error)
+            return 1
+
+    if not args.dry_run and not prompt_overwrite(output_path):
+        info("Operation cancelled.")
+        return 0
+
+    stats: BuildStats = build_pfs_stream_single_file(
+        source_file=source_file,
+        output_path=output_path,
+        block_size=config.block_size,
+        pfs_version=config.pfs_version,
+        case_insensitive=config.case_insensitive,
+        zlib_level=config.zlib_level,
+        threshold_gain=config.threshold_gain,
+        min_file_gain=config.min_file_gain,
+        min_compress_size=config.min_compress_size,
+        cpu_count=config.cpu_count,
+        compress=config.compress,
+        encrypted=config.encrypted,
+        new_crypt=config.new_crypt,
+        ekpfs=config.ekpfs_key,
+        verbose=args.verbose,
+        skip_executable_compression=config.skip_executable_compression,
+        dry_run=args.dry_run,
+    )
+    stats.input_path = source_file
+    print_summary(stats)
+    if args.dry_run or not args.verify:
+        return 0
+
+    # Stage the single file into a temp directory (hardlink, no data copy) so the
+    # check compares against a directory tree, mirroring the verify command.
+    with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
+        return _run_post_pack_verify(
+            output_path=output_path,
+            source=staging_root,
+            ekpfs_key=config.ekpfs_key,
+            new_crypt=config.new_crypt,
+        )
+
+
 def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
     """Pack a single file into a PFS image.
 
@@ -959,6 +1228,11 @@ def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
     temp_folder: Path = _resolve_pack_temp_folder(args)
     if not source_file.exists() or not source_file.is_file():
         raise BuildError(f"--source-file must be an existing file: {source_file}")
+
+    # Prefer direct streaming for the common single-file path, fall back to the
+    # legacy staged/spool builder only when the requested options require it.
+    if _can_stream_pack_file(args=args):
+        return _run_stream_pack_file(args=args, source_file=source_file)
 
     with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
         return _run_pack_build(
@@ -1081,6 +1355,7 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
         emit_report=False,
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
         new_crypt=bool(getattr(args, "new_crypt", False)),
+        verify_payloads=False,
     )
     if errors:
         for e in errors:
@@ -1255,6 +1530,14 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         source_arg_name="source_file",
         source_help="Single source file to pack",
         include_require_game_files=False,
+    )
+    file_parser.add_argument(
+        "--no-spool",
+        action="store_true",
+        help=(
+            "Prefer direct-to-image streaming for single-file packing; this is already the default when supported, "
+            "and unsupported option combinations fall back to the legacy spool path"
+        ),
     )
     file_parser.set_defaults(
         inode_bits=32,
