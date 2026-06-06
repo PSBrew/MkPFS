@@ -626,8 +626,8 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--threshold-gain",
         type=int,
-        default=0,
-        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 0)",
+        default=5,
+        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 5)",
     )
     parser.add_argument(
         "--block-size",
@@ -665,8 +665,8 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--max-compressed-ratio",
         type=int,
-        default=None,
-        help="Maximum PFSC size as percent of the raw file size (0-100)",
+        default=95,
+        help="Maximum PFSC size as percent of the raw file size (0-100, default: 95)",
     )
     parser.add_argument(
         "--min-compress-size",
@@ -681,7 +681,7 @@ def cli_mkpfs_add_create_args(
         "--skip-executable-compression",
         action="store_true",
         default=True,
-        help="Store eboot*.bin, *.prx, and *.sprx files raw even when PFSC compression is enabled",
+        help="Skip compression in important executable files",
     )
     parser.add_argument("--signed", action="store_true", help="Build a signed PFS image using zero EKPFS/seed")
     parser.add_argument("--encrypted", action="store_true", help="Encrypt filesystem blocks with AES-XTS")

@@ -172,9 +172,10 @@ mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file
                   [--compression-level COMPRESSION_LEVEL]
                   [--max-compressed-ratio MAX_COMPRESSED_RATIO]
                   [--min-compress-size MIN_COMPRESS_SIZE]
+                  [--no-spool]
                   [--skip-executable-compression] [--signed] [--encrypted]
-                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--temp-folder TEMP_FOLDER] [--verbose]
-                  [--dry-run] [--verify] source_dir image_file
+                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify]
+                  source_dir image_file
 ```
 
 Examples:
@@ -195,25 +196,26 @@ mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 | `--no-adjust-output-file-extension` | Keep the requested output file name unchanged. |
 | `--compress` | Enable PFSC block compression. This is the default. |
 | `--no-compress` | Disable PFSC block compression. |
-| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `0`. |
+| `--threshold-gain THRESHOLD_GAIN` | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `5`. |
 | `--block-size BLOCK_SIZE` | PFS block size in bytes, `auto`, or `auto-fit`. Default: `auto`, which resolves to `65536`; `auto-fit` picks 4096..65536 by estimated file-data padding. |
 | `--version {PS4,PS5}` | PFS profile version. Default: `PS4`. |
 | `--inode-bits {32,64}` | Inode width mode bit. Default: `32`. (NOTE: 64 bits migth be unstable) |
 | `--case-sensitive` | Build a case-sensitive image. |
 | `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior. |
-| `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count())`, non-zero uses `max(1, user value)`. |
+| `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count() - 1)`, non-zero uses `max(1, user value)`. |
 | `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `7`. |
-| `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: disabled. |
+| `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: `95`. |
 | `--min-compress-size MIN_COMPRESS_SIZE` | Store files smaller than this many bytes raw without trying PFSC compression. When omitted (or set to `0`), MkPFS uses the resolved `--block-size` value, `65536` for `--block-size auto`, or the selected value for `--block-size auto-fit`. |
-| `--skip-executable-compression` | Store `eboot*.bin`, `*.prx`, and `*.sprx` files raw even when PFSC compression is enabled. Default: enabled. |
-| `--signed` | Build a signed PFS image using a zero EKPFS key and seed. |
-| `--encrypted` | Encrypt filesystem blocks with AES-XTS. |
-| `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
-| `--require-game-files` | Require `sce_sys/param.json` and `eboot.bin` before packing. |
-| `--temp-folder TEMP_FOLDER` | Directory used for temporary pack artifacts, including staged single-file trees and PFSC spool files. Default: the system temp folder. |
-| `--verbose` | Print verbose per-file decisions during packing. |
-| `--dry-run` | Scan, layout, and report only. Do not write an image file. |
-| `--verify` | Run `mkpfs verify` automatically after a successful pack. |
+| `--no-spool`                                  | Keep preferring direct-to-image streaming for single-file packing. This is already the default when supported; unsupported option combinations transparently fall back to the legacy staged/spool path. |
+| `--skip-executable-compression`               | Skip compression in important executable files. Default: enabled. |
+| `--signed`                                    | Build a signed PFS image using a zero EKPFS key and seed. |
+| `--encrypted`                                 | Encrypt filesystem blocks with AES-XTS. |
+| `--ekpfs-key EKPFS_KEY`                       | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key. |
+| `--require-game-files`                        | Require `sce_sys/param.json` and `eboot.bin` before packing. |
+| `--temp-folder TEMP_FOLDER`                   | Directory used for temporary pack artifacts, including the one-file staging tree and PFSC spool files. Default: the system temp folder. |
+| `--verbose`                                   | Print verbose per-file decisions during packing. |
+| `--dry-run`                                   | Scan, layout, and report only. Do not write an image file. |
+| `--verify`                                    | Run `mkpfs verify` automatically after a successful pack. |
 
 Notes:
 
@@ -254,7 +256,7 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --temp-folder ./tmp/mkpfs
 | `--no-adjust-output-file-extension`           | Keep the requested output file name unchanged.                                                                                                                                                          |
 | `--compress`                                  | Enable PFSC block compression. This is the default.                                                                                                                                                     |
 | `--no-compress`                               | Disable PFSC block compression.                                                                                                                                                                         |
-| `--threshold-gain THRESHOLD_GAIN`             | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `0`.                                                                                                                   |
+| `--threshold-gain THRESHOLD_GAIN`             | Minimum per-block gain percent required to keep PFSC-compressed blocks. Default: `5`.                                                                                                                   |
 | `--block-size BLOCK_SIZE`                     | PFS block size in bytes, `auto`, or `auto-fit`. Default: `auto`, which resolves to `65536`; `auto-fit` picks 4096..65536 by estimated file-data padding.                                                |
 | `--version {PS4,PS5}`                         | PFS profile version. Default: `PS4`.                                                                                                                                                                    |
 | `--inode-bits {32,64}`                        | Inode width mode bit. Default: `32`.                                                                                                                                                                    |
@@ -262,10 +264,10 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --temp-folder ./tmp/mkpfs
 | `--case-insensitive`                          | Set the case-insensitive mode bit. This is the default behavior.                                                                                                                                        |
 | `--cpu-count CPU_COUNT`                       | Number of CPU cores to use for PFSC compression. `0` means auto `max(1, cpu_count() - 1)`, non-zero uses `max(1, user value)`.                                                                          |
 | `--compression-level COMPRESSION_LEVEL`       | Zlib compression level from `0` to `9`. Default: `7`.                                                                                                                                                   |
-| `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: disabled.                                                            |
+| `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: `95`.                                                                 |
 | `--min-compress-size MIN_COMPRESS_SIZE`       | Store files smaller than this many bytes raw without trying PFSC compression. When omitted (or set to `0`), MkPFS uses the resolved `--block-size` value, `65536` for `--block-size auto`, or the selected value for `--block-size auto-fit`.                                              |
 | `--no-spool`                                  | Keep preferring direct-to-image streaming for single-file packing. This is already the default when supported; unsupported option combinations transparently fall back to the legacy staged/spool path. |
-| `--skip-executable-compression`               | Store `eboot*.bin`, `*.prx`, and `*.sprx` files raw even when PFSC compression is enabled. Default: enabled.                                                                                            |
+| `--skip-executable-compression`               | Skip compression in important executable files. Default: enabled.                                                                                            |
 | `--signed`                                    | Build a signed PFS image using a zero EKPFS key and seed.                                                                                                                                               |
 | `--encrypted`                                 | Encrypt filesystem blocks with AES-XTS.                                                                                                                                                                 |
 | `--ekpfs-key EKPFS_KEY`                       | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key.                                                                                                                 |

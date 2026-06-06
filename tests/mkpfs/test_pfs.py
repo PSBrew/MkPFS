@@ -448,15 +448,36 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         eboot_path: Path = src / "eboot_patch.bin"
         prx_path: Path = src / "modules" / "libsample.prx"
         sprx_path: Path = src / "modules" / "libsample.sprx"
+        param_path: Path = src / "param_patch.sfx"
+        json_path: Path = src / "config.json"
+        txt_path: Path = src / "notes.txt"
+        png_path: Path = src / "image.png"
+        keystone_path: Path = src / "module.keystone"
+        sce_module_path: Path = src / "my_sce_module.bin"
+        sce_sys_name_path: Path = src / "contains_sce_sys.bin"
         normal_path: Path = src / "data" / "large.bin"
         prx_path.parent.mkdir(parents=True)
         eboot_payload: bytes = b"E" * 200000
         prx_payload: bytes = b"P" * 200000
         sprx_payload: bytes = b"X" * 200000
         normal_payload: bytes = b"N" * 200000
+        param_payload: bytes = b"A" * 200000
+        json_payload: bytes = b"J" * 200000
+        txt_payload: bytes = b"T" * 200000
+        png_payload: bytes = b"I" * 200000
+        keystone_payload: bytes = b"K" * 200000
+        sce_module_payload: bytes = b"M" * 200000
+        sce_sys_name_payload: bytes = b"S" * 200000
         eboot_path.write_bytes(eboot_payload)
         prx_path.write_bytes(prx_payload)
         sprx_path.write_bytes(sprx_payload)
+        param_path.write_bytes(param_payload)
+        json_path.write_bytes(json_payload)
+        txt_path.write_bytes(txt_payload)
+        png_path.write_bytes(png_payload)
+        keystone_path.write_bytes(keystone_payload)
+        sce_module_path.write_bytes(sce_module_payload)
+        sce_sys_name_path.write_bytes(sce_sys_name_payload)
         normal_path.write_bytes(normal_payload)
         out: Path = tmp_path / "skip-executables.ffpfs"
         build_pfs(
@@ -485,15 +506,36 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             eboot_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["eboot_patch.bin"]]
             prx_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["modules/libsample.prx"]]
             sprx_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["modules/libsample.sprx"]]
+            param_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["param_patch.sfx"]]
+            json_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["config.json"]]
+            txt_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["notes.txt"]]
+            png_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["image.png"]]
+            keystone_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["module.keystone"]]
+            sce_module_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["my_sce_module.bin"]]
+            sce_sys_name_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["contains_sce_sys.bin"]]
             normal_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/large.bin"]]
 
             assert not eboot_inode.is_compressed
             assert not prx_inode.is_compressed
             assert not sprx_inode.is_compressed
+            assert not param_inode.is_compressed
+            assert not json_inode.is_compressed
+            assert not txt_inode.is_compressed
+            assert not png_inode.is_compressed
+            assert not keystone_inode.is_compressed
+            assert not sce_module_inode.is_compressed
+            assert not sce_sys_name_inode.is_compressed
             assert normal_inode.is_compressed
             assert pfs_mod.read_image_inode_payload(fh, header, eboot_inode) == eboot_payload
             assert pfs_mod.read_image_inode_payload(fh, header, prx_inode) == prx_payload
             assert pfs_mod.read_image_inode_payload(fh, header, sprx_inode) == sprx_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, param_inode) == param_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, json_inode) == json_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, txt_inode) == txt_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, png_inode) == png_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, keystone_inode) == keystone_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, sce_module_inode) == sce_module_payload
+            assert pfs_mod.read_image_inode_payload(fh, header, sce_sys_name_inode) == sce_sys_name_payload
             assert pfs_mod.read_image_inode_payload(fh, header, normal_inode)[:4] == b"PFSC"
 
     def test_min_file_gain_keeps_low_gain_files_raw(self) -> None:
