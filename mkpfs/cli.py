@@ -1231,18 +1231,12 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     )
     # Provide a short examples epilog so our custom help renderer can include
     # practical usage examples after the generated help text.
-    parser.epilog = (
-        "Examples:\n"
-        "   mkpfs pack file './BREW1234.exfat' './BREW1234.exfat.ffpfsc'\n"
-        "   mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'\n"
-    )
+    parser.epilog = "Example:\r\n   mkpfs pack file './BREW1234.exfat' './BREW1234.exfat.ffpfsc'\r\n"
     parser.add_argument("-V", action="version", version=get_help_title(), help="Show version and exit")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=MkPFSArgumentParser)
 
     pack_parser = sub.add_parser("pack", help="Pack a folder or file into an image")
-    pack_parser.epilog = (
-        "Examples:\n   mkpfs pack folder ./input ./game.ffpfs\n   mkpfs pack file ./payload.exfat ./payload.ffpfsc\n"
-    )
+    pack_parser.epilog = "Examples:\r\n   mkpfs pack file ./payload.exfat ./payload.ffpfsc\r\n"
     pack_sub = pack_parser.add_subparsers(dest="pack_command", required=True, parser_class=MkPFSArgumentParser)
 
     folder_parser = pack_sub.add_parser("folder", help="Build image from a source directory")
@@ -1250,7 +1244,7 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     folder_parser.set_defaults(func=cli_mkpfs_create_run)
 
     file_parser = pack_sub.add_parser("file", help="Build image from a single source file")
-    file_parser.epilog = "Examples:\n   mkpfs pack file './BREW1234.exfat' './BREW1234.exfat.ffpfsc'\n"
+    file_parser.epilog = "Examples:\r\n   mkpfs pack file './BREW1234.exfat' './BREW1234.exfat.ffpfsc'\r\n"
     cli_mkpfs_add_create_args(
         file_parser,
         source_arg_name="source_file",
@@ -1306,7 +1300,7 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     ls_parser.set_defaults(func=cli_mkpfs_ls_run)
 
     extract_parser = sub.add_parser("unpack", help="Extract files from image to destination directory")
-    extract_parser.epilog = "Examples:\n   mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'\n"
+    extract_parser.epilog = "Examples:\r\n   mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'\r\n"
     extract_parser.add_argument("image_file", help="Path to input .ffpfs image")
     extract_parser.add_argument("output_dir", help="Destination directory for extraction")
     extract_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output path")
