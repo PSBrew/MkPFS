@@ -49,9 +49,20 @@ python -m mkpfs pack folder './BREW1234-app/' './BREW1234.ffpfsc'
 python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
 ```
 
-> **Note on conversion speed:** Antivirus scanning can reduce conversion speed, especially during the writing phase or when processing many loose files.
-> If you plan to convert many titles in bulk and you trust this software in your environment, you may temporarily disable real-time antivirus protection to speed up the process.
-> If you are unsure, keep antivirus enabled and expect slower conversions.
+**Note on conversion speed:**
+
+- Antivirus scanning can reduce conversion speed, especially during the writing phase or when processing many loose
+  files.
+  If you plan to convert many titles in bulk and you trust this software in your environment, you may temporarily
+  disable
+  real-time antivirus protection to speed up the process. If you are unsure, keep antivirus enabled and expect slower
+  conversions.
+
+**Notes on stability:**
+
+- `exfat->ffpfsc` is the most stable solution at this moment.
+- raw folder compression works, but has limitations for large game backups or if the folder contains too many small
+  files. In that case, use `exfat->ffpfsc` instead.
 
 ## 💖 Sponsorship
 
@@ -488,7 +499,13 @@ Special thanks to the people and communities helping shape MkPFS:
 - **The PlayStation and reverse-engineering community**: for tools, research threads, testing feedback, technical notes, and historical knowledge
 - **Community-maintained references and wiki pages**: especially the projects and archives that preserve PFS, PKG, and FPKG implementation details
 
-## Related projects
+## ⚠️ Disclaimer
+
+This software is intended for archival, backup, preservation, and homebrew purposes only.
+
+Users are responsible for complying with all applicable laws and regulations in their jurisdiction.
+
+## 🔗 Related projects
 
 - [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus): Practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility
 - [PSDevWiki PFS](https://www.psdevwiki.com/ps4/PFS): Community reference for PFS on-disk structures

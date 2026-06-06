@@ -35,9 +35,16 @@ template: |
   python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
   ```
 
-  > **Note on conversion speed:** Antivirus scanning can reduce conversion speed, especially during the writing phase or when processing many loose files.
-  > If you plan to convert many titles in bulk and you trust this software in your environment, you may temporarily disable real-time antivirus protection to speed up the process.
-  > If you are unsure, keep antivirus enabled and expect slower conversions.
+  **Note on conversion speed:** 
+  
+  - Antivirus scanning can reduce conversion speed, especially during the writing phase or when processing many loose files. 
+    If you plan to convert many titles in bulk and you trust this software in your environment, you may temporarily disable 
+    real-time antivirus protection to speed up the process. If you are unsure, keep antivirus enabled and expect slower conversions.
+  
+  **Notes on stability:**
+  
+  - `exfat->ffpfsc` is the most stable solution at this moment.
+  - raw folder compression works, but has limitations for large game backups or if the folder contains too many small files. In that case, use `exfat->ffpfsc` instead.
   
   ## 💖 Sponsorship
   
