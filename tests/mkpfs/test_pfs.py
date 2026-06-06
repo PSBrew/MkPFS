@@ -628,8 +628,16 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         tmp_path: Path = self.make_temp_path()
         src: Path = make_app_with_nested_dirs(tmp_path / "src")
         out: Path = tmp_path / "collision-renumbering.ffpfs"
+        original_fpt_hash: Callable[[str, bool], int] = pfs_mod.fpt_hash
+        collision_paths: set[str] = {"/data/levels/level1.bin", "/data/levels/level2.bin"}
 
-        with patch.object(pfs_mod, "fpt_hash", return_value=0x12345678):
+        def selective_collision_hash(path: str, case_insensitive: bool = True) -> int:
+            """Force one FPT collision while preserving other path hashes."""
+            if path in collision_paths:
+                return 0x12345678
+            return original_fpt_hash(path, case_insensitive=case_insensitive)
+
+        with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash):
             build_pfs(
                 source_root=src,
                 output_path=out,
@@ -646,9 +654,60 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
                 verbose=False,
                 encrypted=False,
             )
+            errors: list[str]
+            errors, _warnings, _tree, _uroot = run_image_check(
+                out,
+                src,
+                print_tree=False,
+                emit_report=False,
+            )
 
         assert out.is_file()
         assert out.stat().st_size > 0
+        assert errors == []
+
+    def test_build_pfs_handles_fpt_collision_inode_renumbering_without_compression(self) -> None:
+        """Forced FPT collisions should verify cleanly when compression is disabled."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        out: Path = tmp_path / "collision-renumbering-raw.ffpfs"
+        original_fpt_hash: Callable[[str, bool], int] = pfs_mod.fpt_hash
+        collision_paths: set[str] = {"/data/levels/level1.bin", "/data/levels/level2.bin"}
+
+        def selective_collision_hash(path: str, case_insensitive: bool = True) -> int:
+            """Force one FPT collision while preserving other path hashes."""
+            if path in collision_paths:
+                return 0x12345678
+            return original_fpt_hash(path, case_insensitive=case_insensitive)
+
+        with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS5,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=False,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+            )
+            errors: list[str]
+            errors, _warnings, _tree, _uroot = run_image_check(
+                out,
+                src,
+                print_tree=False,
+                emit_report=False,
+            )
+
+        assert out.is_file()
+        assert out.stat().st_size > 0
+        assert errors == []
 
     def test_pfsc_encode_decode_round_trip(self) -> None:
         """PFSC payload encoding and decoding should preserve logical bytes."""
