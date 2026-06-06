@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import io
 import json
 import random
@@ -440,6 +441,85 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             )
 
         assert out.is_file()
+
+    def test_build_pfs_removes_completed_spools_when_later_compression_fails(self) -> None:
+        """Compression failures should remove temp spools from earlier files."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        first_file: Path = src / "data" / "aaa-first.bin"
+        second_file: Path = src / "data" / "bbb-second.bin"
+        first_file.write_bytes(b"A" * 200000)
+        second_file.write_bytes(b"B" * 200000)
+        out: Path = tmp_path / "failed-compression.ffpfs"
+        temp_folder: Path = tmp_path / "pack-temp"
+        temp_folder.mkdir()
+        expected_temp_folder: Path = temp_folder
+        first_spool: Path = temp_folder / "mkpfs-aaa-first.bin.pfsc"
+        second_spool: Path = temp_folder / "mkpfs-bbb-second.bin.pfsc"
+
+        def fake_encode_pfsc_file_to_spool(
+            *,
+            abs_path: Path,
+            spool_path: Path,
+            threshold_gain: int,
+            min_file_gain: int,
+            zlib_level: int,
+            logical_block_size: int,
+            block_worker_count: int = 1,
+            progress_callback: Callable[[int], None] | None = None,
+        ) -> tuple[int, bool, float, int]:
+            """Create one successful spool, then fail the next compression."""
+            del threshold_gain, min_file_gain, zlib_level, logical_block_size, block_worker_count
+            if progress_callback is not None:
+                progress_callback(abs_path.stat().st_size)
+            if abs_path.name == "aaa-first.bin":
+                spool_path.write_bytes(b"PFSC-first")
+                return len(b"PFSC-first"), True, 90.0, len(b"PFSC-first")
+            if abs_path.name == "bbb-second.bin":
+                spool_path.write_bytes(b"partial")
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return abs_path.stat().st_size, False, 0.0, 0
+
+        def fake_make_compression_spool_path(*, source_path: Path, temp_folder: Path | None = None) -> Path:
+            """Return deterministic spool paths for cleanup assertions."""
+            assert temp_folder == expected_temp_folder
+            if source_path.name == "aaa-first.bin":
+                return first_spool
+            if source_path.name == "bbb-second.bin":
+                return second_spool
+            if temp_folder is not None:
+                return temp_folder / f"mkpfs-{source_path.name}.pfsc"
+            return tmp_path / source_path.name
+
+        with patch.object(
+            pfs_mod,
+            "_encode_pfsc_file_to_spool",
+            side_effect=fake_encode_pfsc_file_to_spool,
+        ), patch.object(
+            pfs_mod,
+            "_make_compression_spool_path",
+            side_effect=fake_make_compression_spool_path,
+        ), self.assertRaises(OSError):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS4,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=True,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+                min_compress_size=1000,
+                temp_folder=temp_folder,
+            )
+
+        assert not first_spool.exists()
 
     def test_executable_compression_skip_keeps_eboot_prx_and_sprx_raw(self) -> None:
         """Requested executable compression skips should leave eboot*.bin, *.prx, and *.sprx inodes raw."""
