@@ -723,13 +723,36 @@ class FileNode:
     inode: Inode | None = None
 
 
-def should_skip_executable_compression(file_name: str) -> bool:
-    """Return True for executable payloads that should stay raw when requested."""
+def should_skip_executable_compression(file_name: str, file_path: str) -> bool:
+    """Return True for executable-like payloads that should remain uncompressed.
+
+    This function checks both the plain file name and the file's relative path
+    inside the image. Some platform-specific markers (for example, "sce_module"
+    or "sce_sys") may appear in directory components rather than the base name,
+    so callers should pass the relative path when available.
+
+    Args:
+        file_name: Base file name (for example, "eboot.bin").
+        file_path: Relative path of the file inside the image (for example,
+            "sce_module/somefile.prx" or "sce_sys/param.json").
+
+    Returns:
+        True when the file should be kept raw (not PFSC-compressed), False
+        otherwise.
+    """
     lower_name: str = file_name.lower()
+    lower_path: str = file_path.lower()
     return (
         (lower_name.startswith("eboot") and lower_name.endswith(".bin"))
+        or (lower_name.startswith("param") and lower_name.endswith(".sfx"))
         or lower_name.endswith(".prx")
         or lower_name.endswith(".sprx")
+        or lower_name.endswith(".json")
+        or lower_name.endswith(".txt")
+        or lower_name.endswith(".png")
+        or lower_name.endswith("keystone")
+        or ("sce_module" in lower_path)
+        or ("sce_sys" in lower_path)
     )
 
 
@@ -2515,7 +2538,7 @@ def build_pfs(
     if compress and skip_executable_compression:
         compression_file_nodes = []
         for f in file_nodes_sorted:
-            if should_skip_executable_compression(f.name):
+            if should_skip_executable_compression(file_name=f.name, file_path=f.rel_path):
                 store_file_node_raw(f)
             else:
                 compression_file_nodes.append(f)
@@ -3282,7 +3305,10 @@ def build_pfs_stream_single_file(
         compress
         and raw_size > 0
         and raw_size >= min_compress_size
-        and not (skip_executable_compression and should_skip_executable_compression(source_file.name))
+        and not (
+            skip_executable_compression
+            and should_skip_executable_compression(file_name=source_file.name, file_path=source_file.name)
+        )
     )
     block_workers: int = resolve_block_compression_worker_count(
         requested_cpu_count=resolve_compression_worker_count(requested_cpu_count=cpu_count),

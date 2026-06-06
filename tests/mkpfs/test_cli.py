@@ -235,8 +235,8 @@ class TestCliArgumentHelpers(CliTestCase):
         )
         self.assertEqual(compression_action.default, 7)
 
-    def test_pack_parser_uses_zero_as_default_threshold_gain(self) -> None:
-        """The pack parser should expose 0 as the default threshold gain."""
+    def test_pack_parser_uses_five_as_default_threshold_gain(self) -> None:
+        """The pack parser should expose 5 as the default threshold gain."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
             action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
@@ -248,7 +248,7 @@ class TestCliArgumentHelpers(CliTestCase):
         threshold_action: argparse.Action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "threshold_gain"
         )
-        self.assertEqual(threshold_action.default, 0)
+        self.assertEqual(threshold_action.default, 5)
 
     def test_pack_parser_uses_thirty_two_as_default_inode_bits(self) -> None:
         """The pack parser should expose 32 as the default inode width."""
@@ -301,7 +301,7 @@ class TestCliArgumentHelpers(CliTestCase):
         )
         self.assertTrue(skip_action.default)
         self.assertIsNotNone(skip_action.help)
-        self.assertIn("eboot*.bin", skip_action.help or "")
+        self.assertIn("Skip compression", skip_action.help or "")
 
     def test_pack_parser_exposes_whole_file_compression_threshold(self) -> None:
         """The pack parser should expose the whole-file compression threshold."""
@@ -319,7 +319,7 @@ class TestCliArgumentHelpers(CliTestCase):
         min_size_action: argparse.Action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "min_compress_size"
         )
-        self.assertIsNone(max_ratio_action.default)
+        self.assertEqual(max_ratio_action.default, 95)
         self.assertEqual(min_size_action.default, 0)
 
     def test_pack_parser_cpu_count_help_mentions_auto_and_user_normalization(self) -> None:
