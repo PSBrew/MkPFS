@@ -453,7 +453,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         out: Path = tmp_path / "failed-compression.ffpfs"
         temp_folder: Path = tmp_path / "pack-temp"
         temp_folder.mkdir()
-        expected_temp_folder: Path = temp_folder
+        expected_temp_folder: Path = temp_folder.resolve()
         first_spool: Path = temp_folder / "mkpfs-aaa-first.bin.pfsc"
         second_spool: Path = temp_folder / "mkpfs-bbb-second.bin.pfsc"
 
@@ -704,12 +704,31 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert pfs_mod.read_image_inode_payload(fh, header, large_inode)[:4] == b"PFSC"
 
     def test_build_pfs_handles_fpt_collision_inode_renumbering(self) -> None:
-        """Forced FPT collisions should not break inode renumbering during build."""
+        """Forced FPT collisions should not break inode renumbering during build.
+
+        When the collision resolver inode is inserted at slot 2 all subsequent
+        inode numbers are shifted by one.  The flat_path_table must be rebuilt
+        with the post-renumber inode numbers so that FPT entries match the
+        directory tree on verify.  A regression was present where the FPT was
+        built before the renumber step, causing every entry to be off by one.
+
+        The fpt_hash patch must also be active during inspection so that both
+        the on-disk table and the expected table are built with the same hash
+        function.
+        """
         tmp_path: Path = self.make_temp_path()
         src: Path = make_app_with_nested_dirs(tmp_path / "src")
         out: Path = tmp_path / "collision-renumbering.ffpfs"
+        original_fpt_hash: Callable[[str, bool], int] = pfs_mod.fpt_hash
+        collision_paths: set[str] = {"/data/levels/level1.bin", "/data/levels/level2.bin"}
 
-        with patch.object(pfs_mod, "fpt_hash", return_value=0x12345678):
+        def selective_collision_hash(path: str, case_insensitive: bool = True) -> int:
+            """Force one FPT collision while preserving other path hashes."""
+            if path in collision_paths:
+                return 0x12345678
+            return original_fpt_hash(path, case_insensitive=case_insensitive)
+
+        with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash):
             build_pfs(
                 source_root=src,
                 output_path=out,
@@ -727,8 +746,255 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
                 encrypted=False,
             )
 
+            assert out.is_file()
+            assert out.stat().st_size > 0
+
+            errors: list[str]
+            errors, _warnings, _tree, _uroot = run_image_check(
+                image=out,
+                source=src,
+                print_tree=False,
+                emit_report=False,
+            )
+            assert errors == []
+
+            # Verify that the FPT inode numbers match the directory tree exactly.
+            # The patch must remain active so that build_expected_fpt uses the same
+            # hash function as the on-disk table.  Before the fix, the collision
+            # blob embedded pre-renumber inode numbers so every entry would be off
+            # by one.
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out)
+
+        fpt_errors: list[str] = [
+            e for e in inspection.errors if "mismatch" in e or "flat_path_table" in e or "collision" in e
+        ]
+        assert fpt_errors == [], f"FPT/collision errors after collision renumber: {fpt_errors}"
+        assert inspection.errors == [], f"Unexpected errors after collision renumber build: {inspection.errors}"
+
+    def test_build_pfs_handles_fpt_collision_inode_renumbering_without_compression(self) -> None:
+        """Forced FPT collisions should verify cleanly when compression is disabled."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        out: Path = tmp_path / "collision-renumbering-raw.ffpfs"
+        original_fpt_hash: Callable[[str, bool], int] = pfs_mod.fpt_hash
+        collision_paths: set[str] = {"/data/levels/level1.bin", "/data/levels/level2.bin"}
+
+        def selective_collision_hash(path: str, case_insensitive: bool = True) -> int:
+            """Force one FPT collision while preserving other path hashes."""
+            if path in collision_paths:
+                return 0x12345678
+            return original_fpt_hash(path, case_insensitive=case_insensitive)
+
+        with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS5,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=False,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+            )
+            errors: list[str]
+            errors, _warnings, _tree, _uroot = run_image_check(
+                image=out,
+                source=src,
+                print_tree=False,
+                emit_report=False,
+            )
+
         assert out.is_file()
         assert out.stat().st_size > 0
+        assert errors == []
+
+    def test_build_pfs_collision_inode_metadata_matches_final_blob(self) -> None:
+        """Final collision inode metadata should match the rebuilt collision blob."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        out: Path = tmp_path / "collision-metadata.ffpfs"
+        original_fpt_hash: Callable[[str, bool], int] = pfs_mod.fpt_hash
+        collision_paths: set[str] = {"/data/levels/level1.bin", "/data/levels/level2.bin"}
+
+        def selective_collision_hash(path: str, case_insensitive: bool = True) -> int:
+            """Force one FPT collision while preserving other path hashes."""
+            if path in collision_paths:
+                return 0x12345678
+            return original_fpt_hash(path, case_insensitive=case_insensitive)
+
+        with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS4,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=True,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+            )
+
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out)
+            assert inspection.errors == []
+            with out.open("rb") as fh:
+                header: pfs_mod.ParsedHeader = parse_image_header(fh)
+                super_root_offset: int = (1 + header.dinode_block_count) * header.block_size
+                super_root_blob: bytes = pfs_mod.read_image_bytes(
+                    fh,
+                    header,
+                    super_root_offset,
+                    header.block_size,
+                )
+                super_entries: list[pfs_mod.ParsedDirent]
+                parse_errors: list[str]
+                super_entries, parse_errors = pfs_mod.parse_image_dirents(super_root_blob, strict=True)
+            assert parse_errors == []
+            collision_hash: int = selective_collision_hash("/data/levels/level1.bin")
+            assert collision_hash in inspection.collision_map
+            collision_fpt_value: int = inspection.fpt_map[collision_hash]
+            assert collision_fpt_value & 0x80000000
+            collision_inode_num: int = next(
+                ent.inode_number for ent in super_entries if ent.name == "collision_resolver"
+            )
+            collision_inode: pfs_mod.ParsedInode = inspection.inodes[collision_inode_num]
+            collision_offset: int = collision_fpt_value & 0x7FFFFFFF
+            entries: list[pfs_mod.ParsedDirent] = inspection.collision_map[collision_hash]
+            serialized_entries: bytes = b"".join(
+                Dirent(
+                    inode_number=entry.inode_number,
+                    type_code=entry.type_code,
+                    name=entry.name,
+                ).to_bytes()
+                for entry in entries
+            ) + (b"\x00" * 0x18)
+            assert collision_offset >= 0
+            assert collision_inode.stored_size == len(serialized_entries)
+            assert collision_inode.logical_size == len(serialized_entries)
+            assert collision_inode.blocks == max(1, pfs_mod.ceil_div(len(serialized_entries), 65536))
+
+    def test_build_pfs_collision_inode_uses_unique_temporary_inode_number(self) -> None:
+        """Collision insertion should not rely on duplicate old inode numbers during remap.
+
+        The collision resolver is renumbered to slot 2 eventually, but before that
+        it should start with a unique temporary inode number so the remap dict does
+        not depend on overwriting an existing `old -> new` entry for uroot.
+        """
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        out: Path = tmp_path / "collision-unique-temp-number.ffpfs"
+        original_fpt_hash: Callable[[str, bool], int] = pfs_mod.fpt_hash
+        collision_paths: set[str] = {"/data/levels/level1.bin", "/data/levels/level2.bin"}
+        recorded_collision_numbers: list[int] = []
+        real_inode_class: type[pfs_mod.Inode] = pfs_mod.Inode
+
+        def selective_collision_hash(path: str, case_insensitive: bool = True) -> int:
+            """Force one FPT collision while preserving other path hashes."""
+            if path in collision_paths:
+                return 0x12345678
+            return original_fpt_hash(path, case_insensitive=case_insensitive)
+
+        def recording_inode(*args: object, **kwargs: object) -> pfs_mod.Inode:
+            """Record the temporary inode number used for collision_resolver creation."""
+            inode: pfs_mod.Inode = real_inode_class(*args, **kwargs)
+            if (
+                kwargs.get("flags") == (c.INODE_FLAG_INTERNAL | c.INODE_FLAG_READONLY)
+                and kwargs.get("size") == 0
+                and kwargs.get("number") != 1
+            ):
+                recorded_collision_numbers.append(inode.number)
+            return inode
+
+        with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash), patch.object(
+            pfs_mod,
+            "Inode",
+            side_effect=recording_inode,
+        ):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS4,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=False,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+            )
+
+        assert recorded_collision_numbers != []
+        assert any(number > 2 for number in recorded_collision_numbers)
+
+    def test_collision_resolver_inode_flags_match_signed_mode(self) -> None:
+        """Collision resolver should mirror signed-mode readonly handling of other internal inodes."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        original_fpt_hash: Callable[[str, bool], int] = pfs_mod.fpt_hash
+        collision_paths: set[str] = {"/data/levels/level1.bin", "/data/levels/level2.bin"}
+
+        def selective_collision_hash(path: str, case_insensitive: bool = True) -> int:
+            """Force one FPT collision while preserving other path hashes."""
+            if path in collision_paths:
+                return 0x12345678
+            return original_fpt_hash(path, case_insensitive=case_insensitive)
+
+        for signed in (False, True):
+            out: Path = tmp_path / f"collision-flags-{'signed' if signed else 'unsigned'}.ffpfs"
+            with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash):
+                build_pfs(
+                    source_root=src,
+                    output_path=out,
+                    block_size=65536,
+                    pfs_version=c.PFS_VERSION_PS4,
+                    inode_bits=32,
+                    case_insensitive=True,
+                    signed=signed,
+                    compress=False,
+                    threshold_gain=1,
+                    cpu_count=1,
+                    zlib_level=9,
+                    dry_run=False,
+                    verbose=False,
+                    encrypted=False,
+                )
+
+            with out.open("rb") as fh:
+                hdr: pfs_mod.ParsedHeader = parse_image_header(fh)
+                inodes: list[pfs_mod.ParsedInode] = parse_image_inodes(fh, hdr)
+                super_root_offset: int = (1 + hdr.dinode_block_count) * hdr.block_size
+                super_root_blob: bytes = pfs_mod.read_image_bytes(fh, hdr, super_root_offset, hdr.block_size)
+                super_entries: list[pfs_mod.ParsedDirent]
+                parse_errors: list[str]
+                super_entries, parse_errors = pfs_mod.parse_image_dirents(super_root_blob, strict=True)
+
+            assert parse_errors == []
+            collision_inode_number: int = next(
+                ent.inode_number for ent in super_entries if ent.name == "collision_resolver"
+            )
+            collision_inode: pfs_mod.ParsedInode = inodes[collision_inode_number]
+            assert collision_inode.flags & c.INODE_FLAG_INTERNAL
+            if signed:
+                assert not (collision_inode.flags & c.INODE_FLAG_READONLY)
+                assert collision_inode.flags & c.INODE_FLAG_SIGNED_EXTRA
+            else:
+                assert collision_inode.flags & c.INODE_FLAG_READONLY
+                assert not (collision_inode.flags & c.INODE_FLAG_SIGNED_EXTRA)
 
     def test_pfsc_encode_decode_round_trip(self) -> None:
         """PFSC payload encoding and decoding should preserve logical bytes."""
