@@ -742,21 +742,24 @@ def _resolve_pack_temp_folder(args: argparse.Namespace) -> Path:
     return resolve_temp_root(temp_folder=temp_folder)
 
 
-def _can_stream_pack_file(*, args: argparse.Namespace) -> bool:
-    """Return whether single-file packing can use the streaming builder.
+def _stream_fallback_reason(*, args: argparse.Namespace) -> str | None:
+    """Return why single-file streaming is unavailable, or None when supported.
 
     Args:
         args: Parsed CLI arguments for the single-file pack workflow.
 
     Returns:
-        True when the streaming builder supports the requested options.
+        A human-readable reason the streaming builder cannot be used, or ``None``
+        when the requested options are supported by streaming.
     """
+    if bool(getattr(args, "signed", False)):
+        return "signed images"
+    if int(getattr(args, "inode_bits", 32)) != 32:
+        return "64-bit inodes"
     block_size_arg: str = str(getattr(args, "block_size", "")).strip().lower()
-    return not (
-        bool(getattr(args, "signed", False))
-        or int(getattr(args, "inode_bits", 32)) != 32
-        or block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}
-    )
+    if block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}:
+        return "auto-fit block size"
+    return None
 
 
 @dataclass(frozen=True)
@@ -1183,12 +1186,8 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
     if output_changed:
         info("Single file streaming mode enabled, adjusting output file extension to .ffpfsc")
 
-    # Resolve block size (single-file path: auto or explicit, no auto-fit).
+    # Resolve block size (single-file path: auto or explicit; auto-fit routes to the spool path).
     block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
-    if block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}:
-        raise BuildError(
-            "--block-size auto-fit is not supported for single-file packing; use 'auto' or an explicit size"
-        )
     if block_size_arg in {"auto", ""}:
         block_size: int = 65536
     else:
@@ -1273,10 +1272,13 @@ def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
     if not source_file.exists() or not source_file.is_file():
         raise BuildError(f"--source-file must be an existing file: {source_file}")
 
-    # Prefer direct streaming for the common single-file path, fall back to the
-    # legacy staged/spool builder only when the requested options require it.
-    if _can_stream_pack_file(args=args):
+    # Prefer direct-to-image streaming for the common single-file path; fall back to
+    # the legacy staged/spool builder only when forced or when options require it.
+    reason: str | None = _stream_fallback_reason(args=args)
+    if not getattr(args, "use_spool", False) and reason is None:
         return _run_stream_pack_file(args=args, source_file=source_file)
+    if not getattr(args, "use_spool", False) and reason is not None:
+        info(f"Direct-to-image streaming unavailable ({reason}); using the spool builder.")
 
     with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
         return _run_pack_build(
@@ -1576,11 +1578,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         include_require_game_files=False,
     )
     file_parser.add_argument(
-        "--no-spool",
+        "--use-spool",
         action="store_true",
         help=(
-            "Prefer direct-to-image streaming for single-file packing; this is already the default when supported, "
-            "and unsupported option combinations fall back to the legacy spool path"
+            "Force the legacy staged/spool builder for single-file packing instead of the default "
+            "direct-to-image streaming"
         ),
     )
     file_parser.set_defaults(
