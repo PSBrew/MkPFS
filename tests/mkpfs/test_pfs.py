@@ -1024,7 +1024,36 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         assert block_size2 == c.PFSC_LOGICAL_BLOCK_SIZE
         assert block_offsets == c.PFSC_BLOCK_OFFSETS_OFFSET
         assert data_start >= c.PFSC_INITIAL_DATA_OFFSET
-        assert data_length == 3 * c.PFSC_LOGICAL_BLOCK_SIZE
+        assert data_length == len(raw)
+
+    def test_pfsc_decode_accepts_unaligned_header_logical_size(self) -> None:
+        """PFSC decoding should use ceil-divided block counts when header logical size is unaligned."""
+        raw: bytes = (b"A" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"B" * 1234)
+        encoded: bytes
+        _gain_pct: float
+        _hypothetical_size: int
+        encoded, _gain_pct, _hypothetical_size = pfs_mod.encode_pfsc_payload(
+            raw=raw,
+            threshold_gain=1,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+        )
+
+        logical_block_size: int
+        block_count: int
+        block_offsets_offset: int
+        data_offset: int
+        logical_size: int
+        logical_block_size, block_count, block_offsets_offset, data_offset, logical_size = pfs_mod._parse_pfsc_header(
+            encoded
+        )
+
+        assert logical_block_size == c.PFSC_LOGICAL_BLOCK_SIZE
+        assert block_count == 2
+        assert block_offsets_offset == c.PFSC_BLOCK_OFFSETS_OFFSET
+        assert data_offset >= c.PFSC_INITIAL_DATA_OFFSET
+        assert logical_size == len(raw)
+        assert pfs_mod.decode_pfsc_payload(payload=encoded) == raw
 
     def test_pfsc_encode_reports_incremental_progress_bytes(self) -> None:
         """PFSC encoding should report raw bytes as each logical block is processed."""

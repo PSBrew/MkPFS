@@ -817,7 +817,7 @@ class PFSCHeader:
         logical_block_size: Logical PFSC block size.
         block_offsets_offset: Offset to the block offset table from payload start.
         data_offset: Absolute offset where PFSC block data begins.
-        data_length: Logical padded byte length managed by the PFSC stream.
+        data_length: Original logical byte length managed by the PFSC stream.
     """
 
     magic: int
@@ -988,7 +988,7 @@ def encode_pfsc_payload(
         logical_block_size=logical_block_size,
         block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
         data_offset=header_size,
-        data_length=block_count * logical_block_size,
+        data_length=len(raw),
     )
     header_area: bytearray = bytearray(header_size)
     struct.pack_into(
@@ -1325,7 +1325,7 @@ def _encode_pfsc_into_handle(
         logical_block_size=logical_block_size,
         block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
         data_offset=header_size,
-        data_length=block_count * logical_block_size,
+        data_length=raw_size,
     )
     header_area: bytearray = bytearray(header_size)
     struct.pack_into(
@@ -1728,8 +1728,6 @@ def _parse_pfsc_header(head: bytes) -> tuple[int, int, int, int, int]:
         raise ValueError("PFSC block size mismatch between block_sz and block_sz2")
     if logical_size < 0:
         raise ValueError("PFSC logical size is negative")
-    if logical_size % logical_block_size != 0:
-        raise ValueError("PFSC logical size is not aligned to the logical block size")
     if block_offsets_offset < consts.PFSC_HEADER_SIZE:
         raise ValueError("PFSC block offset table overlaps header")
     if block_offsets_offset != consts.PFSC_BLOCK_OFFSETS_OFFSET:
@@ -1740,7 +1738,7 @@ def _parse_pfsc_header(head: bytes) -> tuple[int, int, int, int, int]:
     if data_offset < consts.PFSC_INITIAL_DATA_OFFSET:
         raise ValueError("PFSC data offset is smaller than the minimum compatible header span")
 
-    block_count: int = logical_size // logical_block_size
+    block_count: int = ceil_div(logical_size, logical_block_size) if logical_size > 0 else 0
     return logical_block_size, block_count, block_offsets_offset, data_offset, logical_size
 
 
@@ -1809,9 +1807,13 @@ def decode_pfsc_payload(payload: bytes, expected_logical_size: int | None = None
         stored_block: bytes = payload[offsets[idx] : offsets[idx + 1]]
         logical_out.extend(_decode_pfsc_block(stored_block, logical_block_size, idx))
 
-    logical_payload: bytes = bytes(logical_out)
-    if len(logical_payload) != logical_size:
-        raise ValueError(f"PFSC logical output size {len(logical_payload)} does not match header size {logical_size}")
+    logical_payload_padded: bytes = bytes(logical_out)
+    expected_padded_size: int = block_count * logical_block_size
+    if len(logical_payload_padded) != expected_padded_size:
+        raise ValueError(
+            f"PFSC logical output size {len(logical_payload_padded)} does not match padded size {expected_padded_size}"
+        )
+    logical_payload: bytes = logical_payload_padded[:logical_size]
     if expected_logical_size is not None:
         if expected_logical_size < 0:
             raise ValueError("expected inode logical size is negative")
