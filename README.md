@@ -172,7 +172,6 @@ mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file
                   [--compression-level COMPRESSION_LEVEL]
                   [--max-compressed-ratio MAX_COMPRESSED_RATIO]
                   [--min-compress-size MIN_COMPRESS_SIZE]
-                  [--no-spool]
                   [--skip-executable-compression] [--signed] [--encrypted]
                   [--ekpfs-key EKPFS_KEY] [--require-game-files] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify]
                   source_dir image_file
@@ -206,7 +205,6 @@ mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 | `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `7`. |
 | `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: `95`. |
 | `--min-compress-size MIN_COMPRESS_SIZE` | Store files smaller than this many bytes raw without trying PFSC compression. When omitted (or set to `0`), MkPFS uses the resolved `--block-size` value, `65536` for `--block-size auto`, or the selected value for `--block-size auto-fit`. |
-| `--no-spool`                                  | Keep preferring direct-to-image streaming for single-file packing. This is already the default when supported; unsupported option combinations transparently fall back to the legacy staged/spool path. |
 | `--skip-executable-compression`               | Skip compression in important executable files. Default: enabled. |
 | `--signed`                                    | Build a signed PFS image using a zero EKPFS key and seed. |
 | `--encrypted`                                 | Encrypt filesystem blocks with AES-XTS. |
@@ -233,7 +231,7 @@ mkpfs pack file [-h] [--adjust-output-file-extension | --no-adjust-output-file-e
                 [--compression-level COMPRESSION_LEVEL]
                 [--max-compressed-ratio MAX_COMPRESSED_RATIO]
                 [--min-compress-size MIN_COMPRESS_SIZE]
-                [--no-spool]
+                [--use-spool]
                 [--skip-executable-compression] [--signed] [--encrypted]
                 [--ekpfs-key EKPFS_KEY] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify]
                 source_file image_file
@@ -266,7 +264,7 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --temp-folder ./tmp/mkpfs
 | `--compression-level COMPRESSION_LEVEL`       | Zlib compression level from `0` to `9`. Default: `7`.                                                                                                                                                   |
 | `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `95` to store files raw unless PFSC is 95% of raw size or smaller. Default: `95`.                                                                 |
 | `--min-compress-size MIN_COMPRESS_SIZE`       | Store files smaller than this many bytes raw without trying PFSC compression. When omitted (or set to `0`), MkPFS uses the resolved `--block-size` value, `65536` for `--block-size auto`, or the selected value for `--block-size auto-fit`.                                              |
-| `--no-spool`                                  | Keep preferring direct-to-image streaming for single-file packing. This is already the default when supported; unsupported option combinations transparently fall back to the legacy staged/spool path. |
+| `--use-spool`                                 | Force the legacy staged/spool builder instead of the default direct-to-image streaming. |
 | `--skip-executable-compression`               | Skip compression in important executable files. Default: enabled.                                                                                            |
 | `--signed`                                    | Build a signed PFS image using a zero EKPFS key and seed.                                                                                                                                               |
 | `--encrypted`                                 | Encrypt filesystem blocks with AES-XTS.                                                                                                                                                                 |
@@ -278,10 +276,11 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --temp-folder ./tmp/mkpfs
 
 Notes:
 
-- `pack file` now uses the direct-to-image streaming builder by default for supported option combinations. It
-  automatically falls back to the legacy staged/spool path for `--signed`, `--inode-bits 64`, and
-  `--block-size auto-fit`.
-- Single-file fallback mode stages the file in a temporary one-file tree using links, so the source payload is not
+- `pack file` streams directly to the image by default, which keeps peak disk use to the source plus the output and
+  keeps memory flat. `--signed`, `--inode-bits 64`, and `--block-size auto-fit` automatically use the legacy
+  staged/spool path instead, with an on-screen notice explaining why.
+- Pass `--use-spool` to force the legacy staged/spool path even when streaming is available.
+- The fallback path stages the file in a temporary one-file tree using links, so the source payload is not
   duplicated on disk.
 - Use `--temp-folder` when you want fallback staged files and any legacy PFSC spool files to live somewhere other than
   the system temp directory.
