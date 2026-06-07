@@ -863,29 +863,26 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert parse_errors == []
             collision_hash: int = selective_collision_hash("/data/levels/level1.bin")
             assert collision_hash in inspection.collision_map
+            collision_fpt_value: int = inspection.fpt_map[collision_hash]
+            assert collision_fpt_value & 0x80000000
             collision_inode_num: int = next(
                 ent.inode_number for ent in super_entries if ent.name == "collision_resolver"
             )
             collision_inode: pfs_mod.ParsedInode = inspection.inodes[collision_inode_num]
-            collision_inode_num: int | None = None
-            for path_hash, value in inspection.fpt_map.items():
-                if path_hash == collision_hash:
-                    assert value & 0x80000000
-                    offset: int = value & 0x7FFFFFFF
-                    entries: list[pfs_mod.ParsedDirent] = inspection.collision_map[collision_hash]
-                    serialized_entries: bytes = b"".join(
-                        Dirent(
-                            inode_number=entry.inode_number,
-                            type_code=entry.type_code,
-                            name=entry.name,
-                        ).to_bytes()
-                        for entry in entries
-                    ) + (b"\x00" * 0x18)
-                    assert offset == 0
-                    assert collision_inode.stored_size == len(serialized_entries)
-                    assert collision_inode.logical_size == len(serialized_entries)
-                    assert collision_inode.blocks == max(1, pfs_mod.ceil_div(len(serialized_entries), 65536))
-                    break
+            collision_offset: int = collision_fpt_value & 0x7FFFFFFF
+            entries: list[pfs_mod.ParsedDirent] = inspection.collision_map[collision_hash]
+            serialized_entries: bytes = b"".join(
+                Dirent(
+                    inode_number=entry.inode_number,
+                    type_code=entry.type_code,
+                    name=entry.name,
+                ).to_bytes()
+                for entry in entries
+            ) + (b"\x00" * 0x18)
+            assert collision_offset >= 0
+            assert collision_inode.stored_size == len(serialized_entries)
+            assert collision_inode.logical_size == len(serialized_entries)
+            assert collision_inode.blocks == max(1, pfs_mod.ceil_div(len(serialized_entries), 65536))
 
     def test_pfsc_encode_decode_round_trip(self) -> None:
         """PFSC payload encoding and decoding should preserve logical bytes."""
