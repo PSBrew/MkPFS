@@ -939,6 +939,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             )
 
         assert recorded_collision_numbers != []
+        assert any(number > 2 for number in recorded_collision_numbers)
         assert all(number != 2 for number in recorded_collision_numbers)
 
     def test_pfsc_encode_decode_round_trip(self) -> None:
