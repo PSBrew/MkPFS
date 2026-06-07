@@ -1960,6 +1960,41 @@ def make_fpt_and_collision_blob(
     return bytes(fpt), (bytes(collision_blob) if has_collision else None), has_collision
 
 
+def paths_have_fpt_collision(
+    dirs_sorted: list[DirNode],
+    files_sorted: list[FileNode],
+    case_insensitive: bool = True,
+) -> bool:
+    """Return whether the source paths require a collision resolver.
+
+    Args:
+        dirs_sorted: Directory nodes considered for flat path table entries.
+        files_sorted: File nodes considered for flat path table entries.
+        case_insensitive: Whether hashes should use case-insensitive path folding.
+
+    Returns:
+        ``True`` when two or more paths produce the same FPT hash, otherwise
+        ``False``.
+    """
+    seen_hashes: set[int] = set()
+    path_value: str
+    for directory_node in dirs_sorted:
+        if directory_node.rel_dir == "":
+            continue
+        path_value = dir_full_path_for_hash(directory_node)
+        path_hash: int = fpt_hash(path_value, case_insensitive=case_insensitive)
+        if path_hash in seen_hashes:
+            return True
+        seen_hashes.add(path_hash)
+    for file_node in files_sorted:
+        path_value = file_full_path_for_hash(file_node)
+        path_hash = fpt_hash(path_value, case_insensitive=case_insensitive)
+        if path_hash in seen_hashes:
+            return True
+        seen_hashes.add(path_hash)
+    return False
+
+
 def compute_file_storage(
     file_node: FileNode,
     compress: bool,
@@ -2851,12 +2886,13 @@ def build_pfs(
             child_file = files[child_rel_file]
             d.dirents.append(Dirent(child_file.inode.number, consts.DIRENT_TYPE_FILE, child_file.name))
 
-    fpt_blob, collision_blob, has_collision = make_fpt_and_collision_blob(
+    has_collision: bool = paths_have_fpt_collision(
         dir_nodes_sorted,
         file_nodes_sorted,
-        inode_by_path,
         case_insensitive=case_insensitive,
     )
+    fpt_blob: bytes = b""
+    collision_blob: bytes | None = None
 
     if has_collision:
         collision_inode = Inode(
@@ -2866,9 +2902,9 @@ def build_pfs(
             flags=consts.INODE_FLAG_INTERNAL
             | consts.INODE_FLAG_READONLY
             | (consts.INODE_FLAG_SIGNED_EXTRA if signed else 0),
-            size=len(collision_blob or b""),
-            size_compressed=len(collision_blob or b""),
-            blocks=max(1, ceil_div(len(collision_blob or b""), block_size)),
+            size=0,
+            size_compressed=0,
+            blocks=1,
             time_sec=now,
         )
         inodes = [super_root_inode, fpt_inode, collision_inode, uroot_inode] + [
@@ -2894,16 +2930,18 @@ def build_pfs(
         for f in file_nodes_sorted:
             inode_by_path[f"file:{f.rel_path}"] = f.inode
 
-        # Rebuild FPT and collision blobs now that inode numbers have been
-        # shifted by the insertion of the collision_inode at slot 2. The
-        # initial blobs encoded pre-renumber inode numbers, which would
-        # cause every FPT entry to be off by one on verify.
-        fpt_blob, collision_blob, _ = make_fpt_and_collision_blob(
-            dirs_sorted=dir_nodes_sorted,
-            files_sorted=file_nodes_sorted,
-            inode_by_path=inode_by_path,
-            case_insensitive=case_insensitive,
-        )
+    # Build FPT artifacts after any collision inode insertion and renumbering.
+    fpt_blob, collision_blob, has_collision = make_fpt_and_collision_blob(
+        dir_nodes_sorted,
+        file_nodes_sorted,
+        inode_by_path,
+        case_insensitive=case_insensitive,
+    )
+    if collision_inode is not None:
+        collision_blob_size: int = len(collision_blob or b"")
+        collision_inode.size = collision_blob_size
+        collision_inode.size_compressed = collision_blob_size
+        collision_inode.blocks = max(1, ceil_div(collision_blob_size, block_size))
 
     super_root_dirents: list[Dirent] = [Dirent(fpt_inode.number, consts.DIRENT_TYPE_FILE, "flat_path_table")]
     if has_collision and collision_inode is not None:
@@ -2972,7 +3010,6 @@ def build_pfs(
         )
 
         if has_collision and collision_inode is not None:
-            collision_inode.blocks = max(1, ceil_div(len(collision_blob or b""), block_size))
             ndblock = assign_signed_inode_layout(
                 collision_inode,
                 collision_inode.blocks,
