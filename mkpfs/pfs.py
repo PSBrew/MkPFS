@@ -2840,6 +2840,17 @@ def build_pfs(
         for f in file_nodes_sorted:
             inode_by_path[f"file:{f.rel_path}"] = f.inode
 
+        # Rebuild FPT and collision blobs now that inode numbers have been
+        # shifted by the insertion of the collision_inode at slot 2. The
+        # initial blobs encoded pre-renumber inode numbers, which would
+        # cause every FPT entry to be off by one on verify.
+        fpt_blob, collision_blob, _ = make_fpt_and_collision_blob(
+            dirs_sorted=dir_nodes_sorted,
+            files_sorted=file_nodes_sorted,
+            inode_by_path=inode_by_path,
+            case_insensitive=case_insensitive,
+        )
+
     super_root_dirents: list[Dirent] = [Dirent(fpt_inode.number, consts.DIRENT_TYPE_FILE, "flat_path_table")]
     if has_collision and collision_inode is not None:
         super_root_dirents.append(Dirent(collision_inode.number, consts.DIRENT_TYPE_FILE, "collision_resolver"))

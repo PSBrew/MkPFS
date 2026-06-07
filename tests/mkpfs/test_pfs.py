@@ -624,7 +624,18 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert pfs_mod.read_image_inode_payload(fh, header, large_inode)[:4] == b"PFSC"
 
     def test_build_pfs_handles_fpt_collision_inode_renumbering(self) -> None:
-        """Forced FPT collisions should not break inode renumbering during build."""
+        """Forced FPT collisions should not break inode renumbering during build.
+
+        When the collision resolver inode is inserted at slot 2 all subsequent
+        inode numbers are shifted by one.  The flat_path_table must be rebuilt
+        with the post-renumber inode numbers so that FPT entries match the
+        directory tree on verify.  A regression was present where the FPT was
+        built before the renumber step, causing every entry to be off by one.
+
+        The fpt_hash patch must also be active during inspection so that both
+        the on-disk table and the expected table are built with the same hash
+        function.
+        """
         tmp_path: Path = self.make_temp_path()
         src: Path = make_app_with_nested_dirs(tmp_path / "src")
         out: Path = tmp_path / "collision-renumbering.ffpfs"
@@ -647,8 +658,21 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
                 encrypted=False,
             )
 
-        assert out.is_file()
-        assert out.stat().st_size > 0
+            assert out.is_file()
+            assert out.stat().st_size > 0
+
+            # Verify that the FPT inode numbers match the directory tree exactly.
+            # The patch must remain active so that build_expected_fpt uses the same
+            # hash function as the on-disk table.  Before the fix, the collision
+            # blob embedded pre-renumber inode numbers so every entry would be off
+            # by one.
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out)
+
+        fpt_errors: list[str] = [
+            e for e in inspection.errors if "mismatch" in e or "flat_path_table" in e or "collision" in e
+        ]
+        assert fpt_errors == [], f"FPT/collision errors after collision renumber: {fpt_errors}"
+        assert inspection.errors == [], f"Unexpected errors after collision renumber build: {inspection.errors}"
 
     def test_pfsc_encode_decode_round_trip(self) -> None:
         """PFSC payload encoding and decoding should preserve logical bytes."""
