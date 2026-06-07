@@ -893,9 +893,9 @@ def _run_post_pack_verify(
         ``1`` when the check reports errors, otherwise ``0``.
     """
     if structure_only:
-        info("Running structural post-create check...")
+        info("Running structural post-pack check...")
     else:
-        info("Running full post-create check with payload hashing...")
+        info("Running full post-pack check with payload hashing...")
     errors, warnings, _tree, _uroot = run_image_check(
         output_path,
         source,
