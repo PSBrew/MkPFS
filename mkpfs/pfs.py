@@ -867,6 +867,32 @@ def _pfsc_header_size(*, block_count: int, logical_block_size: int) -> int:
     return consts.PFSC_INITIAL_DATA_OFFSET + (extra_blocks * logical_block_size)
 
 
+def estimate_pfsc_spool_size(*, raw_size: int, logical_block_size: int = consts.PFSC_LOGICAL_BLOCK_SIZE) -> int:
+    """Estimate the maximum transient spool size for PFSC encoding.
+
+    Args:
+        raw_size: Logical source file size in bytes.
+        logical_block_size: PFSC logical block size used for compression.
+
+    Returns:
+        Maximum temporary bytes a streaming PFSC spool may occupy before the
+        encoder decides whether to keep or discard the compressed payload.
+
+    Raises:
+        ValueError: If ``raw_size`` is negative or ``logical_block_size`` is not
+            positive.
+    """
+    if raw_size < 0:
+        raise ValueError(f"raw_size must be non-negative, got {raw_size}")
+    if logical_block_size <= 0:
+        raise ValueError(f"logical_block_size must be positive, got {logical_block_size}")
+    if raw_size == 0:
+        return 0
+    block_count: int = ceil_div(raw_size, logical_block_size)
+    padded_payload_size: int = block_count * logical_block_size
+    return _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size) + padded_payload_size
+
+
 def _should_store_pfsc_block_compressed(
     *,
     compressed_block_size: int,
