@@ -2895,8 +2895,9 @@ def build_pfs(
     collision_blob: bytes | None = None
 
     if has_collision:
+        collision_inode_number: int = next_inode_number
         collision_inode = Inode(
-            number=2,
+            number=collision_inode_number,
             mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
             nlink=1,
             flags=consts.INODE_FLAG_INTERNAL

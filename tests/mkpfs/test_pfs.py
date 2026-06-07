@@ -884,6 +884,59 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert collision_inode.logical_size == len(serialized_entries)
             assert collision_inode.blocks == max(1, pfs_mod.ceil_div(len(serialized_entries), 65536))
 
+    def test_build_pfs_collision_inode_uses_unique_temporary_inode_number(self) -> None:
+        """Collision insertion should not rely on duplicate old inode numbers during remap.
+
+        The collision resolver is renumbered to slot 2 eventually, but before that
+        it should start with a unique temporary inode number so the remap dict does
+        not depend on overwriting an existing `old -> new` entry for uroot.
+        """
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        out: Path = tmp_path / "collision-unique-temp-number.ffpfs"
+        original_fpt_hash: Callable[[str, bool], int] = pfs_mod.fpt_hash
+        collision_paths: set[str] = {"/data/levels/level1.bin", "/data/levels/level2.bin"}
+        recorded_collision_numbers: list[int] = []
+        real_inode_class: type[pfs_mod.Inode] = pfs_mod.Inode
+
+        def selective_collision_hash(path: str, case_insensitive: bool = True) -> int:
+            """Force one FPT collision while preserving other path hashes."""
+            if path in collision_paths:
+                return 0x12345678
+            return original_fpt_hash(path, case_insensitive=case_insensitive)
+
+        def recording_inode(*args: object, **kwargs: object) -> pfs_mod.Inode:
+            """Record the temporary inode number used for collision_resolver creation."""
+            inode: pfs_mod.Inode = real_inode_class(*args, **kwargs)
+            if kwargs.get("flags") == (c.INODE_FLAG_INTERNAL | c.INODE_FLAG_READONLY) and kwargs.get("size") == 0:
+                recorded_collision_numbers.append(inode.number)
+            return inode
+
+        with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash), patch.object(
+            pfs_mod,
+            "Inode",
+            side_effect=recording_inode,
+        ):
+            build_pfs(
+                source_root=src,
+                output_path=out,
+                block_size=65536,
+                pfs_version=c.PFS_VERSION_PS4,
+                inode_bits=32,
+                case_insensitive=True,
+                signed=False,
+                compress=False,
+                threshold_gain=1,
+                cpu_count=1,
+                zlib_level=9,
+                dry_run=False,
+                verbose=False,
+                encrypted=False,
+            )
+
+        assert recorded_collision_numbers != []
+        assert all(number != 2 for number in recorded_collision_numbers)
+
     def test_pfsc_encode_decode_round_trip(self) -> None:
         """PFSC payload encoding and decoding should preserve logical bytes."""
         raw: bytes = (b"A" * 65536) + (b"B" * 65536) + (b"C" * 1234)
