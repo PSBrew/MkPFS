@@ -867,6 +867,32 @@ def _pfsc_header_size(*, block_count: int, logical_block_size: int) -> int:
     return consts.PFSC_INITIAL_DATA_OFFSET + (extra_blocks * logical_block_size)
 
 
+def estimate_pfsc_spool_size(*, raw_size: int, logical_block_size: int = consts.PFSC_LOGICAL_BLOCK_SIZE) -> int:
+    """Estimate the maximum transient spool size for PFSC encoding.
+
+    Args:
+        raw_size: Logical source file size in bytes.
+        logical_block_size: PFSC logical block size used for compression.
+
+    Returns:
+        Maximum temporary bytes a streaming PFSC spool may occupy before the
+        encoder decides whether to keep or discard the compressed payload.
+
+    Raises:
+        ValueError: If ``raw_size`` is negative or ``logical_block_size`` is not
+            positive.
+    """
+    if raw_size < 0:
+        raise ValueError(f"raw_size must be non-negative, got {raw_size}")
+    if logical_block_size <= 0:
+        raise ValueError(f"logical_block_size must be positive, got {logical_block_size}")
+    if raw_size == 0:
+        return 0
+    block_count: int = ceil_div(raw_size, logical_block_size)
+    padded_payload_size: int = block_count * logical_block_size
+    return _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size) + padded_payload_size
+
+
 def _should_store_pfsc_block_compressed(
     *,
     compressed_block_size: int,
@@ -1351,23 +1377,28 @@ def _encode_pfsc_file_to_spool(
     Returns:
         Tuple ``(stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size)``.
     """
-    with spool_path.open("w+b") as spool_file:
-        stored_size: int
-        is_compressed: bool
-        gain_pct: float
-        hypothetical_all_compressed_size: int
-        stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size = _encode_pfsc_into_handle(
-            out=spool_file,
-            base_offset=0,
-            source_path=abs_path,
-            threshold_gain=threshold_gain,
-            min_file_gain=min_file_gain,
-            zlib_level=zlib_level,
-            logical_block_size=logical_block_size,
-            block_worker_count=block_worker_count,
-            progress_callback=progress_callback,
-        )
-        spool_file.truncate(stored_size)
+    try:
+        with spool_path.open("w+b") as spool_file:
+            stored_size: int
+            is_compressed: bool
+            gain_pct: float
+            hypothetical_all_compressed_size: int
+            stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size = _encode_pfsc_into_handle(
+                out=spool_file,
+                base_offset=0,
+                source_path=abs_path,
+                threshold_gain=threshold_gain,
+                min_file_gain=min_file_gain,
+                zlib_level=zlib_level,
+                logical_block_size=logical_block_size,
+                block_worker_count=block_worker_count,
+                progress_callback=progress_callback,
+            )
+            spool_file.truncate(stored_size)
+    except OSError:
+        with suppress(OSError):
+            spool_path.unlink()
+        raise
     return stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size
 
 
@@ -1632,6 +1663,22 @@ def _compress_files_in_process(
             progress_total_units,
             bytes_processed=total_bytes_to_process if total_bytes_to_process > 0 else 0,
         )
+
+
+def cleanup_temporary_file_node_payloads(*, file_nodes: list[FileNode]) -> None:
+    """Remove temporary payload files already assigned to file nodes.
+
+    Args:
+        file_nodes: File nodes that may reference PFSC spool files.
+    """
+    file_node: FileNode
+    for file_node in file_nodes:
+        if not file_node.stored_source_is_temp or file_node.stored_source_path is None:
+            continue
+        with suppress(OSError):
+            file_node.stored_source_path.unlink()
+        file_node.stored_source_path = None
+        file_node.stored_source_is_temp = False
 
 
 def _parse_pfsc_header(head: bytes) -> tuple[int, int, int, int, int]:
@@ -2564,18 +2611,22 @@ def build_pfs(
         if worker_count == 1 or len(compression_file_nodes) == 1:
             # Single-worker or single-file path uses in-process flow so a large file
             # can leverage block-level multiprocessing inside one file.
-            _compress_files_in_process(
-                file_nodes_sorted=compression_file_nodes,
-                threshold_gain=threshold_gain,
-                min_file_gain=min_file_gain,
-                min_compress_size=min_compress_size,
-                zlib_level=zlib_level,
-                compression_cpu_count=compression_cpu_count,
-                dry_run=dry_run,
-                total_bytes_to_process=total_bytes_to_process,
-                progress=progress,
-                temp_folder=temp_root,
-            )
+            try:
+                _compress_files_in_process(
+                    file_nodes_sorted=compression_file_nodes,
+                    threshold_gain=threshold_gain,
+                    min_file_gain=min_file_gain,
+                    min_compress_size=min_compress_size,
+                    zlib_level=zlib_level,
+                    compression_cpu_count=compression_cpu_count,
+                    dry_run=dry_run,
+                    total_bytes_to_process=total_bytes_to_process,
+                    progress=progress,
+                    temp_folder=temp_root,
+                )
+            except OSError:
+                cleanup_temporary_file_node_payloads(file_nodes=compression_file_nodes)
+                raise
         else:
             # Use multiprocessing for parallel compression.
             progress_total_units: int = (
@@ -2623,6 +2674,9 @@ def build_pfs(
                             result = results.next(timeout=0.1)
                         except mp.TimeoutError:
                             continue
+                        except OSError:
+                            cleanup_temporary_file_node_payloads(file_nodes=compression_file_nodes)
+                            raise
 
                         remaining_results -= 1
                         (
