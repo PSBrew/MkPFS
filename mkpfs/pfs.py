@@ -899,6 +899,7 @@ def _should_store_pfsc_block_compressed(
     logical_block_size: int,
     gain_pct: float,
     threshold_gain: int,
+    is_last_block: bool,
 ) -> bool:
     """Return whether a PFSC block can be stored in compressed form.
 
@@ -906,17 +907,22 @@ def _should_store_pfsc_block_compressed(
     stored block span with the logical block size. A compressed block must
     therefore be strictly smaller than the logical block size, otherwise the
     decoder interprets it as raw bytes and the payload becomes self-inconsistent.
+    This policy also keeps the final logical block raw as a workaround for the
+    target runtime's last-block handling.
 
     Args:
         compressed_block_size: Encoded zlib block length in bytes.
         logical_block_size: PFSC logical block size in bytes.
         gain_pct: Percent gain achieved by compressing the padded logical block.
         threshold_gain: Minimum gain required to keep the compressed bytes.
+        is_last_block: Whether the current logical block is the file's final block.
 
     Returns:
         ``True`` when the block should be stored compressed, ``False`` when it
         must remain raw.
     """
+    if is_last_block:
+        return False
     return compressed_block_size < logical_block_size and gain_pct >= threshold_gain
 
 
@@ -959,7 +965,7 @@ def encode_pfsc_payload(
     all_compressed_size: int = 0
     compressed_blocks: int = 0
 
-    for block in logical_blocks:
+    for block_index, block in enumerate(logical_blocks):
         padded_block: bytes = block.ljust(logical_block_size, b"\x00")
         compressed_block: bytes = zlib.compress(padded_block, level=zlib_level)
         all_compressed_size += len(compressed_block)
@@ -969,6 +975,7 @@ def encode_pfsc_payload(
             logical_block_size=logical_block_size,
             gain_pct=gain_pct,
             threshold_gain=threshold_gain,
+            is_last_block=block_index == (block_count - 1),
         )
         chosen_block: bytes = compressed_block if store_compressed else padded_block
         if store_compressed:
@@ -1154,7 +1161,7 @@ def _analyze_pfsc_file_storage(
 
     if effective_block_workers == 1:
         with abs_path.open("rb") as source_file:
-            for _idx in range(block_count):
+            for block_index in range(block_count):
                 chunk: bytes = source_file.read(logical_block_size)
                 padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
                 compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
@@ -1165,6 +1172,7 @@ def _analyze_pfsc_file_storage(
                     logical_block_size=logical_block_size,
                     gain_pct=gain_pct,
                     threshold_gain=threshold_gain,
+                    is_last_block=block_index == (block_count - 1),
                 ):
                     chosen_payload_size += len(compressed_chunk)
                     compressed_blocks += 1
@@ -1183,7 +1191,7 @@ def _analyze_pfsc_file_storage(
             results_iter = pool.imap(_compress_pfsc_block_lengths_worker, worker_args_iter, chunksize=1)
             raw_block_len: int
             compressed_block_len: int
-            for raw_block_len, compressed_block_len in results_iter:
+            for block_index, (raw_block_len, compressed_block_len) in enumerate(results_iter):
                 all_compressed_size += compressed_block_len
                 padded_block_len: int = logical_block_size
                 gain_pct: float = ((padded_block_len - compressed_block_len) / padded_block_len) * 100.0
@@ -1192,6 +1200,7 @@ def _analyze_pfsc_file_storage(
                     logical_block_size=logical_block_size,
                     gain_pct=gain_pct,
                     threshold_gain=threshold_gain,
+                    is_last_block=block_index == (block_count - 1),
                 ):
                     chosen_payload_size += compressed_block_len
                     compressed_blocks += 1
@@ -1260,7 +1269,7 @@ def _encode_pfsc_into_handle(
     out.seek(base_offset + header_size)
     if effective_block_workers == 1:
         with source_path.open("rb") as source_file:
-            for _idx in range(block_count):
+            for block_index in range(block_count):
                 chunk: bytes = source_file.read(logical_block_size)
                 padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
                 compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
@@ -1271,6 +1280,7 @@ def _encode_pfsc_into_handle(
                     logical_block_size=logical_block_size,
                     gain_pct=gain_pct,
                     threshold_gain=threshold_gain,
+                    is_last_block=block_index == (block_count - 1),
                 )
                 selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
                 if store_compressed:
@@ -1290,7 +1300,7 @@ def _encode_pfsc_into_handle(
             results_iter = pool.imap(_compress_pfsc_block_payload_worker, worker_args_iter, chunksize=1)
             raw_chunk: bytes
             compressed_chunk: bytes
-            for raw_chunk, compressed_chunk in results_iter:
+            for block_index, (raw_chunk, compressed_chunk) in enumerate(results_iter):
                 padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
                 all_compressed_size += len(compressed_chunk)
                 gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
@@ -1299,6 +1309,7 @@ def _encode_pfsc_into_handle(
                     logical_block_size=logical_block_size,
                     gain_pct=gain_pct,
                     threshold_gain=threshold_gain,
+                    is_last_block=block_index == (block_count - 1),
                 )
                 selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
                 if store_compressed:
