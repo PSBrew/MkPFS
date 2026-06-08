@@ -60,6 +60,18 @@ from .utils import (
 PROJECT_URL: str = "https://github.com/PSBrew/MkPFS"
 
 
+_GAME_FOLDER_COMPRESS_WARNING_TEXT: str = (
+    "IMPORTANT: Do not pack an application/game folder directly with compression enabled.\n"
+    "Although image creation and verification may succeed, the console often misreads compressed files.\n"
+    "Either turn off compression (--no-compress) or create the image using the wrapper-based packaging flow."
+)
+
+
+def _emit_game_folder_compression_warning() -> None:
+    """Emit the red warning about compressing direct game-folder images."""
+    warning(_GAME_FOLDER_COMPRESS_WARNING_TEXT, icon_name="warning")
+
+
 def get_help_title() -> str:
     """Build the version line shown at the top of CLI help output.
 
@@ -571,6 +583,19 @@ def run_image_check(
             total_logical = sum(max(0, inodes[i].logical_size) for i in file_inodes.values())
             total_stored = sum(max(0, inodes[i].stored_size) for i in file_inodes.values())
 
+            # If verification is running interactively (emit_report) and the image
+            # contains PS5 game markers (eboot.bin or sce_sys/param.json) while any
+            # file is stored compressed, emit a prominent red warning explaining
+            # that packing application folders directly with PFSC compression
+            # provides no practical benefit and may cause the console to read
+            # files incorrectly.
+            if (
+                emit_report
+                and compressed_count > 0
+                and ("eboot.bin" in file_inodes or "sce_sys/param.json" in file_inodes)
+            ):
+                _emit_game_folder_compression_warning()
+
             if emit_report:
                 payload_magic: str = describe_magic(magic=consts.PFSC_MAGIC) if compressed_count > 0 else "none"
                 print_version_header()
@@ -895,6 +920,27 @@ def _print_pack_parameters(
     )
 
 
+def _contains_direct_game_markers(root_path: Path) -> bool:
+    """Return whether a source directory exposes direct PS5 game markers.
+
+    Args:
+        root_path: Source directory root to inspect.
+
+    Returns:
+        True when ``eboot.bin`` or ``sce_sys/param.json`` exists directly under
+        the source root, otherwise False.
+    """
+    try:
+        has_eboot: bool = (root_path / "eboot.bin").exists()
+    except OSError:
+        has_eboot = False
+    try:
+        has_param: bool = (root_path / "sce_sys" / "param.json").exists()
+    except OSError:
+        has_param = False
+    return has_eboot or has_param
+
+
 def _run_post_pack_verify(
     *,
     output_path: Path,
@@ -1007,6 +1053,9 @@ def _run_pack_build(
         require_game_files=require_game_files,
         dry_run=args.dry_run,
     )
+
+    if config.compress and _contains_direct_game_markers(build_source_root):
+        _emit_game_folder_compression_warning()
 
     if not args.dry_run:
         destination_space_error: str | None = get_destination_space_error_message(

@@ -1208,6 +1208,89 @@ class TestCliCreateRun(CliTestCase):
             self.assertEqual(staged_file.read_bytes(), source_file.read_bytes())
             mocked_copy.assert_called_once_with(source_file, staged_file)
 
+    def test_create_run_emits_red_warning_for_compressed_game_folder(self) -> None:
+        """Pack folder should emit the red warning for direct game folders when compression is enabled."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        output_path: Path = tmp_path / "out.ffpfs"
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=output_path,
+            dry_run=True,
+            verify=False,
+        )
+        combined: StringIO = StringIO()
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "build_pfs",
+            return_value=BuildStats(input_path=source_path, output_path=output_path),
+        ), redirect_stdout(combined), redirect_stderr(combined):
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
+
+        self.assertIn(cli._GAME_FOLDER_COMPRESS_WARNING_TEXT.splitlines()[0], combined.getvalue())
+
+    def test_run_image_check_emits_red_warning_for_compressed_game_marker_images(self) -> None:
+        """Verify should emit the red warning when a game-marker image contains any compressed file."""
+        tmp_path: Path = self.make_temp_path()
+        image_path: Path = tmp_path / "image.ffpfs"
+        image_path.write_bytes(b"x")
+        header: SimpleNamespace = SimpleNamespace(
+            mode=consts.PFS_MODE_CASE_INSENSITIVE,
+            version=consts.PFS_VERSION_PS5,
+            magic=123,
+            readonly=1,
+            block_size=65536,
+        )
+        inodes: list[SimpleNamespace] = [
+            SimpleNamespace(
+                number=0,
+                is_compressed=True,
+                size=100,
+                size_compressed=90,
+                logical_size=100,
+                stored_size=90,
+            ),
+            SimpleNamespace(
+                number=1,
+                is_compressed=False,
+                size=50,
+                size_compressed=50,
+                logical_size=50,
+                stored_size=50,
+            ),
+        ]
+        combined: StringIO = StringIO()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(cli, "parse_image_header", return_value=header))
+            stack.enter_context(patch.object(cli, "parse_image_inodes", return_value=inodes))
+            stack.enter_context(patch.object(cli, "validate_inode_layout", return_value=None))
+            stack.enter_context(patch.object(cli, "verify_signed_image_signatures", return_value=None))
+            stack.enter_context(patch.object(cli, "parse_superroot_and_indexes", return_value=(0, {1: 2}, {}, {0})))
+            stack.enter_context(
+                patch.object(
+                    cli,
+                    "build_tree_from_uroot",
+                    return_value=({"eboot.bin": 0, "other.bin": 1}, {"": 0}, {0: []}),
+                )
+            )
+            stack.enter_context(patch.object(cli, "build_expected_fpt", return_value={1: []}))
+            stack.enter_context(patch.object(cli, "validate_fpt_maps", return_value=None))
+            stack.enter_context(patch.object(cli, "validate_ps5_checklist", return_value=None))
+            stack.enter_context(patch.object(cli, "verify_file_payload_hashes", return_value=(2, 0x1234, "a" * 64)))
+            stack.enter_context(redirect_stdout(combined))
+            stack.enter_context(redirect_stderr(combined))
+            errors, warnings, tree, uroot = cli.run_image_check(
+                image=image_path,
+                source=None,
+                print_tree=False,
+                emit_report=True,
+            )
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+        self.assertEqual(tree, {0: []})
+        self.assertEqual(uroot, 0)
+        self.assertIn(cli._GAME_FOLDER_COMPRESS_WARNING_TEXT.splitlines()[0], combined.getvalue())
+
 
 class TestCliReadOnlyCommands(CliTestCase):
     """Tests for verify, inspect, tree, info, analyze, extract, and entrypoint wrappers."""

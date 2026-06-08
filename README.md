@@ -32,18 +32,18 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 python -m pip install -U "mkpfs"
 
 # Creating Images: Option 1: .exfat -> .ffpfsc (Works with ShadowMountPlus)  (Maximum compatibility)
-python -m mkpfs pack file --verify './BREW1234.exfat' './BREW1234.exfat.ffpfsc'
+python -m mkpfs pack file --verify './BREW1234.exfat' './BREW1234.ffpfsc'
 
 # Creating Images: Option 2: .ffpkg -> .ffpfsc (Works with ShadowMountPlus) 
-python -m mkpfs pack file --verify './BREW1234.ffpkg' './BREW1234.ffpkg.ffpfsc'
+python -m mkpfs pack file --verify './BREW1234.ffpkg' './BREW1234.ffpfsc'
 
 # Creating Images: Option 3: Game folder wrapped twice into .ffpfsc (two-pass) (Works with ShadowMountPlus) 
 python -m mkpfs pack folder --verify --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
 python -m mkpfs pack file --verify './pfs_image.dat' './BREW1234.ffpfsc'
 rm './pfs_image.dat'
 
-# Creating Images: Option 4: Game folder without a wrapper (single-pass) (Experimental) (Works with ShadowMountPlus) 
-python -m mkpfs pack folder --verify './BREW1234-app/' './BREW1234.ffpfsc'
+# Creating Images: Option 4: Game folder without a wrapper (single-pass) (--no-compress) (Avoid; See Notes!)
+python -m mkpfs pack folder --no-compress --verify './BREW1234-app/' './BREW1234.ffpfs'
 
 # Extracting Existing Images (Reverse operation)
 python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
@@ -51,8 +51,10 @@ python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
 
 ## ⚠️ Limitations and Known Issues
 
-- `exfat->ffpfsc` is currently the most stable workflow.
-- Direct raw-folder compression works, but it can be less efficient for large backups with many small files.
+- `exfat->ffpfsc` is currently the most stable format for compressed game backups.
+- Packing an application folder directly into an image without a wrapper (single-pass) does not work when 
+  file compression is enabled. Although the image is created and verification passes, the console reads the files 
+  incorrectly due to technical limitations, so this option provides no practical benefit.
 - With the default `--block-size 65536`, very small files can cause significant block-alignment waste, which may make
   the resulting image larger than the source in corner cases.
     - For small-file-heavy folders, prefer the two-pass strategy (`raw-folder -> .dat -> .ffpfsc`) or try a smaller
