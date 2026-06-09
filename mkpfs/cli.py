@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from . import __version__, consts
@@ -48,6 +49,7 @@ from .pfs import (
     validate_input,
     validate_ps5_checklist,
     validate_source_match,
+    validate_source_paths,
     verify_file_payload_hashes,
     verify_signed_image_signatures,
 )
@@ -525,6 +527,8 @@ def run_image_check(
     new_crypt: bool = False,
     require_game_files: bool = False,
     verify_payloads: bool = True,
+    compare_source_contents: bool = True,
+    report_title: str = "PFS Check Report",
 ) -> tuple[list[str], list[str], dict[int, list[ParsedDirent]], int]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -562,8 +566,8 @@ def run_image_check(
                 new_crypt=new_crypt,
             )
 
-            case_insensitive = bool(header.mode & consts.PFS_MODE_CASE_INSENSITIVE)
-            expected_fpt = build_expected_fpt(file_inodes, dir_inodes, case_insensitive)
+            case_insensitive: bool = bool(header.mode & consts.PFS_MODE_CASE_INSENSITIVE)
+            expected_fpt: dict[str, int] = build_expected_fpt(file_inodes, dir_inodes, case_insensitive)
             validate_fpt_maps(fpt_map, collision_map, expected_fpt, errors)
             # Payload-content passes (decode every file). Skipped for structure-only
             # callers such as the tree listing, which need only the directory layout.
@@ -604,8 +608,8 @@ def run_image_check(
                         f"expected {expected_manifest_sha256.lower()}"
                     )
 
-            reachable = set(file_inodes.values()) | set(dir_inodes.values()) | set(special_inodes)
-            orphan_inodes = sorted(i.number for i in inodes if i.number not in reachable)
+            reachable: set[int] = set(file_inodes.values()) | set(dir_inodes.values()) | set(special_inodes)
+            orphan_inodes: list[int] = sorted(i.number for i in inodes if i.number not in reachable)
             if orphan_inodes:
                 errors.append(
                     "orphan inodes not reachable from filesystem tree: "
@@ -614,21 +618,23 @@ def run_image_check(
                 )
 
             if source is not None:
-                validate_source_match(
-                    fh,
-                    header,
-                    inodes,
-                    file_inodes,
-                    source,
-                    errors,
-                    ekpfs=ekpfs,
-                    new_crypt=new_crypt,
-                    progress=progress,
-                )
+                validate_source_paths(file_inodes=file_inodes, source=source, errors=errors)
+                if compare_source_contents:
+                    validate_source_match(
+                        fh,
+                        header,
+                        inodes,
+                        file_inodes,
+                        source,
+                        errors,
+                        ekpfs=ekpfs,
+                        new_crypt=new_crypt,
+                        progress=progress,
+                    )
 
-            compressed_count = sum(1 for i in file_inodes.values() if inodes[i].is_compressed)
-            total_logical = sum(max(0, inodes[i].logical_size) for i in file_inodes.values())
-            total_stored = sum(max(0, inodes[i].stored_size) for i in file_inodes.values())
+            compressed_count: int = sum(1 for i in file_inodes.values() if inodes[i].is_compressed)
+            total_logical: int = sum(max(0, inodes[i].logical_size) for i in file_inodes.values())
+            total_stored: int = sum(max(0, inodes[i].stored_size) for i in file_inodes.values())
 
             # If verification is running interactively (emit_report) and the image
             # contains PS5 game markers (eboot.bin or sce_sys/param.json) while any
@@ -647,7 +653,7 @@ def run_image_check(
                 payload_magic: str = describe_magic(magic=consts.PFSC_MAGIC) if compressed_count > 0 else "none"
                 print_version_header()
                 info("=" * 70)
-                info("PFS Check Report")
+                info(report_title)
                 info("=" * 70)
                 info(f"Image:                 {image}")
                 ver_label: str = "PS5" if header.version == consts.PFS_VERSION_PS5 else "PS4"
@@ -797,7 +803,26 @@ def cli_mkpfs_add_create_args(
         )
     parser.add_argument("--verbose", action="store_true", help="Verbose per-file decisions")
     parser.add_argument("--dry-run", action="store_true", help="Scan/layout/report only; do not write image")
-    parser.add_argument("--verify", action="store_true", help="Run 'verify' after a successful pack")
+    parser.add_argument("--verify", action="store_true", help="Run full verification after a successful pack")
+    verify_structure_group = parser.add_mutually_exclusive_group()
+    verify_structure_group.add_argument(
+        "--verify-structure",
+        dest="verify_structure",
+        action="store_true",
+        default=True,
+        help="Run quick structure verification after a successful pack (default)",
+    )
+    verify_structure_group.add_argument(
+        "--no-verify-structure",
+        dest="verify_structure",
+        action="store_false",
+        help="Disable the default quick structure verification after a successful pack",
+    )
+    parser.add_argument(
+        "--skip-verification",
+        action="store_true",
+        help="Skip all post-pack verification",
+    )
 
 
 def _resolve_pack_temp_folder(args: argparse.Namespace) -> Path:
@@ -967,6 +992,43 @@ def _print_pack_parameters(
     )
 
 
+class PackVerificationMode(StrEnum):
+    """Supported post-pack verification modes."""
+
+    SKIP = "skip"
+    STRUCTURE = "structure"
+    FULL = "full"
+
+
+def _resolve_pack_verification_mode(args: argparse.Namespace) -> PackVerificationMode:
+    """Resolve the effective post-pack verification mode.
+
+    Args:
+        args: Parsed CLI arguments for a pack workflow.
+
+    Returns:
+        Effective post-pack verification mode.
+
+    Raises:
+        BuildError: If the verification flags are combined in an invalid way.
+    """
+    skip_verification: bool = bool(getattr(args, "skip_verification", False))
+    verify: bool = bool(getattr(args, "verify", False))
+    verify_structure: bool = bool(getattr(args, "verify_structure", True))
+
+    if skip_verification and verify:
+        raise BuildError("--verify and --skip-verification cannot be used together")
+    if skip_verification and verify_structure:
+        raise BuildError("--verify-structure and --skip-verification cannot be used together")
+    if skip_verification:
+        return PackVerificationMode.SKIP
+    if verify:
+        return PackVerificationMode.FULL
+    if verify_structure:
+        return PackVerificationMode.STRUCTURE
+    return PackVerificationMode.SKIP
+
+
 def _contains_direct_game_markers(root_path: Path) -> bool:
     """Return whether a source directory exposes direct PS5 game markers.
 
@@ -994,21 +1056,27 @@ def _run_post_pack_verify(
     source: Path,
     ekpfs_key: bytes,
     new_crypt: bool,
+    verification_mode: PackVerificationMode,
     require_game_files: bool = False,
 ) -> int:
-    """Run the post-pack image check and report warnings and errors.
+    """Run the selected post-pack image verification and report warnings and errors.
 
     Args:
         output_path: Written image to verify.
         source: Source directory compared against the image.
         ekpfs_key: EKPFS key material for encrypted images.
         new_crypt: Whether to use the alternate newCrypt derivation.
+        verification_mode: Effective post-pack verification mode.
         require_game_files: Whether to enable the optional game-file checklist.
 
     Returns:
         ``1`` when the check reports errors, otherwise ``0``.
     """
-    info("Running post-create check...")
+    verify_payloads: bool = verification_mode == PackVerificationMode.FULL
+    verification_label: str = "full verification" if verify_payloads else "structure verification"
+    compare_source_contents: bool = verification_mode != PackVerificationMode.STRUCTURE
+    report_title: str = "PFS Full Verify Report" if verify_payloads else "PFS Structure Verify Report"
+    info(f"Running post-pack {verification_label}...")
     errors, warnings, _tree, _uroot = run_image_check(
         output_path,
         source,
@@ -1016,6 +1084,9 @@ def _run_post_pack_verify(
         ekpfs=ekpfs_key,
         new_crypt=new_crypt,
         require_game_files=require_game_files,
+        verify_payloads=verify_payloads,
+        compare_source_contents=compare_source_contents,
+        report_title=report_title,
     )
     for w in warnings:
         warning(w, icon_name="warning")
@@ -1152,7 +1223,8 @@ def _run_pack_build(
 
     stats.input_path = display_source_path
     print_summary(stats)
-    if args.dry_run or not args.verify:
+    verification_mode: PackVerificationMode = _resolve_pack_verification_mode(args)
+    if args.dry_run or verification_mode == PackVerificationMode.SKIP:
         return 0
 
     return _run_post_pack_verify(
@@ -1160,6 +1232,7 @@ def _run_pack_build(
         source=compare_source_root,
         ekpfs_key=config.ekpfs_key,
         new_crypt=config.new_crypt,
+        verification_mode=verification_mode,
         require_game_files=require_game_files,
     )
 
@@ -1354,7 +1427,8 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
     )
     stats.input_path = source_file
     print_summary(stats)
-    if args.dry_run or not args.verify:
+    verification_mode: PackVerificationMode = _resolve_pack_verification_mode(args)
+    if args.dry_run or verification_mode == PackVerificationMode.SKIP:
         return 0
 
     # Stage the single file into a temp directory (hardlink, no data copy) so the
@@ -1369,6 +1443,7 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
             source=staging_root,
             ekpfs_key=config.ekpfs_key,
             new_crypt=config.new_crypt,
+            verification_mode=verification_mode,
         )
 
 

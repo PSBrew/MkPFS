@@ -32,18 +32,18 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 python -m pip install -U "mkpfs"
 
 # Creating Images: Option 1: .exfat -> .ffpfsc (Works with ShadowMountPlus)  (Maximum compatibility)
-python -m mkpfs pack file --verify './BREW1234.exfat' './BREW1234.ffpfsc'
+python -m mkpfs pack file './BREW1234.exfat' './BREW1234.ffpfsc'
 
 # Creating Images: Option 2: .ffpkg -> .ffpfsc (Works with ShadowMountPlus) 
-python -m mkpfs pack file --verify './BREW1234.ffpkg' './BREW1234.ffpfsc'
+python -m mkpfs pack file './BREW1234.ffpkg' './BREW1234.ffpfsc'
 
 # Creating Images: Option 3: Game folder wrapped twice into .ffpfsc (two-pass) (Works with ShadowMountPlus) 
-python -m mkpfs pack folder --verify --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
-python -m mkpfs pack file --verify './pfs_image.dat' './BREW1234.ffpfsc'
+python -m mkpfs pack folder --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
+python -m mkpfs pack file './pfs_image.dat' './BREW1234.ffpfsc'
 rm './pfs_image.dat'
 
 # Creating Images: Option 4: Game folder without a wrapper (single-pass) (--no-compress) (Avoid; See Notes!)
-python -m mkpfs pack folder --no-compress --verify './BREW1234-app/' './BREW1234.ffpfs'
+python -m mkpfs pack folder --no-compress './BREW1234-app/' './BREW1234.ffpfs'
 
 # Extracting Existing Images (Reverse operation)
 python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
@@ -176,7 +176,7 @@ mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file
                   [--min-compress-size MIN_COMPRESS_SIZE]
                   [--no-spool]
                   [--skip-executable-compression] [--signed] [--encrypted]
-                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify]
+                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify] [--verify-structure | --no-verify-structure] [--skip-verification]
                   source_dir image_file
 ```
 

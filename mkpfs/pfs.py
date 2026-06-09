@@ -5157,6 +5157,39 @@ def validate_ps5_checklist(
         warnings.append("sce_sys/pfs-version.dat not found")
 
 
+def validate_source_paths(
+    *,
+    file_inodes: dict[str, int],
+    source: Path,
+    errors: list[str],
+) -> list[str] | None:
+    """Validate that the source tree and image expose the same file paths.
+
+    Args:
+        file_inodes: Mapping of relative image file paths to inode numbers.
+        source: Source directory used for comparison.
+        errors: Collected validation errors.
+
+    Returns:
+        Sorted list of relative file paths common to the source tree and image,
+        or ``None`` when the source directory is invalid.
+    """
+    if not source.exists() or not source.is_dir():
+        errors.append(f"source path does not exist or is not a directory: {source}")
+        return None
+
+    source_files: list[Path] = sorted(path for path in source.rglob("*") if path.is_file())
+    source_rel: set[str] = {path.relative_to(source).as_posix() for path in source_files}
+    image_rel: set[str] = set(file_inodes.keys())
+
+    for rel in sorted(source_rel - image_rel):
+        errors.append(f"missing in image: {rel}")
+    for rel in sorted(image_rel - source_rel):
+        errors.append(f"extra in image: {rel}")
+
+    return sorted(source_rel & image_rel)
+
+
 def validate_source_match(
     fh: BinaryIO,
     header: ParsedHeader,
@@ -5168,20 +5201,10 @@ def validate_source_match(
     new_crypt: bool = False,
     progress: Progress | None = None,
 ) -> None:
-    if not source.exists() or not source.is_dir():
-        errors.append(f"source path does not exist or is not a directory: {source}")
+    common: list[str] | None = validate_source_paths(file_inodes=file_inodes, source=source, errors=errors)
+    if common is None:
         return
 
-    source_files = sorted(p for p in source.rglob("*") if p.is_file())
-    source_rel = {p.relative_to(source).as_posix() for p in source_files}
-    image_rel = set(file_inodes.keys())
-
-    for rel in sorted(source_rel - image_rel):
-        errors.append(f"missing in image: {rel}")
-    for rel in sorted(image_rel - source_rel):
-        errors.append(f"extra in image: {rel}")
-
-    common = sorted(source_rel & image_rel)
     # Report progress against the total logical bytes to compare, throttled by volume.
     total_bytes: int = sum(max(0, inodes[file_inodes[rel]].logical_size) for rel in common)
     progress_total: int = max(total_bytes, 1)

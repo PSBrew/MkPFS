@@ -165,3 +165,5 @@ Before publishing a commit message, PR body, or comment, check:
 - Is the language understandable to a non-technical reader?
 - Did you assign sensible labels that match release drafter?
 - Did you avoid mentioning any AI tools?
+- After editing with `gh`, did you re-read the final published PR title/body and confirm it still matches this skill instead of a generic Markdown template?
+- If a repository instruction says to use this skill for PR text, did you follow the full structure here rather than only invoking the skill tool?

@@ -85,6 +85,8 @@ class CliTestCase(unittest.TestCase):
             verbose=False,
             dry_run=dry_run,
             verify=verify,
+            verify_structure=True,
+            skip_verification=False,
         )
 
     def make_pack_file_args(
@@ -114,6 +116,8 @@ class CliTestCase(unittest.TestCase):
             verbose=False,
             dry_run=dry_run,
             verify=verify,
+            verify_structure=True,
+            skip_verification=False,
         )
 
 
@@ -166,6 +170,9 @@ class TestCliSmokeIntegration(CliTestCase):
         self.assertIn("source_dir", result.stdout)
         self.assertIn("image_file", result.stdout)
         self.assertIn("--require-game-files", result.stdout)
+        self.assertIn("--verify-structure", result.stdout)
+        self.assertIn("--no-verify-structure", result.stdout)
+        self.assertIn("--skip-verification", result.stdout)
 
         result = subprocess.run(
             [sys.executable, "-m", "mkpfs", "pack", "file", "--help"],
@@ -177,6 +184,9 @@ class TestCliSmokeIntegration(CliTestCase):
         self.assertIn(cli.get_help_title(), result.stdout)
         self.assertIn("source_file", result.stdout)
         self.assertIn("image_file", result.stdout)
+        self.assertIn("--verify-structure", result.stdout)
+        self.assertIn("--no-verify-structure", result.stdout)
+        self.assertIn("--skip-verification", result.stdout)
         self.assertNotIn("--require-game-files", result.stdout)
 
     def test_pack_file_defaults_to_32_bit_inodes_and_verify_source_file_succeeds(self) -> None:
@@ -482,6 +492,43 @@ class TestCliArgumentHelpers(CliTestCase):
         self.assertTrue(default_args.rename_inner_image)
         self.assertFalse(disabled_args.rename_inner_image)
         self.assertTrue(enabled_args.rename_inner_image)
+
+    def test_pack_parser_defaults_to_structure_verification(self) -> None:
+        """The pack parser should enable structure verification by default."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        parsed_args: argparse.Namespace = parser.parse_args(["pack", "folder", "src", "out.ffpfs"])
+        self.assertFalse(parsed_args.verify)
+        self.assertTrue(parsed_args.verify_structure)
+        self.assertFalse(parsed_args.skip_verification)
+
+    def test_pack_parser_parses_structure_verification_toggles(self) -> None:
+        """The pack parser should expose structure verification opt-in and opt-out flags."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        disabled_args: argparse.Namespace = parser.parse_args(
+            ["pack", "folder", "src", "out.ffpfs", "--no-verify-structure"]
+        )
+        enabled_args: argparse.Namespace = parser.parse_args(
+            ["pack", "folder", "src", "out.ffpfs", "--verify-structure"]
+        )
+        self.assertFalse(disabled_args.verify_structure)
+        self.assertTrue(enabled_args.verify_structure)
+
+    def test_resolve_pack_verification_mode_prefers_full_verify(self) -> None:
+        """Explicit full verification should override the default structure-only mode."""
+        args: argparse.Namespace = argparse.Namespace(verify=True, verify_structure=True, skip_verification=False)
+        self.assertEqual(cli._resolve_pack_verification_mode(args), cli.PackVerificationMode.FULL)
+
+    def test_resolve_pack_verification_mode_rejects_skip_with_full_verify(self) -> None:
+        """Skip verification should conflict with the full verify flag."""
+        args: argparse.Namespace = argparse.Namespace(verify=True, verify_structure=False, skip_verification=True)
+        with self.assertRaisesRegex(BuildError, "--verify and --skip-verification"):
+            cli._resolve_pack_verification_mode(args)
+
+    def test_resolve_pack_verification_mode_rejects_skip_with_structure_verify(self) -> None:
+        """Skip verification should conflict with structure verification when enabled."""
+        args: argparse.Namespace = argparse.Namespace(verify=False, verify_structure=True, skip_verification=True)
+        with self.assertRaisesRegex(BuildError, "--verify-structure and --skip-verification"):
+            cli._resolve_pack_verification_mode(args)
 
     def test_pack_parser_accepts_file_subcommand_with_output_positional(self) -> None:
         """The canonical pack file parser should keep source and output positional args."""
@@ -851,6 +898,7 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         args.temp_folder = str(temp_folder)
+        args.verify_structure = False
         with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
             cli,
             "prompt_overwrite",
@@ -1050,6 +1098,103 @@ class TestCliCreateRun(CliTestCase):
         self.assertIn("Use --temp-folder", stderr_buffer.getvalue())
         self.assertIn("Operation cancelled.", stderr_buffer.getvalue())
 
+    def test_create_run_defaults_to_structure_verification(self) -> None:
+        """Create run should perform structure verification by default after a real pack."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        output_path: Path = tmp_path / "out.ffpfs"
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=output_path,
+            dry_run=False,
+            verify=False,
+        )
+
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(
+            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
+        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check:
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
+
+        self.assertFalse(mocked_check.call_args.kwargs["verify_payloads"])
+        self.assertFalse(mocked_check.call_args.kwargs["compare_source_contents"])
+        self.assertEqual(mocked_check.call_args.kwargs["report_title"], "PFS Structure Verify Report")
+
+    def test_create_run_skip_verification_disables_post_pack_check(self) -> None:
+        """Create run should skip post-pack verification when explicitly requested."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        output_path: Path = tmp_path / "out.ffpfs"
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=output_path,
+            dry_run=False,
+            verify=False,
+        )
+        args.verify_structure = False
+        args.skip_verification = True
+
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(
+            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
+        ), patch.object(
+            cli,
+            "run_image_check",
+            side_effect=AssertionError("verify should not run"),
+        ):
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
+
+    def test_create_run_dry_run_skips_default_structure_verification(self) -> None:
+        """Create run dry-runs should not perform default structure verification."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        output_path: Path = tmp_path / "out.ffpfs"
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=output_path,
+            dry_run=True,
+            verify=False,
+        )
+
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "build_pfs",
+            return_value=BuildStats(input_path=source_path, output_path=output_path),
+        ), patch.object(
+            cli,
+            "run_image_check",
+            side_effect=AssertionError("verify should not run"),
+        ):
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
+
+    def test_create_run_verify_enables_full_post_pack_verification(self) -> None:
+        """Create run should upgrade to full verification when --verify is enabled."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = self.make_valid_source(tmp_path)
+        output_path: Path = tmp_path / "out.ffpfs"
+        args: SimpleNamespace = self.make_create_args(
+            source_path=source_path,
+            image_path=output_path,
+            dry_run=False,
+            verify=True,
+        )
+        stdout_buffer: StringIO = StringIO()
+
+        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(
+            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
+        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)), redirect_stdout(stdout_buffer):
+            self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
+
     def test_create_run_runs_post_verify_and_returns_error_when_check_fails(self) -> None:
         """Create run should perform post-verify and return a failure code when verification reports errors."""
         tmp_path: Path = self.make_temp_path()
@@ -1192,6 +1337,121 @@ class TestCliCreateRun(CliTestCase):
         ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
+    def test_pack_file_run_defaults_to_structure_verification(self) -> None:
+        """Pack file should perform structure verification by default after a real pack."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "sample.bin"
+        source_file.write_bytes(b"payload")
+        output_path: Path = tmp_path / "out.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(
+            source_path=source_file,
+            image_path=output_path,
+            dry_run=False,
+            verify=False,
+        )
+
+        with patch.object(
+            cli,
+            "build_pfs_stream_single_file",
+            return_value=BuildStats(input_path=source_file, output_path=output_path),
+        ), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check:
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+
+        self.assertFalse(mocked_check.call_args.kwargs["verify_payloads"])
+        self.assertFalse(mocked_check.call_args.kwargs["compare_source_contents"])
+        self.assertEqual(mocked_check.call_args.kwargs["report_title"], "PFS Structure Verify Report")
+
+    def test_pack_file_run_skip_verification_disables_post_pack_check(self) -> None:
+        """Pack file should skip post-pack verification when explicitly requested."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "sample.bin"
+        source_file.write_bytes(b"payload")
+        output_path: Path = tmp_path / "out.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(
+            source_path=source_file,
+            image_path=output_path,
+            dry_run=False,
+            verify=False,
+        )
+        args.verify_structure = False
+        args.skip_verification = True
+
+        with patch.object(
+            cli,
+            "build_pfs_stream_single_file",
+            return_value=BuildStats(input_path=source_file, output_path=output_path),
+        ), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(
+            cli,
+            "run_image_check",
+            side_effect=AssertionError("verify should not run"),
+        ):
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+
+    def test_pack_file_run_dry_run_skips_default_structure_verification(self) -> None:
+        """Pack file dry-runs should not perform default structure verification."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "sample.bin"
+        source_file.write_bytes(b"payload")
+        output_path: Path = tmp_path / "out.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(
+            source_path=source_file,
+            image_path=output_path,
+            dry_run=True,
+            verify=False,
+        )
+
+        with patch.object(
+            cli,
+            "build_pfs_stream_single_file",
+            return_value=BuildStats(input_path=source_file, output_path=output_path),
+        ), patch.object(
+            cli,
+            "run_image_check",
+            side_effect=AssertionError("verify should not run"),
+        ):
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+
+    def test_pack_file_run_verify_enables_full_post_pack_verification(self) -> None:
+        """Pack file should upgrade to full verification when --verify is enabled."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "sample.bin"
+        source_file.write_bytes(b"payload")
+        output_path: Path = tmp_path / "out.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(
+            source_path=source_file,
+            image_path=output_path,
+            dry_run=False,
+            verify=True,
+        )
+        stdout_buffer: StringIO = StringIO()
+
+        with patch.object(
+            cli,
+            "build_pfs_stream_single_file",
+            return_value=BuildStats(input_path=source_file, output_path=output_path),
+        ), patch.object(
+            cli,
+            "prompt_overwrite",
+            return_value=True,
+        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check, redirect_stdout(
+            stdout_buffer
+        ):
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+
+        self.assertTrue(mocked_check.call_args.kwargs["verify_payloads"])
+        self.assertTrue(mocked_check.call_args.kwargs["compare_source_contents"])
+        self.assertEqual(mocked_check.call_args.kwargs["report_title"], "PFS Full Verify Report")
+        self.assertFalse(mocked_check.call_args.kwargs["require_game_files"])
+        self.assertIn("Running post-pack full verification...", stdout_buffer.getvalue())
+
     def test_pack_file_run_disables_game_file_checks_during_post_create_verify(self) -> None:
         """Pack file post-create verification should skip the optional game-file checklist."""
         tmp_path: Path = self.make_temp_path()
@@ -1218,8 +1478,6 @@ class TestCliCreateRun(CliTestCase):
 
         self.assertFalse(mocked_check.call_args.kwargs["require_game_files"])
 
-    def test_stage_single_file_source_root_copies_when_links_are_unavailable(self) -> None:
-        """Single-file staging should fall back to a regular copy when links are unavailable."""
         tmp_path: Path = self.make_temp_path()
         source_file: Path = tmp_path / "sample.bin"
         source_file.write_bytes(b"payload")
@@ -1748,6 +2006,7 @@ class TestRunImageCheck(CliTestCase):
             stack.enter_context(patch.object(cli, "validate_fpt_maps", return_value=None))
             stack.enter_context(patch.object(cli, "validate_ps5_checklist", return_value=None))
             stack.enter_context(patch.object(cli, "verify_file_payload_hashes", return_value=(1, 0x1234, "a" * 64)))
+            stack.enter_context(patch.object(cli, "validate_source_paths", return_value=["file.bin"]))
             stack.enter_context(patch.object(cli, "validate_source_match", return_value=None))
             stack.enter_context(patch.object(cli, "render_tree", return_value=["|- file.bin"]))
             errors, warnings, tree, uroot = cli.run_image_check(
@@ -1858,29 +2117,23 @@ class TestRunImageCheck(CliTestCase):
         self.assertEqual(uroot, 0)
         mocked_checklist.assert_called_once()
 
-    def test_run_image_check_reports_crc_manifest_and_orphan_mismatches(self) -> None:
-        """Image check should report checksum mismatches and orphan inodes when validation finds them."""
+    def test_run_image_check_path_only_mode_skips_content_reads(self) -> None:
+        """Structure checks should compare file paths without hashing payload contents."""
         tmp_path: Path = self.make_temp_path()
         image_path: Path = tmp_path / "image.ffpfs"
         image_path.write_bytes(b"x")
+        source_path: Path = tmp_path / "source"
+        source_path.mkdir()
         header: SimpleNamespace = SimpleNamespace(mode=0, version=0, magic=123, readonly=1, block_size=65536)
         inodes: list[SimpleNamespace] = [
             SimpleNamespace(
                 number=0,
                 is_compressed=False,
-                size=10,
-                size_compressed=10,
-                logical_size=10,
-                stored_size=10,
-            ),
-            SimpleNamespace(
-                number=99,
-                is_compressed=False,
-                size=10,
-                size_compressed=10,
-                logical_size=10,
-                stored_size=10,
-            ),
+                size=100,
+                size_compressed=90,
+                logical_size=100,
+                stored_size=90,
+            )
         ]
         with ExitStack() as stack:
             stack.enter_context(patch.object(cli, "parse_image_header", return_value=header))
@@ -1893,23 +2146,74 @@ class TestRunImageCheck(CliTestCase):
             )
             stack.enter_context(patch.object(cli, "build_expected_fpt", return_value={1: []}))
             stack.enter_context(patch.object(cli, "validate_fpt_maps", return_value=None))
-            stack.enter_context(patch.object(cli, "validate_ps5_checklist", return_value=None))
-            stack.enter_context(patch.object(cli, "verify_file_payload_hashes", return_value=(1, 0x1111, "b" * 64)))
-            errors, warnings, _tree, _uroot = cli.run_image_check(
+            mocked_paths = stack.enter_context(patch.object(cli, "validate_source_paths", return_value=["file.bin"]))
+            mocked_match = stack.enter_context(patch.object(cli, "validate_source_match", return_value=None))
+            mocked_hashes = stack.enter_context(
+                patch.object(cli, "verify_file_payload_hashes", return_value=(1, 0x1234, "a" * 64))
+            )
+            errors, warnings, tree, uroot = cli.run_image_check(
                 image=image_path,
-                source=None,
+                source=source_path,
                 print_tree=False,
-                expected_crc32=0x2222,
-                expected_manifest_sha256="a" * 64,
+                emit_report=False,
+                verify_payloads=False,
+                compare_source_contents=False,
+            )
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+        self.assertEqual(tree, {0: []})
+        self.assertEqual(uroot, 0)
+        mocked_paths.assert_called_once_with(file_inodes={"file.bin": 0}, source=source_path, errors=[])
+        mocked_match.assert_not_called()
+        mocked_hashes.assert_not_called()
+
+    def test_run_image_check_defaults_to_source_content_comparison(self) -> None:
+        """Full checks should keep source content comparison enabled by default."""
+        tmp_path: Path = self.make_temp_path()
+        image_path: Path = tmp_path / "image.ffpfs"
+        image_path.write_bytes(b"x")
+        source_path: Path = tmp_path / "source"
+        source_path.mkdir()
+        header: SimpleNamespace = SimpleNamespace(mode=0, version=0, magic=123, readonly=1, block_size=65536)
+        inodes: list[SimpleNamespace] = [
+            SimpleNamespace(
+                number=0,
+                is_compressed=False,
+                size=100,
+                size_compressed=90,
+                logical_size=100,
+                stored_size=90,
+            )
+        ]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(cli, "parse_image_header", return_value=header))
+            stack.enter_context(patch.object(cli, "parse_image_inodes", return_value=inodes))
+            stack.enter_context(patch.object(cli, "validate_inode_layout", return_value=None))
+            stack.enter_context(patch.object(cli, "verify_signed_image_signatures", return_value=None))
+            stack.enter_context(patch.object(cli, "parse_superroot_and_indexes", return_value=(0, {1: 2}, {}, {0})))
+            stack.enter_context(
+                patch.object(cli, "build_tree_from_uroot", return_value=({"file.bin": 0}, {"": 0}, {0: []}))
+            )
+            stack.enter_context(patch.object(cli, "build_expected_fpt", return_value={1: []}))
+            stack.enter_context(patch.object(cli, "validate_fpt_maps", return_value=None))
+            stack.enter_context(patch.object(cli, "validate_source_paths", return_value=["file.bin"]))
+            mocked_match = stack.enter_context(patch.object(cli, "validate_source_match", return_value=None))
+            mocked_hashes = stack.enter_context(
+                patch.object(cli, "verify_file_payload_hashes", return_value=(1, 0x1234, "a" * 64))
+            )
+            errors, warnings, tree, uroot = cli.run_image_check(
+                image=image_path,
+                source=source_path,
+                print_tree=False,
                 emit_report=False,
             )
+        self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
-        self.assertTrue(any("CRC32 mismatch" in item for item in errors))
-        self.assertTrue(any("Manifest SHA256 mismatch" in item for item in errors))
-        self.assertTrue(any("orphan inodes" in item for item in errors))
+        self.assertEqual(tree, {0: []})
+        self.assertEqual(uroot, 0)
+        mocked_hashes.assert_called_once()
+        mocked_match.assert_called_once()
 
-
-class TestCliPackFileNoSpool(CliTestCase):
     """Tests for the spool-free streaming flag on the file pack path."""
 
     def test_pack_file_stream_auto_block_size_defaults_min_compress_size_to_65536(self) -> None:
