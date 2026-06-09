@@ -63,7 +63,8 @@ PROJECT_URL: str = "https://github.com/PSBrew/MkPFS"
 _GAME_FOLDER_COMPRESS_WARNING_TEXT: str = (
     "IMPORTANT: Do not pack an application/game folder directly with compression enabled.\n"
     "Although image creation and verification may succeed, the console often misreads compressed files.\n"
-    "Either turn off compression (--no-compress) or create the image using the wrapper-based packaging flow."
+    "Either turn off compression (--no-compress) or create the image using the wrapper-based packaging flow.\n"
+    "See: https://github.com/PSBrew/MkPFS/issues/49"
 )
 
 
