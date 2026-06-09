@@ -11,6 +11,7 @@ import hmac
 import json
 import multiprocessing as mp
 import queue
+import re
 import shutil
 import struct
 import time
@@ -723,6 +724,84 @@ class FileNode:
     inode: Inode | None = None
 
 
+def _generate_safe_single_file_fallback_stem() -> str:
+    """Return a random safe fallback stem for single-file inner names.
+
+    Returns:
+        Uppercase hexadecimal fallback stem trimmed to 15 characters.
+    """
+    return uuid.uuid4().hex.upper()[:15]
+
+
+def _extract_preferred_title_id(*, file_stem: str) -> str | None:
+    """Return a preferred short PlayStation title ID when present in a file stem.
+
+    Args:
+        file_stem: File name stem to inspect.
+
+    Returns:
+        Preferred short title ID when present, otherwise ``None``.
+    """
+    modern_match: re.Match[str] | None = re.search(r"(?<![A-Z0-9])([A-Z]{4}\d{5})(?![A-Z0-9])", file_stem)
+    if modern_match is not None:
+        return modern_match.group(1)
+
+    long_form_match: re.Match[str] | None = re.search(r"([A-Z]{4}\d{5})_\d{2}(?:-[A-Z0-9]+)?", file_stem)
+    if long_form_match is not None:
+        return long_form_match.group(1)
+
+    legacy_match: re.Match[str] | None = re.search(r"(?<![A-Z0-9-])([A-Z]{4}-\d{5})(?![A-Z0-9-])", file_stem)
+    if legacy_match is not None:
+        return legacy_match.group(1)
+
+    return None
+
+
+def resolve_single_file_inner_name(*, source_name: str, rename_inner_image: bool = True) -> str:
+    """Resolve the internal file name used for single-file images.
+
+    Args:
+        source_name: Original source file name.
+        rename_inner_image: Whether to sanitize and rename the internal file name.
+
+    Returns:
+        Safe internal file name for the single-file image.
+    """
+    if not rename_inner_image:
+        return source_name
+
+    source_path: Path = Path(source_name)
+    suffixes: list[str] = source_path.suffixes
+    extension: str = "".join(suffixes).lower()
+    original_stem: str = source_name[: -len("".join(suffixes))] if suffixes else source_name
+
+    preferred_title_id: str | None = _extract_preferred_title_id(file_stem=original_stem)
+    if preferred_title_id is not None:
+        safe_stem: str = preferred_title_id
+    else:
+        collapsed_chars: list[str] = []
+        pending_separator: str | None = None
+        character: str
+        for character in original_stem:
+            if character.isascii() and character.isalnum():
+                if pending_separator is not None and collapsed_chars:
+                    collapsed_chars.append(pending_separator)
+                collapsed_chars.append(character)
+                pending_separator = None
+            elif character == " ":
+                pending_separator = "_"
+            elif character in {"_", "-"}:
+                pending_separator = character
+            else:
+                pending_separator = pending_separator
+
+        safe_stem = "".join(collapsed_chars)[:15]
+        if not safe_stem:
+            safe_stem = _generate_safe_single_file_fallback_stem()
+
+    return f"{safe_stem}{extension}"
+
+
 def should_skip_executable_compression(file_name: str, file_path: str) -> bool:
     """Return True for executable-like payloads that should remain uncompressed.
 
@@ -763,7 +842,6 @@ def store_file_node_raw(file_node: FileNode) -> None:
     file_node.stored_size = file_node.raw_size
     file_node.compressed = False
     file_node.gain_pct = 0.0
-
     file_node.hypothetical_compressed_size = file_node.raw_size
 
 
@@ -3361,6 +3439,7 @@ def build_pfs_stream_single_file(
     verbose: bool = False,
     skip_executable_compression: bool = False,
     dry_run: bool = False,
+    inner_file_name: str | None = None,
 ) -> BuildStats:
     """Build an unsigned PFS container from one file, streaming the payload with no spool.
 
@@ -3387,6 +3466,8 @@ def build_pfs_stream_single_file(
         verbose: Whether to emit a verbose per-file decision line.
         skip_executable_compression: Whether to store executable-like files raw.
         dry_run: When True, report the layout and stats without writing an image.
+        inner_file_name: Optional explicit internal file name to use for the
+            synthetic single-file tree instead of ``source_file.name``.
 
     Returns:
         Build statistics for the completed image.
@@ -3398,6 +3479,7 @@ def build_pfs_stream_single_file(
     progress: Progress = Progress(enabled=True)
     if not source_file.is_file():
         raise BuildError(f"source file does not exist: {source_file}")
+    resolved_inner_file_name: str = inner_file_name if inner_file_name is not None else source_file.name
     raw_size: int = source_file.stat().st_size
     now: int = int(time.time())
     resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)
@@ -3410,7 +3492,9 @@ def build_pfs_stream_single_file(
         and raw_size >= min_compress_size
         and not (
             skip_executable_compression
-            and should_skip_executable_compression(file_name=source_file.name, file_path=source_file.name)
+            and should_skip_executable_compression(
+                file_name=resolved_inner_file_name, file_path=resolved_inner_file_name
+            )
         )
     )
     block_workers: int = resolve_block_compression_worker_count(
@@ -3489,16 +3573,16 @@ def build_pfs_stream_single_file(
 
     # Synthesize the single-file directory model and the flat path table.
     file_node = FileNode(
-        rel_path=source_file.name,
+        rel_path=resolved_inner_file_name,
         abs_path=source_file,
         parent_rel_dir="",
-        name=source_file.name,
+        name=resolved_inner_file_name,
         raw_size=raw_size,
     )
     file_node.inode = file_inode
-    uroot_dir = DirNode(rel_dir="", name="", parent_rel_dir=None, children_files=[source_file.name])
+    uroot_dir = DirNode(rel_dir="", name="", parent_rel_dir=None, children_files=[resolved_inner_file_name])
     uroot_dir.inode = uroot_inode
-    inode_by_path: dict[str, Inode] = {"dir:": uroot_inode, f"file:{source_file.name}": file_inode}
+    inode_by_path: dict[str, Inode] = {"dir:": uroot_inode, f"file:{resolved_inner_file_name}": file_inode}
     fpt_blob: bytes
     has_collision: bool
     fpt_blob, _collision_blob, has_collision = make_fpt_and_collision_blob(
@@ -3513,7 +3597,7 @@ def build_pfs_stream_single_file(
     uroot_dirents: list[Dirent] = [
         Dirent(uroot_inode.number, consts.DIRENT_TYPE_DOT, "."),
         Dirent(uroot_inode.number, consts.DIRENT_TYPE_DOTDOT, ".."),
-        Dirent(file_inode.number, consts.DIRENT_TYPE_FILE, source_file.name),
+        Dirent(file_inode.number, consts.DIRENT_TYPE_FILE, resolved_inner_file_name),
     ]
     uroot_blob: bytes = b"".join(d.to_bytes() for d in uroot_dirents)
     super_root_dirents: list[Dirent] = [
