@@ -134,6 +134,7 @@ help keep the CLI layer predictable and easy to maintain.
 - Do not mention you are an AI or attribute the text edits or anything to any AI tool like Claude or OpenClaude.
 - Never include generator or AI attribution lines in public-facing project text such as commit messages, PR titles,
   PR bodies, PR comments, release notes, changelog entries, or similar artifacts.
+- When using the `pr-writing` skill, do not stop at invoking it. You must make the final public text match the skill's structure and checklist before publishing or editing any commit, PR, comment, label, or tag.
 
 ## Agent / Tooling note
 
