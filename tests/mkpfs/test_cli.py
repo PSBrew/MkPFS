@@ -112,6 +112,7 @@ class CliTestCase(unittest.TestCase):
             signed=False,
             encrypted=False,
             ekpfs_key=None,
+            use_spool=False,
             rename_inner_image=True,
             verbose=False,
             dry_run=dry_run,
@@ -1522,7 +1523,7 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         with patch.object(cli, "_run_stream_pack_file", return_value=0), patch.object(
-            cli, "_can_stream_pack_file", return_value=False
+            cli, "_stream_fallback_reason", return_value="signed images"
         ), patch.object(cli, "warning") as mocked_warning:
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
@@ -2241,14 +2242,13 @@ class TestRunImageCheck(CliTestCase):
         out: Path = tmp_path / "payload.ffpfsc"
         args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
         args.block_size = "auto-fit"
-        args.no_spool = True
         with patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build:
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
         resolved_block_size: int = mocked_build.call_args.kwargs["block_size"]
         self.assertEqual(mocked_build.call_args.kwargs["min_compress_size"], resolved_block_size)
 
-    def test_pack_file_no_spool_creates_image_without_spool(self) -> None:
-        """`pack file --no-spool` writes the image and leaves no spool in the temp folder."""
+    def test_pack_file_streams_by_default_without_spool(self) -> None:
+        """`pack file` streams by default and leaves no spool in the temp folder."""
         tmp_path: Path = self.make_temp_path()
         src: Path = tmp_path / "PPSA.exfat"
         src.write_bytes(b"DATA" * 20000 + b"\x00" * 60000)
@@ -2269,7 +2269,6 @@ class TestRunImageCheck(CliTestCase):
                     "PS5",
                     "--inode-bits",
                     "32",
-                    "--no-spool",
                     "--temp-folder",
                     str(temp),
                     "--no-adjust-output-file-extension",
@@ -2279,15 +2278,14 @@ class TestRunImageCheck(CliTestCase):
         self.assertTrue(out.exists())
         self.assertEqual(list(temp.glob("mkpfs-*.pfsc")), [])
 
-    def test_pack_file_no_spool_falls_back_for_signed(self) -> None:
-        """Combining --no-spool with --signed should fall back to the legacy builder."""
+    def test_pack_file_use_spool_forces_legacy_builder(self) -> None:
+        """`--use-spool` forces the legacy staged/spool builder even when streaming is supported."""
         tmp_path: Path = self.make_temp_path()
         src: Path = tmp_path / "x.exfat"
         src.write_bytes(b"x" * 1000)
         out: Path = tmp_path / "x.ffpfsc"
         args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
-        args.no_spool = True
-        args.signed = True
+        args.use_spool = True
         with patch.object(
             cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
         ), patch.object(
@@ -2298,14 +2296,30 @@ class TestRunImageCheck(CliTestCase):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
         mocked_pack.assert_called_once()
 
-    def test_pack_folder_does_not_accept_no_spool(self) -> None:
-        """The --no-spool flag is only available on the file path, not the folder path."""
+    def test_pack_file_falls_back_for_signed_with_notice(self) -> None:
+        """`--signed` falls back to the legacy builder and prints a notice."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "x.exfat"
+        src.write_bytes(b"x" * 1000)
+        out: Path = tmp_path / "x.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
+        args.signed = True
+        buffer: StringIO = StringIO()
+        with patch.object(
+            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
+        ), patch.object(cli, "_run_pack_build", return_value=0) as mocked_pack, redirect_stdout(buffer):
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+        mocked_pack.assert_called_once()
+        self.assertIn("signed images", buffer.getvalue())
+
+    def test_pack_folder_does_not_accept_use_spool(self) -> None:
+        """The --use-spool flag is only available on the file path, not the folder path."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         with self.assertRaises(SystemExit):
-            parser.parse_args(["pack", "folder", "src", "out", "--no-spool"])
+            parser.parse_args(["pack", "folder", "src", "out", "--use-spool"])
 
-    def test_pack_file_no_spool_with_verify_succeeds(self) -> None:
-        """`pack file --no-spool --verify` completes the post-create check without errors."""
+    def test_pack_file_streaming_with_verify_succeeds(self) -> None:
+        """`pack file --verify` completes the post-create check without errors."""
         tmp_path: Path = self.make_temp_path()
         src: Path = tmp_path / "PPSA.exfat"
         src.write_bytes(b"GAMEDATA" * 20000 + b"\x00" * 200000)
@@ -2324,7 +2338,6 @@ class TestRunImageCheck(CliTestCase):
                     "PS5",
                     "--inode-bits",
                     "32",
-                    "--no-spool",
                     "--verify",
                     "--temp-folder",
                     str(tmp_path / "temp"),
@@ -2333,7 +2346,7 @@ class TestRunImageCheck(CliTestCase):
             )
         self.assertEqual(rc, 0)
 
-    def test_pack_file_no_spool_prints_parameters_and_progress(self) -> None:
+    def test_pack_file_streaming_prints_parameters_and_progress(self) -> None:
         """The streaming path prints the parameters banner and a compression status line."""
         tmp_path: Path = self.make_temp_path()
         src: Path = tmp_path / "PPSA.exfat"
@@ -2354,7 +2367,6 @@ class TestRunImageCheck(CliTestCase):
                     "PS5",
                     "--inode-bits",
                     "32",
-                    "--no-spool",
                     "--temp-folder",
                     str(tmp_path / "temp"),
                     "--no-adjust-output-file-extension",
@@ -2366,14 +2378,13 @@ class TestRunImageCheck(CliTestCase):
         self.assertIn("Source path:", combined)
         self.assertIn("Compressing 1 file", combined)
 
-    def test_pack_file_no_spool_falls_back_for_inode_bits_64(self) -> None:
-        """64-bit inode requests should fall back to the legacy single-file builder."""
+    def test_pack_file_falls_back_for_inode_bits_64(self) -> None:
+        """64-bit inode requests fall back to the legacy single-file builder."""
         tmp_path: Path = self.make_temp_path()
         src: Path = tmp_path / "x.exfat"
         src.write_bytes(b"x" * 1000)
         out: Path = tmp_path / "x.ffpfsc"
         args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
-        args.no_spool = True
         args.inode_bits = 64
         with patch.object(
             cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
@@ -2385,14 +2396,13 @@ class TestRunImageCheck(CliTestCase):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
         mocked_pack.assert_called_once()
 
-    def test_pack_file_no_spool_falls_back_for_auto_fit_block_size(self) -> None:
-        """Auto-fit block size requests should fall back to the legacy single-file builder."""
+    def test_pack_file_falls_back_for_auto_fit_block_size(self) -> None:
+        """Auto-fit block size requests fall back to the legacy single-file builder."""
         tmp_path: Path = self.make_temp_path()
         src: Path = tmp_path / "x.exfat"
         src.write_bytes(b"x" * 1000)
         out: Path = tmp_path / "x.ffpfsc"
         args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
-        args.no_spool = True
         args.block_size = "auto-fit"
         with patch.object(
             cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
@@ -2404,8 +2414,8 @@ class TestRunImageCheck(CliTestCase):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
         mocked_pack.assert_called_once()
 
-    def test_pack_file_no_spool_dry_run_writes_nothing(self) -> None:
-        """--no-spool --dry-run reports layout without writing an image."""
+    def test_pack_file_streaming_dry_run_writes_nothing(self) -> None:
+        """`pack file --dry-run` reports layout without writing an image."""
         tmp_path: Path = self.make_temp_path()
         src: Path = tmp_path / "PPSA.exfat"
         src.write_bytes(b"DATA" * 20000 + b"\x00" * 60000)
@@ -2415,7 +2425,7 @@ class TestRunImageCheck(CliTestCase):
             StringIO()
         ):
             rc: int = cli_mkpfs_main(
-                ["pack", "file", str(src), str(out), "--no-spool", "--dry-run", "--no-adjust-output-file-extension"]
+                ["pack", "file", str(src), str(out), "--dry-run", "--no-adjust-output-file-extension"]
             )
         self.assertEqual(rc, 0)
         self.assertFalse(out.exists())
