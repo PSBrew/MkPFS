@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from . import __version__, consts
@@ -42,11 +43,13 @@ from .pfs import (
     read_pfs_info,
     render_tree,
     resolve_compression_worker_count,
+    resolve_single_file_inner_name,
     validate_fpt_maps,
     validate_inode_layout,
     validate_input,
     validate_ps5_checklist,
     validate_source_match,
+    validate_source_paths,
     verify_file_payload_hashes,
     verify_signed_image_signatures,
 )
@@ -58,6 +61,64 @@ from .utils import (
 )
 
 PROJECT_URL: str = "https://github.com/PSBrew/MkPFS"
+
+
+_GAME_FOLDER_COMPRESS_WARNING_TEXT: str = (
+    "IMPORTANT: Do not pack an application/game folder directly with compression enabled.\n"
+    "Although image creation and verification may succeed, the console often misreads compressed files.\n"
+    "Either turn off compression (--no-compress) or create the image using the wrapper-based packaging flow.\n"
+    "See: https://github.com/PSBrew/MkPFS/issues/49"
+)
+
+_SINGLE_FILE_RENAME_WARNING_TEXT: str = (
+    "WARNING: The inner file was renamed to a safer file name to improve compatibility."
+)
+
+
+def _emit_game_folder_compression_warning() -> None:
+    """Emit the red warning about compressing direct game-folder images."""
+    info("")  # Adds an empty line before the warning.
+    warning(_GAME_FOLDER_COMPRESS_WARNING_TEXT, icon_name="warning")
+
+
+def _emit_single_file_rename_warning(*, original_name: str, renamed_name: str) -> None:
+    """Emit a warning when single-file packing renames the inner file name.
+
+    Args:
+        original_name: Original external source file name.
+        renamed_name: Resolved internal image file name.
+    """
+    warning(
+        f'{_SINGLE_FILE_RENAME_WARNING_TEXT}\r\n"{original_name}" -> "{renamed_name}"',
+        icon_name="warning",
+    )
+
+
+def _emit_single_file_verify_name_mismatch_warning(*, external_name: str, internal_name: str) -> None:
+    """Emit a warning when single-file verify compares different file names.
+
+    Args:
+        external_name: External source file name.
+        internal_name: Internal image file name.
+    """
+    warning(
+        "WARNING: The external file name does not match the internal file name. "
+        f"Comparing {external_name} with {internal_name} as the same file.",
+        icon_name="warning",
+    )
+
+
+def _resolve_single_file_internal_name(*, source_file: Path, rename_inner_image: bool) -> str:
+    """Resolve the internal file name used for single-file pack and verify flows.
+
+    Args:
+        source_file: External source file path.
+        rename_inner_image: Whether renaming is enabled.
+
+    Returns:
+        Internal file name that should appear inside the image.
+    """
+    return resolve_single_file_inner_name(source_name=source_file.name, rename_inner_image=rename_inner_image)
 
 
 def get_help_title() -> str:
@@ -193,7 +254,7 @@ def print_build_parameters(
     if compress:
         info(f"  Threshold gain:    {threshold_gain}%")
         resolved_cpu_count: int = resolve_compression_worker_count(requested_cpu_count=cpu_count)
-        cpu_label: str = f"{resolved_cpu_count} (auto)" if cpu_count == 0 else str(max(1, cpu_count))
+        cpu_label: str = f"{resolved_cpu_count} (auto, capped at 8)" if cpu_count == 0 else str(max(1, cpu_count))
         info(f"  CPU cores:         {cpu_label}")
         info(f"  Zlib level:        {zlib_level}")
         if max_compressed_ratio is not None:
@@ -466,6 +527,8 @@ def run_image_check(
     new_crypt: bool = False,
     require_game_files: bool = False,
     verify_payloads: bool = True,
+    compare_source_contents: bool = True,
+    report_title: str = "PFS Check Report",
 ) -> tuple[list[str], list[str], dict[int, list[ParsedDirent]], int]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -503,8 +566,8 @@ def run_image_check(
                 new_crypt=new_crypt,
             )
 
-            case_insensitive = bool(header.mode & consts.PFS_MODE_CASE_INSENSITIVE)
-            expected_fpt = build_expected_fpt(file_inodes, dir_inodes, case_insensitive)
+            case_insensitive: bool = bool(header.mode & consts.PFS_MODE_CASE_INSENSITIVE)
+            expected_fpt: dict[str, int] = build_expected_fpt(file_inodes, dir_inodes, case_insensitive)
             validate_fpt_maps(fpt_map, collision_map, expected_fpt, errors)
             # Payload-content passes (decode every file). Skipped for structure-only
             # callers such as the tree listing, which need only the directory layout.
@@ -545,8 +608,8 @@ def run_image_check(
                         f"expected {expected_manifest_sha256.lower()}"
                     )
 
-            reachable = set(file_inodes.values()) | set(dir_inodes.values()) | set(special_inodes)
-            orphan_inodes = sorted(i.number for i in inodes if i.number not in reachable)
+            reachable: set[int] = set(file_inodes.values()) | set(dir_inodes.values()) | set(special_inodes)
+            orphan_inodes: list[int] = sorted(i.number for i in inodes if i.number not in reachable)
             if orphan_inodes:
                 errors.append(
                     "orphan inodes not reachable from filesystem tree: "
@@ -555,27 +618,42 @@ def run_image_check(
                 )
 
             if source is not None:
-                validate_source_match(
-                    fh,
-                    header,
-                    inodes,
-                    file_inodes,
-                    source,
-                    errors,
-                    ekpfs=ekpfs,
-                    new_crypt=new_crypt,
-                    progress=progress,
-                )
+                validate_source_paths(file_inodes=file_inodes, source=source, errors=errors)
+                if compare_source_contents:
+                    validate_source_match(
+                        fh,
+                        header,
+                        inodes,
+                        file_inodes,
+                        source,
+                        errors,
+                        ekpfs=ekpfs,
+                        new_crypt=new_crypt,
+                        progress=progress,
+                    )
 
-            compressed_count = sum(1 for i in file_inodes.values() if inodes[i].is_compressed)
-            total_logical = sum(max(0, inodes[i].logical_size) for i in file_inodes.values())
-            total_stored = sum(max(0, inodes[i].stored_size) for i in file_inodes.values())
+            compressed_count: int = sum(1 for i in file_inodes.values() if inodes[i].is_compressed)
+            total_logical: int = sum(max(0, inodes[i].logical_size) for i in file_inodes.values())
+            total_stored: int = sum(max(0, inodes[i].stored_size) for i in file_inodes.values())
+
+            # If verification is running interactively (emit_report) and the image
+            # contains PS5 game markers (eboot.bin or sce_sys/param.json) while any
+            # file is stored compressed, emit a prominent red warning explaining
+            # that packing application folders directly with PFSC compression
+            # provides no practical benefit and may cause the console to read
+            # files incorrectly.
+            if (
+                emit_report
+                and compressed_count > 0
+                and ("eboot.bin" in file_inodes or "sce_sys/param.json" in file_inodes)
+            ):
+                _emit_game_folder_compression_warning()
 
             if emit_report:
                 payload_magic: str = describe_magic(magic=consts.PFSC_MAGIC) if compressed_count > 0 else "none"
                 print_version_header()
                 info("=" * 70)
-                info("PFS Check Report")
+                info(report_title)
                 info("=" * 70)
                 info(f"Image:                 {image}")
                 ver_label: str = "PS5" if header.version == consts.PFS_VERSION_PS5 else "PS4"
@@ -684,7 +762,7 @@ def cli_mkpfs_add_create_args(
         default=0,
         help=(
             "Number of CPU cores for PFSC compression "
-            "(0 = auto max(1, cpu_count() - 1), non-zero = max(1, user value))"
+            "(0 = auto min(8, max(1, cpu_count() - 1)), non-zero = max(1, user value))"
         ),
     )
     parser.add_argument(
@@ -725,7 +803,26 @@ def cli_mkpfs_add_create_args(
         )
     parser.add_argument("--verbose", action="store_true", help="Verbose per-file decisions")
     parser.add_argument("--dry-run", action="store_true", help="Scan/layout/report only; do not write image")
-    parser.add_argument("--verify", action="store_true", help="Run 'verify' after a successful pack")
+    parser.add_argument("--verify", action="store_true", help="Run full verification after a successful pack")
+    verify_structure_group = parser.add_mutually_exclusive_group()
+    verify_structure_group.add_argument(
+        "--verify-structure",
+        dest="verify_structure",
+        action="store_true",
+        default=True,
+        help="Run quick structure verification after a successful pack (default)",
+    )
+    verify_structure_group.add_argument(
+        "--no-verify-structure",
+        dest="verify_structure",
+        action="store_false",
+        help="Disable the default quick structure verification after a successful pack",
+    )
+    parser.add_argument(
+        "--skip-verification",
+        action="store_true",
+        help="Skip all post-pack verification",
+    )
 
 
 def _resolve_pack_temp_folder(args: argparse.Namespace) -> Path:
@@ -895,27 +992,91 @@ def _print_pack_parameters(
     )
 
 
+class PackVerificationMode(StrEnum):
+    """Supported post-pack verification modes."""
+
+    SKIP = "skip"
+    STRUCTURE = "structure"
+    FULL = "full"
+
+
+def _resolve_pack_verification_mode(args: argparse.Namespace) -> PackVerificationMode:
+    """Resolve the effective post-pack verification mode.
+
+    Args:
+        args: Parsed CLI arguments for a pack workflow.
+
+    Returns:
+        Effective post-pack verification mode.
+
+    Raises:
+        BuildError: If the verification flags are combined in an invalid way.
+    """
+    skip_verification: bool = bool(getattr(args, "skip_verification", False))
+    verify: bool = bool(getattr(args, "verify", False))
+    verify_structure: bool = bool(getattr(args, "verify_structure", True))
+
+    if skip_verification and verify:
+        raise BuildError("--verify and --skip-verification cannot be used together")
+    if skip_verification and verify_structure:
+        raise BuildError("--verify-structure and --skip-verification cannot be used together")
+    if skip_verification:
+        return PackVerificationMode.SKIP
+    if verify:
+        return PackVerificationMode.FULL
+    if verify_structure:
+        return PackVerificationMode.STRUCTURE
+    return PackVerificationMode.SKIP
+
+
+def _contains_direct_game_markers(root_path: Path) -> bool:
+    """Return whether a source directory exposes direct PS5 game markers.
+
+    Args:
+        root_path: Source directory root to inspect.
+
+    Returns:
+        True when ``eboot.bin`` or ``sce_sys/param.json`` exists directly under
+        the source root, otherwise False.
+    """
+    try:
+        has_eboot: bool = (root_path / "eboot.bin").exists()
+    except OSError:
+        has_eboot = False
+    try:
+        has_param: bool = (root_path / "sce_sys" / "param.json").exists()
+    except OSError:
+        has_param = False
+    return has_eboot or has_param
+
+
 def _run_post_pack_verify(
     *,
     output_path: Path,
     source: Path,
     ekpfs_key: bytes,
     new_crypt: bool,
+    verification_mode: PackVerificationMode,
     require_game_files: bool = False,
 ) -> int:
-    """Run the post-pack image check and report warnings and errors.
+    """Run the selected post-pack image verification and report warnings and errors.
 
     Args:
         output_path: Written image to verify.
         source: Source directory compared against the image.
         ekpfs_key: EKPFS key material for encrypted images.
         new_crypt: Whether to use the alternate newCrypt derivation.
+        verification_mode: Effective post-pack verification mode.
         require_game_files: Whether to enable the optional game-file checklist.
 
     Returns:
         ``1`` when the check reports errors, otherwise ``0``.
     """
-    info("Running post-create check...")
+    verify_payloads: bool = verification_mode == PackVerificationMode.FULL
+    verification_label: str = "full verification" if verify_payloads else "structure verification"
+    compare_source_contents: bool = verification_mode != PackVerificationMode.STRUCTURE
+    report_title: str = "PFS Full Verify Report" if verify_payloads else "PFS Structure Verify Report"
+    info(f"Running post-pack {verification_label}...")
     errors, warnings, _tree, _uroot = run_image_check(
         output_path,
         source,
@@ -923,9 +1084,12 @@ def _run_post_pack_verify(
         ekpfs=ekpfs_key,
         new_crypt=new_crypt,
         require_game_files=require_game_files,
+        verify_payloads=verify_payloads,
+        compare_source_contents=compare_source_contents,
+        report_title=report_title,
     )
     for w in warnings:
-        warning(w)
+        warning(w, icon_name="warning")
     for e in errors:
         error(e)
     return 1 if errors else 0
@@ -996,7 +1160,7 @@ def _run_pack_build(
     warnings: list[str]
     _title_id, warnings = validate_input(build_source_root, require_game_files=require_game_files)
     for w in warnings:
-        warning(w)
+        warning(w, icon_name="warning")
 
     _print_pack_parameters(
         config=config,
@@ -1008,13 +1172,16 @@ def _run_pack_build(
         dry_run=args.dry_run,
     )
 
+    if config.compress and _contains_direct_game_markers(build_source_root):
+        _emit_game_folder_compression_warning()
+
     if not args.dry_run:
         destination_space_error: str | None = get_destination_space_error_message(
             source_root=build_source_root,
             output_path=output_path,
         )
         if destination_space_error is not None:
-            error(destination_space_error)
+            error(destination_space_error, icon_name="error")
             return 1
         if config.compress:
             temp_space_error: str | None = get_temp_space_error_message(
@@ -1022,7 +1189,7 @@ def _run_pack_build(
                 temp_folder=temp_folder,
             )
             if temp_space_error is not None:
-                error(temp_space_error)
+                error(temp_space_error, icon_name="error")
                 return 1
 
     if not args.dry_run:
@@ -1056,7 +1223,8 @@ def _run_pack_build(
 
     stats.input_path = display_source_path
     print_summary(stats)
-    if args.dry_run or not args.verify:
+    verification_mode: PackVerificationMode = _resolve_pack_verification_mode(args)
+    if args.dry_run or verification_mode == PackVerificationMode.SKIP:
         return 0
 
     return _run_post_pack_verify(
@@ -1064,12 +1232,15 @@ def _run_pack_build(
         source=compare_source_root,
         ekpfs_key=config.ekpfs_key,
         new_crypt=config.new_crypt,
+        verification_mode=verification_mode,
         require_game_files=require_game_files,
     )
 
 
 @contextmanager
-def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | None = None) -> Iterator[Path]:
+def _stage_single_file_source_root(
+    *, source_file: Path, temp_folder: Path | None = None, staged_file_name: str | None = None
+) -> Iterator[Path]:
     """Yield a temporary source root exposing one file, avoiding data copies when possible.
 
     The staged file is created as a hard link when possible, with a symlink
@@ -1086,6 +1257,7 @@ def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | Non
     Args:
         source_file: Existing source file that should appear at the temporary
             root path.
+        staged_file_name: Optional file name to expose inside the temporary root.
         temp_folder: Optional temporary folder where the staging directory should
             be created.
 
@@ -1110,7 +1282,8 @@ def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | Non
 
     with tempfile.TemporaryDirectory(dir=str(staging_base)) as staging_dir_name:
         staging_root: Path = Path(staging_dir_name)
-        staging_file: Path = staging_root / source_file.name
+        staging_file_name: str = staged_file_name if staged_file_name is not None else source_file.name
+        staging_file: Path = staging_root / staging_file_name
         try:
             os.link(src=source_file, dst=staging_file)
         except OSError:
@@ -1201,6 +1374,14 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
 
     config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
     temp_folder: Path = _resolve_pack_temp_folder(args)
+    rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
+    internal_file_name: str = _resolve_single_file_internal_name(
+        source_file=source_file,
+        rename_inner_image=rename_inner_image,
+    )
+    if rename_inner_image and internal_file_name != source_file.name:
+        _emit_single_file_rename_warning(original_name=source_file.name, renamed_name=internal_file_name)
+
     _print_pack_parameters(
         config=config,
         display_source_path=source_file,
@@ -1217,7 +1398,7 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
             output_path=output_path,
         )
         if destination_space_error is not None:
-            error(destination_space_error)
+            error(destination_space_error, icon_name="error")
             return 1
 
     if not args.dry_run and not prompt_overwrite(output_path):
@@ -1242,20 +1423,27 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
         verbose=args.verbose,
         skip_executable_compression=config.skip_executable_compression,
         dry_run=args.dry_run,
+        inner_file_name=internal_file_name,
     )
     stats.input_path = source_file
     print_summary(stats)
-    if args.dry_run or not args.verify:
+    verification_mode: PackVerificationMode = _resolve_pack_verification_mode(args)
+    if args.dry_run or verification_mode == PackVerificationMode.SKIP:
         return 0
 
     # Stage the single file into a temp directory (hardlink, no data copy) so the
     # check compares against a directory tree, mirroring the verify command.
-    with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
+    with _stage_single_file_source_root(
+        source_file=source_file,
+        temp_folder=temp_folder,
+        staged_file_name=internal_file_name,
+    ) as staging_root:
         return _run_post_pack_verify(
             output_path=output_path,
             source=staging_root,
             ekpfs_key=config.ekpfs_key,
             new_crypt=config.new_crypt,
+            verification_mode=verification_mode,
         )
 
 
@@ -1270,15 +1458,26 @@ def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
     """
     source_file: Path = Path(args.source_file).expanduser().resolve()
     temp_folder: Path = _resolve_pack_temp_folder(args)
+    rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
     if not source_file.exists() or not source_file.is_file():
         raise BuildError(f"--source-file must be an existing file: {source_file}")
+    internal_file_name: str = _resolve_single_file_internal_name(
+        source_file=source_file,
+        rename_inner_image=rename_inner_image,
+    )
+    if rename_inner_image and internal_file_name != source_file.name and not _can_stream_pack_file(args=args):
+        _emit_single_file_rename_warning(original_name=source_file.name, renamed_name=internal_file_name)
 
     # Prefer direct streaming for the common single-file path, fall back to the
     # legacy staged/spool builder only when the requested options require it.
     if _can_stream_pack_file(args=args):
         return _run_stream_pack_file(args=args, source_file=source_file)
 
-    with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
+    with _stage_single_file_source_root(
+        source_file=source_file,
+        temp_folder=temp_folder,
+        staged_file_name=internal_file_name,
+    ) as staging_root:
         return _run_pack_build(
             args=args,
             build_source_root=staging_root,
@@ -1310,7 +1509,16 @@ def cli_mkpfs_check_run(args: argparse.Namespace) -> int:
         if not source_file.exists() or not source_file.is_file():
             info(f"--source-file must be an existing file: {source_file}")
             return 2
-        with _stage_single_file_source_root(source_file=source_file) as staging_root:
+        internal_file_name: str = _resolve_single_file_internal_name(source_file=source_file, rename_inner_image=True)
+        if internal_file_name != source_file.name:
+            _emit_single_file_verify_name_mismatch_warning(
+                external_name=source_file.name,
+                internal_name=internal_file_name,
+            )
+        with _stage_single_file_source_root(
+            source_file=source_file,
+            staged_file_name=internal_file_name,
+        ) as staging_root:
             source = staging_root
             return _run_verify_check(
                 image=image,
@@ -1380,9 +1588,9 @@ def _run_verify_check(
         new_crypt=new_crypt,
     )
     for w in warnings:
-        warning(w)
+        warning(w, icon_name="warning")
     for e in errors:
-        error(e)
+        error(e, icon_name="error")
     return 1 if errors else 0
 
 
@@ -1403,7 +1611,7 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
     )
     if errors:
         for e in errors:
-            error(e)
+            error(e, icon_name="error")
         return 1
     print_version_header()
     info("/")
@@ -1434,9 +1642,9 @@ def cli_mkpfs_info_run(args: argparse.Namespace) -> int:
         info(f"Header magic:{describe_magic(magic=info_result.header.magic)}")
 
     for w in info_result.warnings:
-        warning(w)
+        warning(w, icon_name="warning")
     for e in info_result.errors:
-        error(e)
+        error(e, icon_name="error")
 
     return 1 if info_result.errors else 0
 
@@ -1583,6 +1791,20 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
             "and unsupported option combinations fall back to the legacy spool path"
         ),
     )
+    file_parser.add_argument(
+        "--rename-inner-image",
+        dest="rename_inner_image",
+        action="store_true",
+        default=True,
+        help="Rename inner image filename to a safe normalized name (default)",
+    )
+    file_parser.add_argument(
+        "--no-rename-inner-image",
+        dest="rename_inner_image",
+        action="store_false",
+        help="Disable renaming of the inner image filename",
+    )
+
     file_parser.set_defaults(
         inode_bits=32,
         func=cli_mkpfs_pack_file_run,

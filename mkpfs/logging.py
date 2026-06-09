@@ -45,10 +45,35 @@ def log(message: str, level: int = logging.INFO, icon_name: str | None = None) -
     """
     prefix: str = (icon(icon_name) + " ") if icon_name else ""
     text: str = prefix + str(message)
+    # Colorize output when terminal appears to support colors and the user has not
+    # disabled colors via MKPFS_NO_COLOR. Keep logic simple and fall back to plain
+    # output when unsure.
+    no_color_env: str | None = os.environ.get("MKPFS_NO_COLOR")
+    use_color: bool = False
+    try:
+        use_color = bool(
+            (getattr(sys.stderr, "isatty", lambda: False)() or getattr(sys.stdout, "isatty", lambda: False)())
+            and not no_color_env
+        )
+    except Exception:
+        use_color = False
+
+    color_code: str = ""
+    reset_code: str = ""
+    if use_color:
+        reset_code = "\x1b[0m"
+        if level >= logging.ERROR:
+            color_code = "\x1b[31m"  # red
+        elif level >= logging.WARNING:
+            color_code = "\x1b[38;5;208m"  # orange (256-color)
+        else:
+            color_code = ""
+
+    colored_text: str = f"{color_code}{text}{reset_code}" if color_code else text
     if level >= logging.ERROR:
-        print(text, file=sys.stderr)
+        print(colored_text, file=sys.stderr)
     else:
-        print(text, file=sys.stdout)
+        print(colored_text, file=sys.stdout)
 
 
 def info(message: str, icon_name: str | None = None) -> None:
