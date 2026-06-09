@@ -68,11 +68,14 @@ _GAME_FOLDER_COMPRESS_WARNING_TEXT: str = (
     "See: https://github.com/PSBrew/MkPFS/issues/49"
 )
 
-_SINGLE_FILE_RENAME_WARNING_TEXT: str = "The inner file was renamed to a safer file name to improve compatibility."
+_SINGLE_FILE_RENAME_WARNING_TEXT: str = (
+    "WARNING: The inner file was renamed to a safer file name to improve compatibility."
+)
 
 
 def _emit_game_folder_compression_warning() -> None:
     """Emit the red warning about compressing direct game-folder images."""
+    info("")  # Adds an empty line before the warning.
     warning(_GAME_FOLDER_COMPRESS_WARNING_TEXT, icon_name="warning")
 
 
@@ -84,7 +87,7 @@ def _emit_single_file_rename_warning(*, original_name: str, renamed_name: str) -
         renamed_name: Resolved internal image file name.
     """
     warning(
-        f"{_SINGLE_FILE_RENAME_WARNING_TEXT} Internal name: {original_name} -> {renamed_name}",
+        f'{_SINGLE_FILE_RENAME_WARNING_TEXT}\r\n"{original_name}" -> "{renamed_name}"',
         icon_name="warning",
     )
 
@@ -97,7 +100,7 @@ def _emit_single_file_verify_name_mismatch_warning(*, external_name: str, intern
         internal_name: Internal image file name.
     """
     warning(
-        "The external file name does not match the internal file name. "
+        "WARNING: The external file name does not match the internal file name. "
         f"Comparing {external_name} with {internal_name} as the same file.",
         icon_name="warning",
     )
