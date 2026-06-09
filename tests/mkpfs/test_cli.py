@@ -110,7 +110,7 @@ class CliTestCase(unittest.TestCase):
             signed=False,
             encrypted=False,
             ekpfs_key=None,
-            no_spool=False,
+            rename_inner_image=True,
             verbose=False,
             dry_run=dry_run,
             verify=verify,
@@ -446,14 +446,42 @@ class TestCliArgumentHelpers(CliTestCase):
         self.assertIn("--adjust-output-file-extension", option_strings)
         self.assertIn("--no-adjust-output-file-extension", option_strings)
 
-    def test_pack_parser_accepts_folder_subcommand_with_output_positional(self) -> None:
-        """The canonical pack folder parser should keep source and output positional args."""
+    def test_pack_file_parser_exposes_inner_image_rename_toggle_pair(self) -> None:
+        """The pack file parser should expose the inner-image rename toggle pair."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
-        parsed_args: argparse.Namespace = parser.parse_args(["pack", "folder", "src", "out.ffpfs"])
-        self.assertEqual(parsed_args.command, "pack")
-        self.assertEqual(parsed_args.pack_command, "folder")
-        self.assertEqual(parsed_args.source_dir, "src")
-        self.assertEqual(parsed_args.image_file, "out.ffpfs")
+        pack_parser: argparse.ArgumentParser = next(
+            action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        pack_choices: dict[str, argparse.ArgumentParser] = next(
+            action.choices for action in pack_parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        file_parser: argparse.ArgumentParser = pack_choices["file"]
+        option_strings: set[str] = set()
+        rename_action: argparse.Action | None = None
+        for action in file_parser._actions:
+            if getattr(action, "dest", "") == "rename_inner_image":
+                option_strings.update(action.option_strings)
+                if rename_action is None:
+                    rename_action = action
+        self.assertIn("--rename-inner-image", option_strings)
+        self.assertIn("--no-rename-inner-image", option_strings)
+        self.assertIsNotNone(rename_action)
+        self.assertTrue(rename_action.default)
+
+    def test_pack_file_parser_parses_rename_inner_image_toggle_values(self) -> None:
+        """The pack file parser should default rename-inner-image on and allow opt-out."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        default_args: argparse.Namespace = parser.parse_args(["pack", "file", "src.bin", "out.ffpfsc"])
+        disabled_args: argparse.Namespace = parser.parse_args(
+            ["pack", "file", "src.bin", "out.ffpfsc", "--no-rename-inner-image"]
+        )
+        enabled_args: argparse.Namespace = parser.parse_args(
+            ["pack", "file", "src.bin", "out.ffpfsc", "--rename-inner-image"]
+        )
+
+        self.assertTrue(default_args.rename_inner_image)
+        self.assertFalse(disabled_args.rename_inner_image)
+        self.assertTrue(enabled_args.rename_inner_image)
 
     def test_pack_parser_accepts_file_subcommand_with_output_positional(self) -> None:
         """The canonical pack file parser should keep source and output positional args."""
@@ -1208,6 +1236,41 @@ class TestCliCreateRun(CliTestCase):
             self.assertEqual(staged_file.read_bytes(), source_file.read_bytes())
             mocked_copy.assert_called_once_with(source_file, staged_file)
 
+    def test_stage_single_file_source_root_uses_resolved_name_when_provided(self) -> None:
+        """Single-file staging should expose the requested internal file name."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "My File (Demo)!!.ExFAT"
+        source_file.write_bytes(b"payload")
+
+        with cli._stage_single_file_source_root(
+            source_file=source_file,
+            temp_folder=tmp_path,
+            staged_file_name="PPSA01325.exfat",
+        ) as staging_root:
+            staged_file: Path = staging_root / "PPSA01325.exfat"
+            self.assertTrue(staged_file.is_file())
+            self.assertEqual(staged_file.read_bytes(), source_file.read_bytes())
+
+    def test_pack_file_run_warns_when_inner_file_name_is_renamed(self) -> None:
+        """Pack file should warn when it renames the internal file name."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "UP0700-CUSA03388_00-DARKSOULS3000000.ExFAT"
+        source_file.write_bytes(b"payload")
+        output_path: Path = tmp_path / "out.ffpfsc"
+        args: SimpleNamespace = self.make_pack_file_args(
+            source_path=source_file,
+            image_path=output_path,
+            dry_run=True,
+            verify=False,
+        )
+        with patch.object(cli, "_run_stream_pack_file", return_value=0), patch.object(
+            cli, "_can_stream_pack_file", return_value=False
+        ), patch.object(cli, "warning") as mocked_warning:
+            self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
+
+        warning_texts: list[str] = [str(call.args[0]) for call in mocked_warning.call_args_list]
+        self.assertTrue(any("renamed to a safer file name" in text for text in warning_texts))
+
     def test_create_run_emits_red_warning_for_compressed_game_folder(self) -> None:
         """Pack folder should emit the red warning for direct game folders when compression is enabled."""
         tmp_path: Path = self.make_temp_path()
@@ -1228,6 +1291,58 @@ class TestCliCreateRun(CliTestCase):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
 
         self.assertIn(cli._GAME_FOLDER_COMPRESS_WARNING_TEXT.splitlines()[0], combined.getvalue())
+
+    def test_check_run_warns_when_source_file_name_differs_from_internal_name(self) -> None:
+        """Verify should warn when a single-file source name differs from the internal name."""
+        tmp_path: Path = self.make_temp_path()
+        source_file: Path = tmp_path / "My Bad File!!.ExFAT"
+        source_file.write_bytes(b"payload")
+        seen_source: list[Path | None] = []
+
+        def fake_run_image_check(
+            image: Path,
+            source: Path | None,
+            print_tree: bool,
+            expected_crc32: int | None = None,
+            expected_manifest_sha256: str | None = None,
+            emit_report: bool = True,
+            require_game_files: bool = False,
+            ekpfs: bytes | None = None,
+            new_crypt: bool = False,
+        ) -> tuple[list[str], list[str], dict[int, list[ParsedDirent]], int]:
+            del (
+                image,
+                print_tree,
+                expected_crc32,
+                expected_manifest_sha256,
+                emit_report,
+                require_game_files,
+                ekpfs,
+                new_crypt,
+            )
+            seen_source.append(source)
+            assert source is not None
+            self.assertTrue((source / "My_Bad_File.exfat").is_file())
+            return [], [], {}, -1
+
+        args: SimpleNamespace = SimpleNamespace(
+            image_file="img.ffpfs",
+            source_dir=None,
+            source_file=str(source_file),
+            expect_crc32=None,
+            expect_manifest_sha256=None,
+            ekpfs_key=None,
+            new_crypt=False,
+            require_game_files=False,
+        )
+        with patch.object(cli, "run_image_check", side_effect=fake_run_image_check), patch.object(
+            cli, "warning"
+        ) as mocked_warning:
+            self.assertEqual(cli.cli_mkpfs_check_run(args), 0)
+
+        self.assertEqual(len(seen_source), 1)
+        warning_texts: list[str] = [str(call.args[0]) for call in mocked_warning.call_args_list]
+        self.assertTrue(any("does not match the internal file name" in text for text in warning_texts))
 
     def test_run_image_check_emits_red_warning_for_compressed_game_marker_images(self) -> None:
         """Verify should emit the red warning when a game-marker image contains any compressed file."""

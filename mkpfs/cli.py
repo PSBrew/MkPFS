@@ -42,6 +42,7 @@ from .pfs import (
     read_pfs_info,
     render_tree,
     resolve_compression_worker_count,
+    resolve_single_file_inner_name,
     validate_fpt_maps,
     validate_inode_layout,
     validate_input,
@@ -67,10 +68,55 @@ _GAME_FOLDER_COMPRESS_WARNING_TEXT: str = (
     "See: https://github.com/PSBrew/MkPFS/issues/49"
 )
 
+_SINGLE_FILE_RENAME_WARNING_TEXT: str = (
+    "WARNING: The inner file was renamed to a safer file name to improve compatibility."
+)
+
 
 def _emit_game_folder_compression_warning() -> None:
     """Emit the red warning about compressing direct game-folder images."""
+    info("")  # Adds an empty line before the warning.
     warning(_GAME_FOLDER_COMPRESS_WARNING_TEXT, icon_name="warning")
+
+
+def _emit_single_file_rename_warning(*, original_name: str, renamed_name: str) -> None:
+    """Emit a warning when single-file packing renames the inner file name.
+
+    Args:
+        original_name: Original external source file name.
+        renamed_name: Resolved internal image file name.
+    """
+    warning(
+        f'{_SINGLE_FILE_RENAME_WARNING_TEXT}\r\n"{original_name}" -> "{renamed_name}"',
+        icon_name="warning",
+    )
+
+
+def _emit_single_file_verify_name_mismatch_warning(*, external_name: str, internal_name: str) -> None:
+    """Emit a warning when single-file verify compares different file names.
+
+    Args:
+        external_name: External source file name.
+        internal_name: Internal image file name.
+    """
+    warning(
+        "WARNING: The external file name does not match the internal file name. "
+        f"Comparing {external_name} with {internal_name} as the same file.",
+        icon_name="warning",
+    )
+
+
+def _resolve_single_file_internal_name(*, source_file: Path, rename_inner_image: bool) -> str:
+    """Resolve the internal file name used for single-file pack and verify flows.
+
+    Args:
+        source_file: External source file path.
+        rename_inner_image: Whether renaming is enabled.
+
+    Returns:
+        Internal file name that should appear inside the image.
+    """
+    return resolve_single_file_inner_name(source_name=source_file.name, rename_inner_image=rename_inner_image)
 
 
 def get_help_title() -> str:
@@ -1119,7 +1165,9 @@ def _run_pack_build(
 
 
 @contextmanager
-def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | None = None) -> Iterator[Path]:
+def _stage_single_file_source_root(
+    *, source_file: Path, temp_folder: Path | None = None, staged_file_name: str | None = None
+) -> Iterator[Path]:
     """Yield a temporary source root exposing one file, avoiding data copies when possible.
 
     The staged file is created as a hard link when possible, with a symlink
@@ -1136,6 +1184,7 @@ def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | Non
     Args:
         source_file: Existing source file that should appear at the temporary
             root path.
+        staged_file_name: Optional file name to expose inside the temporary root.
         temp_folder: Optional temporary folder where the staging directory should
             be created.
 
@@ -1160,7 +1209,8 @@ def _stage_single_file_source_root(*, source_file: Path, temp_folder: Path | Non
 
     with tempfile.TemporaryDirectory(dir=str(staging_base)) as staging_dir_name:
         staging_root: Path = Path(staging_dir_name)
-        staging_file: Path = staging_root / source_file.name
+        staging_file_name: str = staged_file_name if staged_file_name is not None else source_file.name
+        staging_file: Path = staging_root / staging_file_name
         try:
             os.link(src=source_file, dst=staging_file)
         except OSError:
@@ -1251,6 +1301,14 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
 
     config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
     temp_folder: Path = _resolve_pack_temp_folder(args)
+    rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
+    internal_file_name: str = _resolve_single_file_internal_name(
+        source_file=source_file,
+        rename_inner_image=rename_inner_image,
+    )
+    if rename_inner_image and internal_file_name != source_file.name:
+        _emit_single_file_rename_warning(original_name=source_file.name, renamed_name=internal_file_name)
+
     _print_pack_parameters(
         config=config,
         display_source_path=source_file,
@@ -1292,6 +1350,7 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
         verbose=args.verbose,
         skip_executable_compression=config.skip_executable_compression,
         dry_run=args.dry_run,
+        inner_file_name=internal_file_name,
     )
     stats.input_path = source_file
     print_summary(stats)
@@ -1300,7 +1359,11 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
 
     # Stage the single file into a temp directory (hardlink, no data copy) so the
     # check compares against a directory tree, mirroring the verify command.
-    with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
+    with _stage_single_file_source_root(
+        source_file=source_file,
+        temp_folder=temp_folder,
+        staged_file_name=internal_file_name,
+    ) as staging_root:
         return _run_post_pack_verify(
             output_path=output_path,
             source=staging_root,
@@ -1320,15 +1383,26 @@ def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
     """
     source_file: Path = Path(args.source_file).expanduser().resolve()
     temp_folder: Path = _resolve_pack_temp_folder(args)
+    rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
     if not source_file.exists() or not source_file.is_file():
         raise BuildError(f"--source-file must be an existing file: {source_file}")
+    internal_file_name: str = _resolve_single_file_internal_name(
+        source_file=source_file,
+        rename_inner_image=rename_inner_image,
+    )
+    if rename_inner_image and internal_file_name != source_file.name and not _can_stream_pack_file(args=args):
+        _emit_single_file_rename_warning(original_name=source_file.name, renamed_name=internal_file_name)
 
     # Prefer direct streaming for the common single-file path, fall back to the
     # legacy staged/spool builder only when the requested options require it.
     if _can_stream_pack_file(args=args):
         return _run_stream_pack_file(args=args, source_file=source_file)
 
-    with _stage_single_file_source_root(source_file=source_file, temp_folder=temp_folder) as staging_root:
+    with _stage_single_file_source_root(
+        source_file=source_file,
+        temp_folder=temp_folder,
+        staged_file_name=internal_file_name,
+    ) as staging_root:
         return _run_pack_build(
             args=args,
             build_source_root=staging_root,
@@ -1360,7 +1434,16 @@ def cli_mkpfs_check_run(args: argparse.Namespace) -> int:
         if not source_file.exists() or not source_file.is_file():
             info(f"--source-file must be an existing file: {source_file}")
             return 2
-        with _stage_single_file_source_root(source_file=source_file) as staging_root:
+        internal_file_name: str = _resolve_single_file_internal_name(source_file=source_file, rename_inner_image=True)
+        if internal_file_name != source_file.name:
+            _emit_single_file_verify_name_mismatch_warning(
+                external_name=source_file.name,
+                internal_name=internal_file_name,
+            )
+        with _stage_single_file_source_root(
+            source_file=source_file,
+            staged_file_name=internal_file_name,
+        ) as staging_root:
             source = staging_root
             return _run_verify_check(
                 image=image,
@@ -1633,6 +1716,20 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
             "and unsupported option combinations fall back to the legacy spool path"
         ),
     )
+    file_parser.add_argument(
+        "--rename-inner-image",
+        dest="rename_inner_image",
+        action="store_true",
+        default=True,
+        help="Rename inner image filename to a safe normalized name (default)",
+    )
+    file_parser.add_argument(
+        "--no-rename-inner-image",
+        dest="rename_inner_image",
+        action="store_false",
+        help="Disable renaming of the inner image filename",
+    )
+
     file_parser.set_defaults(
         inode_bits=32,
         func=cli_mkpfs_pack_file_run,

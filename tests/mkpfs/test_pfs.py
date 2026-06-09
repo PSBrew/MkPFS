@@ -2675,6 +2675,36 @@ class TestEncodePfscIntoHandle(PfsTestCase):
         assert buf.getvalue()[4096 : 4096 + spool_size] == spool.read_bytes()[:spool_size]
 
 
+class TestSingleFileInnerNameResolution(PfsTestCase):
+    """Tests for single-file inner name resolution rules."""
+
+    def test_resolve_single_file_inner_name_prefers_title_id_from_long_form(self) -> None:
+        """Single-file inner naming should extract a short title ID from long-form names."""
+        resolved_name: str = pfs_mod.resolve_single_file_inner_name(
+            source_name="UP0700-CUSA03388_00-DARKSOULS3000000.ExFAT",
+            rename_inner_image=True,
+        )
+        self.assertEqual(resolved_name, "CUSA03388.exfat")
+
+    def test_resolve_single_file_inner_name_sanitizes_and_trims_stem(self) -> None:
+        """Single-file inner naming should keep safe characters, collapse separators, and trim the stem."""
+        resolved_name: str = pfs_mod.resolve_single_file_inner_name(
+            source_name="My  Bad__File--Name!!.ExFAT",
+            rename_inner_image=True,
+        )
+        self.assertEqual(resolved_name, "My_Bad_File-Nam.exfat")
+
+    def test_resolve_single_file_inner_name_generates_fallback_for_empty_stem(self) -> None:
+        """Single-file inner naming should generate a fallback when sanitizing removes the full stem."""
+        with patch.object(pfs_mod.uuid, "uuid4") as mocked_uuid:
+            mocked_uuid.return_value.hex = "ABCDEF1234567890ABCDEF1234567890"
+            resolved_name: str = pfs_mod.resolve_single_file_inner_name(
+                source_name="!!!.ExFAT",
+                rename_inner_image=True,
+            )
+        self.assertEqual(resolved_name, "ABCDEF123456789.exfat")
+
+
 class TestStreamSingleFileBuilder(PfsTestCase):
     """Tests for the spool-free single-file streaming builder."""
 
@@ -2724,6 +2754,33 @@ class TestStreamSingleFileBuilder(PfsTestCase):
             )
 
         assert out_stream.read_bytes() == out_spool.read_bytes()
+
+    def test_stream_single_file_uses_explicit_inner_file_name(self) -> None:
+        """Streaming builder should write the provided inner file name into the extracted tree."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "Original Name!!.ExFAT"
+        payload: bytes = b"DATA" * 4096
+        src.write_bytes(payload)
+        out: Path = tmp_path / "blob.ffpfsc"
+        pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+            encrypted=False,
+            inner_file_name="PPSA01325.exfat",
+        )
+        dest: Path = tmp_path / "unpacked-explicit"
+        result = extract_pfs_image(image=out, output_path=dest)
+        assert not result.errors
+        assert (dest / "PPSA01325.exfat").read_bytes() == payload
 
     def test_stream_single_file_round_trip(self) -> None:
         """A streamed image extracts back to the original file bytes."""
