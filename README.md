@@ -176,7 +176,7 @@ mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file
                   [--min-compress-size MIN_COMPRESS_SIZE]
                   [--no-spool]
                   [--skip-executable-compression] [--signed] [--encrypted]
-                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify]
+                  [--ekpfs-key EKPFS_KEY] [--require-game-files] [--temp-folder TEMP_FOLDER] [--verbose] [--dry-run] [--verify] [--verify-structure | --no-verify-structure] [--skip-verification]
                   source_dir image_file
 ```
 
