@@ -1018,7 +1018,7 @@ def _run_post_pack_verify(
         require_game_files=require_game_files,
     )
     for w in warnings:
-        warning(w)
+        warning(w, icon_name="warning")
     for e in errors:
         error(e)
     return 1 if errors else 0
@@ -1089,7 +1089,7 @@ def _run_pack_build(
     warnings: list[str]
     _title_id, warnings = validate_input(build_source_root, require_game_files=require_game_files)
     for w in warnings:
-        warning(w)
+        warning(w, icon_name="warning")
 
     _print_pack_parameters(
         config=config,
@@ -1110,7 +1110,7 @@ def _run_pack_build(
             output_path=output_path,
         )
         if destination_space_error is not None:
-            error(destination_space_error)
+            error(destination_space_error, icon_name="error")
             return 1
         if config.compress:
             temp_space_error: str | None = get_temp_space_error_message(
@@ -1118,7 +1118,7 @@ def _run_pack_build(
                 temp_folder=temp_folder,
             )
             if temp_space_error is not None:
-                error(temp_space_error)
+                error(temp_space_error, icon_name="error")
                 return 1
 
     if not args.dry_run:
@@ -1325,7 +1325,7 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
             output_path=output_path,
         )
         if destination_space_error is not None:
-            error(destination_space_error)
+            error(destination_space_error, icon_name="error")
             return 1
 
     if not args.dry_run and not prompt_overwrite(output_path):
@@ -1513,9 +1513,9 @@ def _run_verify_check(
         new_crypt=new_crypt,
     )
     for w in warnings:
-        warning(w)
+        warning(w, icon_name="warning")
     for e in errors:
-        error(e)
+        error(e, icon_name="error")
     return 1 if errors else 0
 
 
@@ -1536,7 +1536,7 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
     )
     if errors:
         for e in errors:
-            error(e)
+            error(e, icon_name="error")
         return 1
     print_version_header()
     info("/")
@@ -1567,9 +1567,9 @@ def cli_mkpfs_info_run(args: argparse.Namespace) -> int:
         info(f"Header magic:{describe_magic(magic=info_result.header.magic)}")
 
     for w in info_result.warnings:
-        warning(w)
+        warning(w, icon_name="warning")
     for e in info_result.errors:
-        error(e)
+        error(e, icon_name="error")
 
     return 1 if info_result.errors else 0
 
