@@ -46,6 +46,8 @@ Follow these guidelines precisely.
 
 5. Git
     - Follow the Conventional Commits style on commit messages.
+    - When creating or editing public commit messages, PR titles, PR descriptions, PR comments, labels, or tags,
+      use the `pr-writing` skill.
 
 6. Read-only legacy
     - The `./legacy` directory is read-only. The agent MUST NOT create, edit, move, or delete any file or folder under `./legacy`. Read-only access only.
@@ -108,7 +110,6 @@ across project documentation in the same paragraph.
 - These single-line comments are NOT a replacement for proper function docstrings; they should summarize the block
   intent (for example: `# Walk source tree and collect file metadata`).
 - Prefer comments that clarify why a block exists or what it accomplishes, not restating what the code already shows.
--
 
 ## Additional coding preferences (user-provided)
 
@@ -130,6 +131,10 @@ help keep the CLI layer predictable and easy to maintain.
   provided temporarily, but the main codebase should call and test the canonical names.
 - Follow pylint/ruff style advice where practical: explicit imports, typed signatures, and minimal use of
   runtime-affecting globals.
+- Do not mention you are an AI or attribute the text edits or anything to any AI tool like Claude or OpenClaude.
+- Never include generator or AI attribution lines in public-facing project text such as commit messages, PR titles,
+  PR bodies, PR comments, release notes, changelog entries, or similar artifacts.
+- When using the `pr-writing` skill, do not stop at invoking it. You must make the final public text match the skill's structure and checklist before publishing or editing any commit, PR, comment, label, or tag.
 
 ## Agent / Tooling note
 
@@ -138,3 +143,7 @@ help keep the CLI layer predictable and easy to maintain.
   tool to fail with a "Missing explanation parameter" error. Including the `explanation` helps reviewers and tooling
   understand the purpose of edits.
 
+---
+
+Keep repository instructions here short and durable. Put detailed public-writing rules in the `pr-writing` skill and
+use that skill whenever you need to create or edit commits, PRs, comments, labels, or tags.

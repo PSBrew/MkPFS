@@ -1,7 +1,7 @@
 version: 2
 updates:
-  - package-ecosystem: "uv" # See documentation for possible values
-    versioning-strategy: increase-if-necessary
-    directory: "/" # Location of package manifests
+  - package-ecosystem: uv
+    versioning-strategy: widen
+    directory: "/"
     schedule:
-      interval: "weekly"
+      interval: weekly

@@ -1,24 +1,20 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
-title: ''
-labels: ''
-assignees: ''
+about: Request an improvement with clear versions and command context
+title: "[FEATURE] "
+labels: enhancement
+assignees: "RenanGBarreto"
 
 ---
 
-**Is your feature request related to a problem? Please describe.**
+## ✨ What do you want to improve?
 
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+Briefly describe the need or friction.
 
-**Describe the solution you'd like**
+## 🎯 Proposed solution
 
-A clear and concise description of what you want to happen.
+Describe what should happen.
 
-**Describe alternatives you've considered**
+## 📎 Extra context
 
-A clear and concise description of any alternative solutions or features you've considered.
-
-**Additional context**
-
-Add any other context or screenshots about the feature request here.
+Alternatives considered, links, or screenshots.

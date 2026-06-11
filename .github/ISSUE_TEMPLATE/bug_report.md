@@ -1,33 +1,49 @@
 ---
 name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
-assignees: ''
+about: Report a problem with clear versions and command output
+title: "[BUG] "
+labels: bug
+assignees: "RenanGBarreto"
 
 ---
 
-**BUG Description**
+## 🐞 What happened?
 
-`A clear and concise description of what the bug is.`
+Briefly describe the problem.
 
-**To Reproduce**
+## 📦 Versions (required)
 
-`Steps to reproduce the behavior.`
+- MkPFS version (`mkpfs -V`):
+- Python version (`python --version`):
+- PS5 FW Version:
+- Target image format/strategy you attempted (check all that apply):
+    - [ ] `.exfat->.ffpfsc`
+    - [ ] `.ffpkg->.ffpfsc`
+    - [ ] `raw-folder->.ffpfs`  _(direct / single-pass)_
+    - [ ] `raw-folder->.dat->.ffpfsc`  `(wrapped / double-pass)`
+    - [ ] Other (please specify):
+- Did you use a UI to convert or the command line?
+    - [ ] UI (please specify which)
+    - [ ] Command line
 
-**Expected behavior**
+## 💻 Command input (required)
 
-`A clear and concise description of what you expected to happen.
+Paste the exact command(s) you ran:
 
-**Screenshots**
+```bash
+# example
+mkpfs pack --input ./game --output ./game.pfs
+```
 
-`If applicable, add screenshots to help explain your problem.`
+## 📤 Command output
 
-**Versions Used**
+Paste the full stdout/stderr output:
+_(make sure to hide any personal information or paths)_
 
- - Version [e.g. 1.0.1]: 
- - PS FW Version: [e.g. 10.01]: 
+```text
+# paste output here
+```
 
-**Additional context**
+## 📎 Extra context
 
-`Add any other context about the problem here.`
+Add logs, sample files, or screenshots if helpful.

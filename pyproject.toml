@@ -1,6 +1,6 @@
 [project]
 name = "mkpfs"
-version = "0.0.5"
+version = "0.0.8"
 description = "Create and Manage Unsigned PFS (Playstation File System) image files with file compression and checksum support."
 readme = "README.md"
 authors = [{ name = "PSBrew", email = "contact@psbrew.com" }]
