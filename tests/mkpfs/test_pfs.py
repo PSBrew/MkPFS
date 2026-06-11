@@ -1010,7 +1010,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         )
         assert encoded != raw
         assert gain_pct > 0.0
-        assert hypothetical_size >= len(encoded)
+        assert hypothetical_size > 0
         assert encoded[:4] == b"PFSC"
         decoded: bytes = pfs_mod.decode_pfsc_payload(payload=encoded, expected_logical_size=len(raw))
         assert decoded == raw
@@ -1025,6 +1025,62 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         assert block_offsets == c.PFSC_BLOCK_OFFSETS_OFFSET
         assert data_start >= c.PFSC_INITIAL_DATA_OFFSET
         assert data_length == 3 * c.PFSC_LOGICAL_BLOCK_SIZE
+
+    def test_pfsc_encode_keeps_last_logical_block_raw(self) -> None:
+        """PFSC encoding should keep the final logical block raw even when compressible."""
+        raw: bytes = (b"A" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"B" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"\x00" * 1234)
+        encoded: bytes
+        gain_pct: float
+        _hypothetical_size: int
+        encoded, gain_pct, _hypothetical_size = pfs_mod.encode_pfsc_payload(
+            raw=raw,
+            threshold_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+        )
+
+        assert encoded != raw
+        assert gain_pct > 0.0
+        _magic: int
+        _unk4: int
+        _unk8: int
+        logical_block_size: int
+        _logical_block_size_2: int
+        block_offsets_offset: int
+        _data_offset: int
+        _logical_size: int
+        (
+            _magic,
+            _unk4,
+            _unk8,
+            logical_block_size,
+            _logical_block_size_2,
+            block_offsets_offset,
+            _data_offset,
+            _logical_size,
+        ) = struct.unpack_from("<iiiiqqQq", encoded, 0)
+        offsets: tuple[int, int, int, int]
+        offsets = struct.unpack_from("<4Q", encoded, block_offsets_offset)
+        assert offsets[1] - offsets[0] < logical_block_size
+        assert offsets[2] - offsets[1] < logical_block_size
+        assert offsets[3] - offsets[2] == logical_block_size
+        assert pfs_mod.decode_pfsc_payload(payload=encoded, expected_logical_size=len(raw)) == raw
+
+    def test_pfsc_encode_single_block_file_falls_back_to_raw(self) -> None:
+        """A one-block file should fall back to raw storage when the last block cannot compress."""
+        raw: bytes = b"\x00" * 1234
+        encoded: bytes
+        gain_pct: float
+        _hypothetical_size: int
+        encoded, gain_pct, _hypothetical_size = pfs_mod.encode_pfsc_payload(
+            raw=raw,
+            threshold_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+        )
+
+        assert encoded == raw
+        assert gain_pct <= 0.0
 
     def test_pfsc_encode_reports_incremental_progress_bytes(self) -> None:
         """PFSC encoding should report raw bytes as each logical block is processed."""
@@ -1048,6 +1104,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             (b"A" * c.PFSC_LOGICAL_BLOCK_SIZE)
             + (b"B" * c.PFSC_LOGICAL_BLOCK_SIZE)
             + (b"C" * c.PFSC_LOGICAL_BLOCK_SIZE)
+            + (b"\x00" * 1234)
         )
         real_compress: Callable[..., bytes] = pfs_mod.zlib.compress
         compress_call_count: int = 0
@@ -1089,11 +1146,12 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             _data_offset,
             _logical_size,
         ) = struct.unpack_from("<iiiiqqQq", encoded, 0)
-        offsets: tuple[int, int, int, int]
-        offsets = struct.unpack_from("<4Q", encoded, block_offsets_offset)
+        offsets: tuple[int, int, int, int, int]
+        offsets = struct.unpack_from("<5Q", encoded, block_offsets_offset)
         assert offsets[1] - offsets[0] == logical_block_size
         assert offsets[2] - offsets[1] < logical_block_size
         assert offsets[3] - offsets[2] < logical_block_size
+        assert offsets[4] - offsets[3] == logical_block_size
         assert pfs_mod.decode_pfsc_payload(payload=encoded, expected_logical_size=len(raw)) == raw
 
     def test_pfsc_spool_keeps_equal_sized_compressed_block_raw(self) -> None:
@@ -1105,6 +1163,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             (b"A" * c.PFSC_LOGICAL_BLOCK_SIZE)
             + (b"B" * c.PFSC_LOGICAL_BLOCK_SIZE)
             + (b"C" * c.PFSC_LOGICAL_BLOCK_SIZE)
+            + (b"\x00" * 1234)
         )
         source_path.write_bytes(raw)
         real_compress: Callable[..., bytes] = pfs_mod.zlib.compress
@@ -1132,9 +1191,114 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
                 logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
                 block_worker_count=1,
             )
+        encoded: bytes = spool_path.read_bytes()
+        _magic: int
+        _unk4: int
+        _unk8: int
+        logical_block_size: int
+        _logical_block_size_2: int
+        block_offsets_offset: int
+        _data_offset: int
+        _logical_size: int
+        (
+            _magic,
+            _unk4,
+            _unk8,
+            logical_block_size,
+            _logical_block_size_2,
+            block_offsets_offset,
+            _data_offset,
+            _logical_size,
+        ) = struct.unpack_from("<iiiiqqQq", encoded, 0)
+        offsets: tuple[int, int, int, int, int]
+        offsets = struct.unpack_from("<5Q", encoded, block_offsets_offset)
         assert is_compressed
         assert stored_size == spool_path.stat().st_size
-        assert pfs_mod.decode_pfsc_payload(payload=spool_path.read_bytes(), expected_logical_size=len(raw)) == raw
+        assert offsets[1] - offsets[0] == logical_block_size
+        assert offsets[2] - offsets[1] < logical_block_size
+        assert offsets[3] - offsets[2] < logical_block_size
+        assert offsets[4] - offsets[3] == logical_block_size
+        assert pfs_mod.decode_pfsc_payload(payload=encoded, expected_logical_size=len(raw)) == raw
+
+    def test_pfsc_spool_keeps_last_logical_block_raw(self) -> None:
+        """Streaming PFSC encoding should keep the final logical block raw."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = tmp_path / "source.bin"
+        spool_path: Path = tmp_path / "out.pfsc"
+        raw: bytes = (b"A" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"B" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"\x00" * 1234)
+        source_path.write_bytes(raw)
+
+        stored_size: int
+        is_compressed: bool
+        gain_pct: float
+        _hypothetical_size: int
+        stored_size, is_compressed, gain_pct, _hypothetical_size = pfs_mod._encode_pfsc_file_to_spool(
+            abs_path=source_path,
+            spool_path=spool_path,
+            threshold_gain=0,
+            min_file_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+            block_worker_count=1,
+        )
+
+        encoded: bytes = spool_path.read_bytes()
+        _magic: int
+        _unk4: int
+        _unk8: int
+        logical_block_size: int
+        _logical_block_size_2: int
+        block_offsets_offset: int
+        _data_offset: int
+        _logical_size: int
+        (
+            _magic,
+            _unk4,
+            _unk8,
+            logical_block_size,
+            _logical_block_size_2,
+            block_offsets_offset,
+            _data_offset,
+            _logical_size,
+        ) = struct.unpack_from("<iiiiqqQq", encoded, 0)
+        offsets: tuple[int, int, int, int]
+        offsets = struct.unpack_from("<4Q", encoded, block_offsets_offset)
+        assert is_compressed
+        assert gain_pct > 0.0
+        assert stored_size == spool_path.stat().st_size
+        assert offsets[1] - offsets[0] < logical_block_size
+        assert offsets[2] - offsets[1] < logical_block_size
+        assert offsets[3] - offsets[2] == logical_block_size
+        assert pfs_mod.decode_pfsc_payload(payload=encoded, expected_logical_size=len(raw)) == raw
+
+    def test_pfsc_analyze_matches_last_block_spool_storage(self) -> None:
+        """PFSC analysis should match spool output when the final block stays raw."""
+        tmp_path: Path = self.make_temp_path()
+        source_path: Path = tmp_path / "source.bin"
+        raw: bytes = (b"A" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"B" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"\x00" * 1234)
+        source_path.write_bytes(raw)
+        spool_path: Path = tmp_path / "out.pfsc"
+
+        analyzed: tuple[int, bool, float, int] = pfs_mod._analyze_pfsc_file_storage(
+            abs_path=source_path,
+            threshold_gain=0,
+            min_file_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+            block_worker_count=2,
+        )
+        stored: tuple[int, bool, float, int] = pfs_mod._encode_pfsc_file_to_spool(
+            abs_path=source_path,
+            spool_path=spool_path,
+            threshold_gain=0,
+            min_file_gain=0,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+            block_worker_count=2,
+        )
+
+        assert analyzed == stored
+        assert stored[0] == spool_path.stat().st_size
 
     def test_compute_file_storage_worker_batches_progress_updates(self) -> None:
         """Compression workers should batch byte deltas before reporting them upstream."""
@@ -1322,8 +1486,30 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             block_worker_count=2,
         )
 
+        sequential_encoded: bytes = sequential_spool.read_bytes()
+        _magic: int
+        _unk4: int
+        _unk8: int
+        logical_block_size: int
+        _logical_block_size_2: int
+        block_offsets_offset: int
+        _data_offset: int
+        _logical_size: int
+        (
+            _magic,
+            _unk4,
+            _unk8,
+            logical_block_size,
+            _logical_block_size_2,
+            block_offsets_offset,
+            _data_offset,
+            _logical_size,
+        ) = struct.unpack_from("<iiiiqqQq", sequential_encoded, 0)
+        offsets: tuple[int, int, int, int]
+        offsets = struct.unpack_from("<4Q", sequential_encoded, block_offsets_offset)
+        assert offsets[3] - offsets[2] == logical_block_size
         assert sequential_result == parallel_result
-        assert sequential_spool.read_bytes() == parallel_spool.read_bytes()
+        assert sequential_encoded == parallel_spool.read_bytes()
 
     def test_run_image_check_reports_logical_and_stored_bytes_for_compressed_files(self) -> None:
         """Verify report output should label logical and stored byte counts correctly."""
@@ -1371,7 +1557,7 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         assert errors == []
         report_text: str = output_buffer.getvalue()
         assert "Logical file bytes:    196,608" in report_text
-        assert "Stored file bytes:     65,791" in report_text
+        assert "Stored file bytes:     131,242" in report_text
 
     def test_compression_phase_emits_intermediate_progress_for_single_worker(self) -> None:
         """Single-worker compression should emit intermediate progress updates."""
