@@ -698,9 +698,7 @@ def run_image_check(
                 info(f"Data CRC32:            0x{data_crc32:08X}")
                 info(f"Manifest SHA256:       {manifest_sha256}")
                 info(f"Logical file bytes:    {human_readable_size(total_logical)} ({total_logical:,} bytes)")
-                info(f"Logical file bytes:    {total_logical:,}")
                 info(f"Stored file bytes:     {human_readable_size(total_stored)} ({total_stored:,} bytes)")
-                info(f"Stored file bytes:     {total_stored:,}")
 
                 # Compute block-alignment waste only when it will be helpful for
                 # understanding diagnostics. We don't print it explicitly per the
