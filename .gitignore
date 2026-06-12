@@ -218,3 +218,4 @@ target/
 *.ffpfs
 *.exfat
 *.ffpkg
+/tmp_test_run/src/big.bin
