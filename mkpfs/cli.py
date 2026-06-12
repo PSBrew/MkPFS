@@ -255,7 +255,7 @@ def print_build_parameters(
     if compress:
         info(f"  Threshold gain:    {threshold_gain}%")
         resolved_cpu_count: int = resolve_compression_worker_count(requested_cpu_count=cpu_count)
-        cpu_label: str = f"{resolved_cpu_count} (auto, capped at 8)" if cpu_count == 0 else str(max(1, cpu_count))
+        cpu_label: str = f"{resolved_cpu_count} (auto)" if cpu_count == 0 else str(max(1, cpu_count))
         info(f"  CPU cores:         {cpu_label}")
         info(f"  Zlib level:        {zlib_level}")
         if max_compressed_ratio is not None:
@@ -778,8 +778,8 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--threshold-gain",
         type=int,
-        default=5,
-        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 5)",
+        default=0,
+        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 0)",
     )
     parser.add_argument(
         "--block-size",
@@ -805,20 +805,20 @@ def cli_mkpfs_add_create_args(
         default=0,
         help=(
             "Number of CPU cores for PFSC compression "
-            "(0 = auto min(8, max(1, cpu_count() - 1)), non-zero = max(1, user value))"
+            "(0 = auto min(16, max(1, cpu_count() - 1)), non-zero = max(1, user value))"
         ),
     )
     parser.add_argument(
         "--compression-level",
         type=int,
-        default=7,
-        help="Zlib compression level (0-9, default: 7)",
+        default=9,
+        help="Zlib compression level (0-9, default: 9)",
     )
     parser.add_argument(
         "--max-compressed-ratio",
         type=int,
-        default=95,
-        help="Maximum PFSC size as percent of the raw file size (0-100, default: 95)",
+        default=100,
+        help="Maximum PFSC size as percent of the raw file size (0-100, default: 100)",
     )
     parser.add_argument(
         "--min-compress-size",
