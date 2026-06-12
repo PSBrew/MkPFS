@@ -329,8 +329,8 @@ def print_summary(stats: BuildStats) -> None:
     info(f"  Input path:              {stats.input_path}")
     info(f"  Output path:             {stats.output_path}")
     info(f"  Total files:             {stats.total_files:,}")
-    info(f"  Uncompressed size: {human_readable_size(stats.uncompressed_total_size)}")
-    info(f"  Stored size:       {human_readable_size(stats.stored_total_size)}")
+    info(f"  Uncompressed size:       {human_readable_size(stats.uncompressed_total_size)}")
+    info(f"  Stored size:             {human_readable_size(stats.stored_total_size)}")
 
     # Report final on-disk image size so users can easily see why the image file
     # on disk may differ from stored payload bytes.
@@ -712,7 +712,7 @@ def run_image_check(
                 except OSError:
                     image_size_bytes = 0
 
-                info(f"Final image size:     {human_readable_size(image_size_bytes)} ({image_size_bytes:,} bytes)")
+                info(f"Final image size:      {human_readable_size(image_size_bytes)} ({image_size_bytes:,} bytes)")
 
                 info(f"flat_path_table keys:  {len(fpt_map):,}")
                 info(f"Warnings:              {len(warnings)}")
@@ -1264,7 +1264,7 @@ def _run_pack_build(
     if args.dry_run or verification_mode == PackVerificationMode.SKIP:
         return 0
 
-    return _run_post_pack_verify(
+    rc: int = _run_post_pack_verify(
         output_path=output_path,
         source=compare_source_root,
         ekpfs_key=config.ekpfs_key,
@@ -1272,6 +1272,9 @@ def _run_pack_build(
         verification_mode=verification_mode,
         require_game_files=require_game_files,
     )
+    if rc == 0:
+        info("🎉 Image created successfully!")
+    return rc
 
 
 @contextmanager
@@ -1475,13 +1478,16 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
         temp_folder=temp_folder,
         staged_file_name=internal_file_name,
     ) as staging_root:
-        return _run_post_pack_verify(
+        rc: int = _run_post_pack_verify(
             output_path=output_path,
             source=staging_root,
             ekpfs_key=config.ekpfs_key,
             new_crypt=config.new_crypt,
             verification_mode=verification_mode,
         )
+        if rc == 0:
+            info("🎉 Image created successfully!")
+        return rc
 
 
 def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
