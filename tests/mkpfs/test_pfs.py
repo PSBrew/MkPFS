@@ -26,6 +26,7 @@ from mkpfs.pfs import (
     build_pfs,
     extract_pfs_image,
     fpt_hash,
+    human_readable_size,
     inspect_pfs_image,
     make_fpt_and_collision_blob,
     parse_ekpfs_key_hex,
@@ -1179,9 +1180,9 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         assert progress_queue.items[-1] <= pfs_mod.PFSC_PROGRESS_REPORT_BYTES
 
     def test_resolve_compression_worker_count_auto_uses_cpu_count(self) -> None:
-        """Auto worker resolution should use ``min(8, max(1, cpu_count() - 1))``."""
+        """Auto worker resolution should use ``min(16, max(1, cpu_count() - 1))``."""
         with patch.object(pfs_mod.mp, "cpu_count", return_value=32):
-            assert pfs_mod.resolve_compression_worker_count(requested_cpu_count=0) == 8
+            assert pfs_mod.resolve_compression_worker_count(requested_cpu_count=0) == 16
 
         with patch.object(pfs_mod.mp, "cpu_count", return_value=8):
             assert pfs_mod.resolve_compression_worker_count(requested_cpu_count=0) == 7
@@ -1370,8 +1371,14 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
 
         assert errors == []
         report_text: str = output_buffer.getvalue()
-        assert "Logical file bytes:    196,608" in report_text
-        assert "Stored file bytes:     65,791" in report_text
+        expected_logical: int = 196608
+        expected_stored: int = 65791
+        assert (
+            f"Logical file bytes:    {human_readable_size(expected_logical)} ({expected_logical:,} bytes)"
+        ) in report_text
+        assert (
+            f"Stored file bytes:     {human_readable_size(expected_stored)} ({expected_stored:,} bytes)"
+        ) in report_text
 
     def test_compression_phase_emits_intermediate_progress_for_single_worker(self) -> None:
         """Single-worker compression should emit intermediate progress updates."""

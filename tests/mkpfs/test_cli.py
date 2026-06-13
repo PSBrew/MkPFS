@@ -244,10 +244,10 @@ class TestCliArgumentHelpers(CliTestCase):
         compression_action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "compression_level"
         )
-        self.assertEqual(compression_action.default, 7)
+        self.assertEqual(compression_action.default, 9)
 
-    def test_pack_parser_uses_five_as_default_threshold_gain(self) -> None:
-        """The pack parser should expose 5 as the default threshold gain."""
+    def test_pack_parser_uses_zero_as_default_threshold_gain(self) -> None:
+        """The pack parser should expose 0 as the default threshold gain."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
             action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
@@ -259,7 +259,7 @@ class TestCliArgumentHelpers(CliTestCase):
         threshold_action: argparse.Action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "threshold_gain"
         )
-        self.assertEqual(threshold_action.default, 5)
+        self.assertEqual(threshold_action.default, 0)
 
     def test_pack_parser_uses_thirty_two_as_default_inode_bits(self) -> None:
         """The pack parser should expose 32 as the default inode width."""
@@ -330,7 +330,7 @@ class TestCliArgumentHelpers(CliTestCase):
         min_size_action: argparse.Action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "min_compress_size"
         )
-        self.assertEqual(max_ratio_action.default, 95)
+        self.assertEqual(max_ratio_action.default, 100)
         self.assertEqual(min_size_action.default, 0)
 
     def test_pack_parser_cpu_count_help_mentions_auto_and_user_normalization(self) -> None:
@@ -348,7 +348,7 @@ class TestCliArgumentHelpers(CliTestCase):
         )
         self.assertEqual(cpu_action.default, 0)
         self.assertIsNotNone(cpu_action.help)
-        self.assertIn("min(8, max(1, cpu_count() - 1))", cpu_action.help or "")
+        self.assertIn("min(16, max(1, cpu_count() - 1))", cpu_action.help or "")
         self.assertIn("max(1, user value)", cpu_action.help or "")
 
     def test_pack_parser_folder_variant_exposes_optional_game_file_requirement_flag(self) -> None:
@@ -652,7 +652,7 @@ class TestCliOutputFormatting(CliTestCase):
                 compress=True,
                 threshold_gain=20,
                 cpu_count=0,
-                zlib_level=7,
+                zlib_level=9,
                 max_compressed_ratio=None,
                 min_compress_size=0,
                 dry_run=True,
@@ -663,8 +663,8 @@ class TestCliOutputFormatting(CliTestCase):
         self.assertIn("Header magic:      PFS (20130315)", output_text)
         self.assertIn("Compression Setup: PFSC (0x43534650)", output_text)
         self.assertIn("Temp folder:       /tmp/mkpfs", output_text)
-        self.assertIn("CPU cores:         1 (auto, capped at 8)", output_text)
-        self.assertIn("Zlib level:        7", output_text)
+        self.assertIn("CPU cores:         1 (auto)", output_text)
+        self.assertIn("Zlib level:        9", output_text)
 
     def test_print_summary_reports_build_summary_and_disabled_compression(self) -> None:
         """Printing a summary should emit both the summary header and the disabled compression line."""
