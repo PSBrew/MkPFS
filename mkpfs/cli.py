@@ -54,7 +54,6 @@ from .pfs import (
     verify_signed_image_signatures,
 )
 from .utils import (
-    ceil_div,
     is_power_of_two,
     normalize_output_path,
     read_param_json,
@@ -699,22 +698,6 @@ def run_image_check(
                 info(f"Manifest SHA256:       {manifest_sha256}")
                 info(f"Logical file bytes:    {human_readable_size(total_logical)} ({total_logical:,} bytes)")
                 info(f"Stored file bytes:     {human_readable_size(total_stored)} ({total_stored:,} bytes)")
-
-                # Compute block-alignment waste only when it will be helpful for
-                # understanding diagnostics. We don't print it explicitly per the
-                # user's request, but keep the calculation for potential future use.
-                try:
-                    _block_alignment_waste: int = sum(
-                        (
-                            ceil_div(inodes[i].stored_size, header.block_size) * header.block_size
-                            - inodes[i].stored_size
-                        )
-                        if inodes[i].stored_size > 0
-                        else header.block_size
-                        for i in file_inodes.values()
-                    )
-                except Exception:
-                    _block_alignment_waste = 0
 
                 try:
                     image_size_bytes: int = image.stat().st_size
