@@ -20,8 +20,14 @@ dependencies = [
     "cryptography>=47.0.0",
 ]
 
+[project.optional-dependencies]
+gui = [
+    "customtkinter>=5.2.0",
+]
+
 [project.scripts]
 mkpfs = "mkpfs.cli:main"
+mkpfs-gui = "mkpfs.gui:main"
 
 [build-system]
 requires = ["hatchling<1.30"]
