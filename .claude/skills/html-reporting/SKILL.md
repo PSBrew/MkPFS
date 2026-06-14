@@ -1,6 +1,6 @@
 ---
 name: html-reporting
-description: Generate a polished companion HTML report for detailed answers, checks, and verification outputs.
+description: Generate a polished companion HTML report for detailed answers, checks, and verification outputs. Use this for complex multiple-command investigations or when asked for a report. Always produce the normal chat response first, then generate the HTML report as a companion artifact. Include a clickable path to the report in the chat response.
 context: fork
 ---
 
@@ -10,6 +10,10 @@ Use this skill whenever the user requests a detailed answer, research, verificat
 
 1. A normal chat response (always required).
 2. A companion, self-contained HTML5 report saved under ./tmp/ with a clickable path included in the chat response.
+3. Make the HTML visually appealing, with a dark blue background, white text, and a clean layout. Use inline CSS for styling.
+4. Use UTF-8 emojis for visual flair where possible (e.g., ✅ for success, ❌ for failure).
+5. Update the report file frequently during long-running investigations to reflect progress and findings.
+6. Add a progress bar for the task. 
 
 Guidelines and steps
 

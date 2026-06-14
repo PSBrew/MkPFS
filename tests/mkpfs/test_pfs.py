@@ -492,15 +492,19 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
                 return temp_folder / f"mkpfs-{source_path.name}.pfsc"
             return tmp_path / source_path.name
 
-        with patch.object(
-            pfs_mod,
-            "_encode_pfsc_file_to_spool",
-            side_effect=fake_encode_pfsc_file_to_spool,
-        ), patch.object(
-            pfs_mod,
-            "_make_compression_spool_path",
-            side_effect=fake_make_compression_spool_path,
-        ), self.assertRaises(OSError):
+        with (
+            patch.object(
+                pfs_mod,
+                "_encode_pfsc_file_to_spool",
+                side_effect=fake_encode_pfsc_file_to_spool,
+            ),
+            patch.object(
+                pfs_mod,
+                "_make_compression_spool_path",
+                side_effect=fake_make_compression_spool_path,
+            ),
+            self.assertRaises(OSError),
+        ):
             build_pfs(
                 source_root=src,
                 output_path=out,
@@ -917,10 +921,13 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
                 recorded_collision_numbers.append(inode.number)
             return inode
 
-        with patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash), patch.object(
-            pfs_mod,
-            "Inode",
-            side_effect=recording_inode,
+        with (
+            patch.object(pfs_mod, "fpt_hash", side_effect=selective_collision_hash),
+            patch.object(
+                pfs_mod,
+                "Inode",
+                side_effect=recording_inode,
+            ),
         ):
             build_pfs(
                 source_root=src,
@@ -1244,10 +1251,13 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             _ = logical_block_size
             return raw_size, False, 0.0, 0
 
-        with patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1), patch.object(
-            pfs_mod,
-            "_analyze_pfsc_file_storage",
-            side_effect=fake_analyze_pfsc_file_storage,
+        with (
+            patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1),
+            patch.object(
+                pfs_mod,
+                "_analyze_pfsc_file_storage",
+                side_effect=fake_analyze_pfsc_file_storage,
+            ),
         ):
             build_pfs(
                 source_root=src,
@@ -2704,9 +2714,10 @@ class TestNonLocalVolumeWarnings(PfsTestCase):
         temp_root: Path = tmp_path / "tmp"
         temp_root.mkdir()
 
-        with patch.object(
-            pfs_mod, "_load_mount_table", return_value=[("disk1s1", str(source_root.parent), "apfs")]
-        ), patch.object(pfs_mod, "_classify_non_local_mount", return_value="filesystem type 'nfs'"):
+        with (
+            patch.object(pfs_mod, "_load_mount_table", return_value=[("disk1s1", str(source_root.parent), "apfs")]),
+            patch.object(pfs_mod, "_classify_non_local_mount", return_value="filesystem type 'nfs'"),
+        ):
             warning_text = pfs_mod.get_non_local_volume_warning(
                 source_root=source_root,
                 output_path=output_path,
@@ -2725,9 +2736,10 @@ class TestNonLocalVolumeWarnings(PfsTestCase):
         (src / "large.bin").write_bytes(b"A" * (c.PFSC_LOGICAL_BLOCK_SIZE * 2))
         output_path: Path = tmp_path / "out.ffpfs"
 
-        with patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"), patch.object(
-            pfs_mod, "warning"
-        ) as mocked_warning:
+        with (
+            patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"),
+            patch.object(pfs_mod, "warning") as mocked_warning,
+        ):
             build_pfs(
                 source_root=src,
                 output_path=output_path,
@@ -2747,9 +2759,10 @@ class TestNonLocalVolumeWarnings(PfsTestCase):
 
         mocked_warning.assert_called_once_with("slow volume", icon_name="warning")
 
-        with patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"), patch.object(
-            pfs_mod, "warning"
-        ) as mocked_warning_single:
+        with (
+            patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"),
+            patch.object(pfs_mod, "warning") as mocked_warning_single,
+        ):
             build_pfs(
                 source_root=src,
                 output_path=output_path,
@@ -2769,9 +2782,10 @@ class TestNonLocalVolumeWarnings(PfsTestCase):
 
         mocked_warning_single.assert_not_called()
 
-        with patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"), patch.object(
-            pfs_mod, "warning"
-        ) as mocked_warning_disabled:
+        with (
+            patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"),
+            patch.object(pfs_mod, "warning") as mocked_warning_disabled,
+        ):
             build_pfs(
                 source_root=src,
                 output_path=output_path,
@@ -3074,9 +3088,11 @@ class TestStreamSingleFileBuilder(PfsTestCase):
         src.write_bytes(b"A" * (c.PFSC_LOGICAL_BLOCK_SIZE * 4))
         out: Path = tmp_path / "large.ffpfsc"
 
-        with patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1), patch.object(
-            pfs_mod, "get_non_local_volume_warning", return_value="slow volume"
-        ), patch.object(pfs_mod, "warning") as mocked_warning:
+        with (
+            patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1),
+            patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"),
+            patch.object(pfs_mod, "warning") as mocked_warning,
+        ):
             pfs_mod.build_pfs_stream_single_file(
                 source_file=src,
                 output_path=out,
@@ -3094,9 +3110,11 @@ class TestStreamSingleFileBuilder(PfsTestCase):
 
         mocked_warning.assert_called_once_with("slow volume", icon_name="warning")
 
-        with patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1), patch.object(
-            pfs_mod, "get_non_local_volume_warning", return_value="slow volume"
-        ), patch.object(pfs_mod, "warning") as mocked_warning_single:
+        with (
+            patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1),
+            patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"),
+            patch.object(pfs_mod, "warning") as mocked_warning_single,
+        ):
             pfs_mod.build_pfs_stream_single_file(
                 source_file=src,
                 output_path=out,
@@ -3114,9 +3132,11 @@ class TestStreamSingleFileBuilder(PfsTestCase):
 
         mocked_warning_single.assert_not_called()
 
-        with patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1), patch.object(
-            pfs_mod, "get_non_local_volume_warning", return_value="slow volume"
-        ), patch.object(pfs_mod, "warning") as mocked_warning_disabled:
+        with (
+            patch.object(pfs_mod, "PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE", 1),
+            patch.object(pfs_mod, "get_non_local_volume_warning", return_value="slow volume"),
+            patch.object(pfs_mod, "warning") as mocked_warning_disabled,
+        ):
             pfs_mod.build_pfs_stream_single_file(
                 source_file=src,
                 output_path=out,

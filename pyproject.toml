@@ -4,7 +4,7 @@ version = "0.0.9"
 description = "Create and Manage Unsigned PFS (Playstation File System) image files with file compression and checksum support."
 readme = "README.md"
 authors = [{ name = "PSBrew", email = "contact@psbrew.com" }]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { file = "LICENSE" }
 keywords = ["playstation", "pfs", "filesystem", "image", "pfsc"]
 classifiers = [
@@ -13,7 +13,7 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
@@ -84,7 +84,7 @@ omit = [
 
 [tool.ruff]
 line-length = 119
-target-version = "py38"
+target-version = "py39"
 exclude = [
     ".git",
     ".ruff_cache",

@@ -1,10 +1,10 @@
 ---
-name: markdown-style
+name: writing-style
 description: Project conventions for README, wiki, and Markdown formatting (icons, badges, colors, tone, and file layout)
 type: project
 ---
 
-# Markdown Style Guide
+# Writing Style Guide
 
 Purpose: capture the visual and prose style we use across README.md and short wiki-style markdown files so contributors produce consistent, high-quality docs.
 
