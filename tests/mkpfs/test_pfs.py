@@ -408,6 +408,57 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
             assert len(compressed_payload) == compressed_inode.size
             assert compressed_payload[:4] == b"PFSC"
 
+    def test_compressed_image_pfsc_header_tracks_non_aligned_file_size(self) -> None:
+        """Compressed image PFSC headers should store exact file sizes, not padded block spans."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = make_app_with_nested_dirs(tmp_path / "src")
+        non_aligned_file: Path = src / "data" / "non_aligned.bin"
+        raw: bytes = (b"A" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"B" * 1024)
+        non_aligned_file.write_bytes(raw)
+        out: Path = tmp_path / "non-aligned-pfsc.ffpfs"
+        build_pfs(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS4,
+            inode_bits=32,
+            case_insensitive=True,
+            signed=False,
+            compress=True,
+            threshold_gain=1,
+            cpu_count=1,
+            zlib_level=9,
+            dry_run=False,
+            verbose=False,
+            encrypted=False,
+        )
+
+        with out.open("rb") as fh:
+            header: pfs_mod.ParsedHeader = parse_image_header(fh)
+            inspection: pfs_mod.PFSImageInspection = inspect_pfs_image(image=out, source=src)
+            assert inspection.errors == []
+            compressed_inode: pfs_mod.ParsedInode = inspection.inodes[inspection.file_inodes["data/non_aligned.bin"]]
+            assert compressed_inode.is_compressed
+            compressed_payload: bytes = pfs_mod.read_image_inode_payload(fh, header, compressed_inode)
+            assert compressed_payload[:4] == b"PFSC"
+
+            _logical_block_size: int
+            block_count: int
+            _block_offsets_offset: int
+            _data_offset: int
+            logical_size: int
+            (
+                _logical_block_size,
+                block_count,
+                _block_offsets_offset,
+                _data_offset,
+                logical_size,
+            ) = pfs_mod._parse_pfsc_header(compressed_payload)
+            assert logical_size == len(raw)
+            assert block_count == 2
+            assert logical_size != block_count * c.PFSC_LOGICAL_BLOCK_SIZE
+            assert pfs_mod.decode_pfsc_payload(payload=compressed_payload) == raw
+
     def test_build_pfs_uses_custom_temp_folder_for_pfsc_spool_files(self) -> None:
         """Compressed builds should route PFSC spool files through the configured temp folder."""
         tmp_path: Path = self.make_temp_path()
@@ -1025,7 +1076,38 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         assert block_size2 == c.PFSC_LOGICAL_BLOCK_SIZE
         assert block_offsets == c.PFSC_BLOCK_OFFSETS_OFFSET
         assert data_start >= c.PFSC_INITIAL_DATA_OFFSET
-        assert data_length == 3 * c.PFSC_LOGICAL_BLOCK_SIZE
+        assert data_length == len(raw)
+
+    def test_pfsc_header_uses_exact_non_aligned_logical_size(self) -> None:
+        """PFSC headers should preserve the exact logical size for non-aligned files."""
+        raw: bytes = (b"A" * c.PFSC_LOGICAL_BLOCK_SIZE) + (b"B" * 1024)
+        encoded: bytes
+        _gain_pct: float
+        _hypothetical_size: int
+        encoded, _gain_pct, _hypothetical_size = pfs_mod.encode_pfsc_payload(
+            raw=raw,
+            threshold_gain=1,
+            zlib_level=9,
+            logical_block_size=c.PFSC_LOGICAL_BLOCK_SIZE,
+        )
+
+        assert encoded[:4] == b"PFSC"
+        _logical_block_size: int
+        block_count: int
+        _block_offsets_offset: int
+        _data_offset: int
+        logical_size: int
+        (
+            _logical_block_size,
+            block_count,
+            _block_offsets_offset,
+            _data_offset,
+            logical_size,
+        ) = pfs_mod._parse_pfsc_header(encoded)
+        assert logical_size == len(raw)
+        assert block_count == 2
+        assert logical_size != block_count * c.PFSC_LOGICAL_BLOCK_SIZE
+        assert pfs_mod.decode_pfsc_payload(payload=encoded) == raw
 
     def test_pfsc_encode_reports_incremental_progress_bytes(self) -> None:
         """PFSC encoding should report raw bytes as each logical block is processed."""
