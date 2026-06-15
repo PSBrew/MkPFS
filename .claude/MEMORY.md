@@ -168,6 +168,29 @@ How to inspect this knowledge quickly:
   - [related-projects/kstuff-lite/ps5-kstuff/uelf/fself.c](../related-projects/kstuff-lite/ps5-kstuff/uelf/fself.c)
   - [related-projects/kstuff-lite/ps5-kstuff/uelf/npdrm.c](../related-projects/kstuff-lite/ps5-kstuff/uelf/npdrm.c)
 
+### goodle
+
+- Repository/source: https://github.com/oriath-net/goodle
+- Artifact folder: [related-projects/goodle](../related-projects/goodle)
+- Deep summary: [related-projects/goodle.md](../related-projects/goodle.md)
+
+Short summary:
+
+- goodle is a thin cgo shim that wraps the closed-source OodleLZ decompression library for Go, acting as a drop-in replacement for the `gooz` package.
+- On Linux/macOS, it links against `liboo2core.so`/`.dyvia` at build time via cgo LDFLAGS. On Windows, it runtime-loads `oo2core_N_win64.dll` (probing versions 3-9) with `OODLE_DLL` env override.
+- Exposes a single function: `Decompress(in []byte, out []byte) (int, error)` -- caller must know exact decompressed size; OodleLZ_Decompress with fuzz-safe, CRC-check, and full-thread-phase defaults.
+- No compression, no streaming, no error-code interpretation. Negative Oodle return codes passed as opaque integers.
+
+How to inspect this knowledge quickly:
+
+- Start with summary: [related-projects/goodle.md](../related-projects/goodle.md)
+- Validate against source folder: [related-projects/goodle](../related-projects/goodle)
+- Priority files:
+  - [related-projects/goodle/glue_unix.go](../related-projects/goodle/glue_unix.go)
+  - [related-projects/goodle/glue_windows.go](../related-projects/goodle/glue_windows.go)
+  - [related-projects/goodle/go.mod](../related-projects/goodle/go.mod)
+  - [related-projects/goodle/README.md](../related-projects/goodle/README.md)
+
 ### Other Knowledge Sources
 
 - Repository/source: mixed local archive from PSDevWiki, ShadPKG docs, and Wololo
@@ -191,6 +214,53 @@ How to inspect this knowledge quickly:
 	- [related-projects/other-knowledge-sources/psdevwiki-pfs.html](../related-projects/other-knowledge-sources/psdevwiki-pfs.html)
 	- [related-projects/other-knowledge-sources/psdevwiki-pkg-files.html](../related-projects/other-knowledge-sources/psdevwiki-pkg-files.html)
 	- [related-projects/other-knowledge-sources/source-manifest.md](../related-projects/other-knowledge-sources/source-manifest.md)
+
+### TLOU PSARC Tool
+
+- Repository/source: https://github.com/amrshaheen61/TLOU_PSARC_Tool
+- Artifact folder: [related-projects/tlou-psarc-tool](../related-projects/tlou-psarc-tool)
+- Deep summary: [related-projects/tlou-psarc-tool.md](../related-projects/tlou-psarc-tool.md)
+
+Short summary:
+
+- TLOU PSARC Tool is a Windows GUI utility for extracting and reimporting files from `.psarc` archives used by The Last of Us.
+- PSARC uses big-endian headers, MD5-hashed file names resolved via a names table entry, and per-block decompression (Oodle or zlib).
+- The first entry in every PSARC is a special name table: newline-separated paths, MD5-hashed to build a lookup dictionary for all other entries.
+- Size array element width is derived from `DataBlockSize`; blocks at index with size 0 are stored uncompressed.
+- Import path writes uncompressed only, appends an author signature, and does not update the name table.
+
+How to inspect this knowledge quickly:
+
+- Start with summary: [related-projects/tlou-psarc-tool.md](../related-projects/tlou-psarc-tool.md)
+- Validate against source folder: [related-projects/tlou-psarc-tool](../related-projects/tlou-psarc-tool)
+- Priority files:
+  - [related-projects/tlou-psarc-tool/TLOU PSARC Tool/Core/Psarc.cs](../related-projects/tlou-psarc-tool/TLOU%20PSARC%20Tool/Core/Psarc.cs)
+  - [related-projects/tlou-psarc-tool/TLOU PSARC Tool/Core/Compression.cs](../related-projects/tlou-psarc-tool/TLOU%20PSARC%20Tool/Core/Compression.cs)
+  - [related-projects/tlou-psarc-tool/TLOU PSARC Tool/Helper/IStream.cs](../related-projects/tlou-psarc-tool/TLOU%20PSARC%20Tool/Helper/IStream.cs)
+  - [related-projects/tlou-psarc-tool/TLOU PSARC Tool/Forms/FrmMain.cs](../related-projects/tlou-psarc-tool/TLOU%20PSARC%20Tool/Forms/FrmMain.cs)
+
+### PKG Passcode Finder
+
+- Repository/source: https://github.com/bobg-github/PS5PKGPasscodeFinder
+- Artifact folder: [related-projects/pkg-passcode-finder](../related-projects/pkg-passcode-finder)
+- Deep summary: [related-projects/pkg-passcode-finder.md](../related-projects/pkg-passcode-finder.md)
+
+Short summary:
+
+- VB.NET WPF app (.NET Framework 4.8) that brute-forces 31-char alphanumeric passcodes for PS5 PKG extraction.
+- Uses random generation with ConcurrentDictionary deduplication; invokes `prospero-pub-cmd.exe img_extract --passcode <code>` per attempt.
+- Search space is 62^31 (~10^55), making random brute force impractical for any reasonable timeframe.
+- GUI-only, no CLI, no progress persistence, Windows-only.
+- Demonstrates that PS5 PKG extraction requires a 31-character alphanumeric passcode via the official SDK tool.
+
+How to inspect this knowledge quickly:
+
+- Start with summary: [related-projects/pkg-passcode-finder.md](../related-projects/pkg-passcode-finder.md)
+- Validate against source folder: [related-projects/pkg-passcode-finder](../related-projects/pkg-passcode-finder)
+- Priority files:
+  - [related-projects/pkg-passcode-finder/PS5PKGPasscodeFinder/MainWindow.xaml.vb](../related-projects/pkg-passcode-finder/PS5PKGPasscodeFinder/MainWindow.xaml.vb)
+  - [related-projects/pkg-passcode-finder/PS5PKGPasscodeFinder/MainWindow.xaml](../related-projects/pkg-passcode-finder/PS5PKGPasscodeFinder/MainWindow.xaml)
+  - [related-projects/pkg-passcode-finder/PS5PKGPasscodeFinder/PS5PKGPasscodeFinder.vbproj](../related-projects/pkg-passcode-finder/PS5PKGPasscodeFinder/PS5PKGPasscodeFinder.vbproj)
 
 ## Update Standard
 

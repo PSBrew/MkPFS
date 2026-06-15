@@ -18,3 +18,24 @@
 	url = https://github.com/EchoStretch/kstuff-lite
 	branch = main
 	shallow = true
+[submodule "related-projects/goodle"]
+	path = related-projects/goodle
+	url = https://github.com/oriath-net/goodle
+	branch = main
+	shallow = true
+[submodule "related-projects/tlou-psarc-tool"]
+	path = related-projects/tlou-psarc-tool
+	url = https://github.com/amrshaheen61/TLOU_PSARC_Tool.git
+	branch = master
+	shallow = true
+[submodule "related-projects/ps5-pkgs"]
+	path = related-projects/ps5-pkgs
+	url = https://github.com/DNNDHH/PS5-PKGs
+	branch = main
+	shallow = true
+[submodule "related-projects/pkg-passcode-finder"]
+	path = related-projects/pkg-passcode-finder
+	url = https://github.com/SvenGDK/PKG-Passcode-Finder.git
+	branch = main
+	shallow = true
+
