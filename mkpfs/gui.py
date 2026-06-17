@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, ClassVar
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -37,6 +37,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "options": "Options",
         "encryption": "Encryption",
         "output_log": "Output Log",
+        "export_log": "Export Log",
         "run": "Run",
         "running": "Running…",
         "browse": "Browse",
@@ -136,6 +137,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "options": "Opções",
         "encryption": "Criptografia",
         "output_log": "Log de Saída",
+        "export_log": "Exportar Log",
         "run": "Executar",
         "running": "Executando…",
         "browse": "Procurar",
@@ -229,6 +231,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "options": "Opciones",
         "encryption": "Cifrado",
         "output_log": "Registro de Salida",
+        "export_log": "Exportar Registro",
         "run": "Ejecutar",
         "running": "Ejecutando…",
         "browse": "Buscar",
@@ -556,6 +559,7 @@ class LogPane(ctk.CTkFrame):
             parent: Parent widget.
             **kwargs: Extra keyword arguments forwarded to CTkFrame.
         """
+        kwargs.setdefault("height", 240)
         super().__init__(
             parent,
             fg_color=_BG_INPUT,
@@ -599,6 +603,10 @@ class LogPane(ctk.CTkFrame):
             self._text.insert("end", text + "\n")
         self._text.configure(state="disabled")
         self._text.see("end")
+
+    def get_text(self) -> str:
+        """Return the full text content of the log pane."""
+        return self._text._textbox.get("1.0", "end-1c")
 
 
 class NeonButton(ctk.CTkButton):
@@ -788,9 +796,26 @@ class BasePanel(ctk.CTkFrame):
         )
         self._run_btn.pack(padx=24, pady=(10, 0), anchor="e")
 
-        # Log
-        self._log_section_label: SectionLabel = SectionLabel(self, tr("output_log"), color=self._accent)
-        self._log_section_label.pack(anchor="w", padx=26, pady=(14, 4))
+        # Log header row: label + export button side by side
+        log_header: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
+        log_header.pack(fill="x", padx=24, pady=(14, 4))
+        self._log_section_label: SectionLabel = SectionLabel(log_header, tr("output_log"), color=self._accent)
+        self._log_section_label.pack(side="left", anchor="w")
+        self._export_btn: ctk.CTkButton = ctk.CTkButton(
+            log_header,
+            text=tr("export_log"),
+            width=90,
+            height=24,
+            font=_FONT_SMALL,
+            fg_color="transparent",
+            border_width=1,
+            border_color=self._accent,
+            text_color=self._accent,
+            hover_color=_BG_CARD,
+            corner_radius=6,
+            command=self._on_export_log,
+        )
+        self._export_btn.pack(side="right", anchor="e")
         self._log: LogPane = LogPane(self)
         self._log.pack(fill="both", expand=True, padx=24, pady=(0, 16))
 
@@ -807,6 +832,7 @@ class BasePanel(ctk.CTkFrame):
         self._subtitle_label.configure(text=tr(self._subtitle_key))
         self._run_btn.set_label(tr("run"))
         self._log_section_label.configure(text=tr("output_log"))
+        self._export_btn.configure(text=tr("export_log"))
 
         # Destroy and rebuild the controls card with the new locale strings.
         # pack(before=) keeps the card between the divider and the progress bar.
@@ -860,6 +886,31 @@ class BasePanel(ctk.CTkFrame):
         except queue.Empty:
             pass
         self.after(80, self._poll_log_queue)
+
+    def _on_export_log(self) -> None:
+        """Open a save dialog and write the current log content to a file."""
+        import json as _json
+
+        content: str = self._log.get_text().strip()
+        if not content:
+            return
+        path: str | None = filedialog.asksaveasfilename(
+            title="Export Log",
+            defaultextension=".txt",
+            filetypes=[("Text file", "*.txt"), ("JSON file", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            if path.endswith(".json"):
+                lines: list[str] = content.splitlines()
+                with open(path, "w", encoding="utf-8") as fh:
+                    _json.dump({"log": lines}, fh, indent=2, ensure_ascii=False)
+            else:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(content + "\n")
+        except OSError as exc:
+            self._emit(f"Export failed: {exc}", "error")
 
     def _emit(self, text: str, tag: str = "") -> None:
         """Queue a log line for display on the UI thread.
