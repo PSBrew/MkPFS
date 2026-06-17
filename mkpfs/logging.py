@@ -29,8 +29,15 @@ def supports_utf8() -> bool:
 
 def icon(name: str | None) -> str:
     """Map a semantic icon name to a UTF-8 glyph or an ASCII fallback."""
-    utf8: dict[str, str] = {"info": "ℹ️", "ok": "✅", "warning": "⚠️", "error": "❌", "file": "📄"}
-    ascii_map: dict[str, str] = {"info": "INFO", "ok": "OK", "warning": "WARN", "error": "ERROR", "file": "FILE"}
+    utf8: dict[str, str] = {"info": "ℹ️", "ok": "✅", "warning": "⚠️", "error": "❌", "file": "📄", "success": "🎉"}
+    ascii_map: dict[str, str] = {
+        "info": "INFO",
+        "ok": "OK",
+        "warning": "WARN",
+        "error": "ERROR",
+        "file": "FILE",
+        "success": "SUCCESS",
+    }
     name_key: str = name or ""
     return utf8.get(name_key, "") if supports_utf8() else ascii_map.get(name_key, "")
 

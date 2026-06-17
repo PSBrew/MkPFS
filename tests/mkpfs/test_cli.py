@@ -244,10 +244,10 @@ class TestCliArgumentHelpers(CliTestCase):
         compression_action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "compression_level"
         )
-        self.assertEqual(compression_action.default, 7)
+        self.assertEqual(compression_action.default, 9)
 
-    def test_pack_parser_uses_five_as_default_threshold_gain(self) -> None:
-        """The pack parser should expose 5 as the default threshold gain."""
+    def test_pack_parser_uses_zero_as_default_threshold_gain(self) -> None:
+        """The pack parser should expose 0 as the default threshold gain."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
             action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
@@ -259,7 +259,7 @@ class TestCliArgumentHelpers(CliTestCase):
         threshold_action: argparse.Action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "threshold_gain"
         )
-        self.assertEqual(threshold_action.default, 5)
+        self.assertEqual(threshold_action.default, 0)
 
     def test_pack_parser_uses_thirty_two_as_default_inode_bits(self) -> None:
         """The pack parser should expose 32 as the default inode width."""
@@ -330,7 +330,7 @@ class TestCliArgumentHelpers(CliTestCase):
         min_size_action: argparse.Action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "min_compress_size"
         )
-        self.assertEqual(max_ratio_action.default, 95)
+        self.assertEqual(max_ratio_action.default, 100)
         self.assertEqual(min_size_action.default, 0)
 
     def test_pack_parser_cpu_count_help_mentions_auto_and_user_normalization(self) -> None:
@@ -348,7 +348,7 @@ class TestCliArgumentHelpers(CliTestCase):
         )
         self.assertEqual(cpu_action.default, 0)
         self.assertIsNotNone(cpu_action.help)
-        self.assertIn("min(8, max(1, cpu_count() - 1))", cpu_action.help or "")
+        self.assertIn("min(16, max(1, cpu_count() - 1))", cpu_action.help or "")
         self.assertIn("max(1, user value)", cpu_action.help or "")
 
     def test_pack_parser_folder_variant_exposes_optional_game_file_requirement_flag(self) -> None:
@@ -596,10 +596,13 @@ class TestCliPromptOverwrite(CliTestCase):
         partial_path: Path = Path(f"{output_path}.tmp")
         output_path.write_text("x", encoding="utf-8")
         partial_path.write_text("partial", encoding="utf-8")
-        with patch("builtins.input", side_effect=["maybe", "yes"]), patch.object(
-            Path,
-            "unlink",
-            side_effect=OSError("unlink blocked"),
+        with (
+            patch("builtins.input", side_effect=["maybe", "yes"]),
+            patch.object(
+                Path,
+                "unlink",
+                side_effect=OSError("unlink blocked"),
+            ),
         ):
             self.assertTrue(cli.prompt_overwrite(output_path=output_path))
 
@@ -619,10 +622,13 @@ class TestCliPromptOverwrite(CliTestCase):
         os.utime(stale_spool_path, times=(100.0, 100.0))
         os.utime(fresh_spool_path, times=(990.0, 990.0))
 
-        with patch.object(cli.tempfile, "gettempdir", return_value=str(temp_root)), patch.object(
-            cli.time,
-            "time",
-            return_value=1000.0,
+        with (
+            patch.object(cli.tempfile, "gettempdir", return_value=str(temp_root)),
+            patch.object(
+                cli.time,
+                "time",
+                return_value=1000.0,
+            ),
         ):
             cli.cleanup_pack_temp_artifacts(output_path=output_path, stale_age_seconds=300)
 
@@ -652,7 +658,7 @@ class TestCliOutputFormatting(CliTestCase):
                 compress=True,
                 threshold_gain=20,
                 cpu_count=0,
-                zlib_level=7,
+                zlib_level=9,
                 max_compressed_ratio=None,
                 min_compress_size=0,
                 dry_run=True,
@@ -663,8 +669,8 @@ class TestCliOutputFormatting(CliTestCase):
         self.assertIn("Header magic:      PFS (20130315)", output_text)
         self.assertIn("Compression Setup: PFSC (0x43534650)", output_text)
         self.assertIn("Temp folder:       /tmp/mkpfs", output_text)
-        self.assertIn("CPU cores:         1 (auto, capped at 8)", output_text)
-        self.assertIn("Zlib level:        7", output_text)
+        self.assertIn("CPU cores:         1 (auto)", output_text)
+        self.assertIn("Zlib level:        9", output_text)
 
     def test_print_summary_reports_build_summary_and_disabled_compression(self) -> None:
         """Printing a summary should emit both the summary header and the disabled compression line."""
@@ -712,9 +718,11 @@ class TestCliOutputFormatting(CliTestCase):
     def test_tree_run_prints_version_header_before_tree_output(self) -> None:
         """Tree output should include the standard MkPFS banner before the rendered tree."""
         stdout_buffer: StringIO = StringIO()
-        with patch.object(cli, "run_image_check", return_value=([], [], {}, 1)), patch.object(
-            cli, "render_tree", return_value=["child"]
-        ), redirect_stdout(stdout_buffer):
+        with (
+            patch.object(cli, "run_image_check", return_value=([], [], {}, 1)),
+            patch.object(cli, "render_tree", return_value=["child"]),
+            redirect_stdout(stdout_buffer),
+        ):
             exit_code: int = cli.cli_mkpfs_ls_run(
                 SimpleNamespace(image_file="img.ffpfs", ekpfs_key=None, new_crypt=False)
             )
@@ -761,13 +769,15 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         stdout_buffer: StringIO = StringIO()
-        with patch.object(
-            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
-        ) as mocked_build, patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), redirect_stdout(stdout_buffer):
+        with (
+            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            redirect_stdout(stdout_buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertEqual(mocked_build.call_args.kwargs["output_path"].suffix, ".ffpfsc")
         self.assertEqual(mocked_build.call_args.kwargs["min_compress_size"], 65536)
@@ -786,13 +796,15 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         stdout_buffer: StringIO = StringIO()
-        with patch.object(
-            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
-        ) as mocked_build, patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), redirect_stdout(stdout_buffer):
+        with (
+            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            redirect_stdout(stdout_buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertEqual(mocked_build.call_args.kwargs["output_path"].suffix, ".ffpfs")
         self.assertIn("Raw game files detected inside the source folder", stdout_buffer.getvalue())
@@ -809,13 +821,15 @@ class TestCliCreateRun(CliTestCase):
         )
         args.adjust_output_file_extension = False
         stdout_buffer: StringIO = StringIO()
-        with patch.object(
-            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
-        ) as mocked_build, patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), redirect_stdout(stdout_buffer):
+        with (
+            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            redirect_stdout(stdout_buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertEqual(mocked_build.call_args.kwargs["output_path"].name, "custom-name.img")
         self.assertNotIn("adjusting output file extension", stdout_buffer.getvalue())
@@ -837,13 +851,15 @@ class TestCliCreateRun(CliTestCase):
         args.block_size = "auto-fit"
         stdout_buffer: StringIO = StringIO()
 
-        with patch.object(
-            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
-        ) as mocked_build, patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), redirect_stdout(stdout_buffer):
+        with (
+            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            redirect_stdout(stdout_buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
 
         self.assertEqual(mocked_build.call_args.kwargs["block_size"], 4096)
@@ -862,8 +878,9 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         args.require_game_files = True
-        with patch.object(cli, "build_pfs", side_effect=AssertionError("build should not run")), self.assertRaises(
-            BuildError
+        with (
+            patch.object(cli, "build_pfs", side_effect=AssertionError("build should not run")),
+            self.assertRaises(BuildError),
         ):
             cli.cli_mkpfs_create_run(args)
 
@@ -877,12 +894,13 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         args.new_crypt = True
-        with patch.object(
-            cli, "build_pfs", return_value=self.make_build_stats(tmp_path)
-        ) as mocked_build, patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
+        with (
+            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertTrue(mocked_build.call_args.kwargs["new_crypt"])
@@ -900,14 +918,19 @@ class TestCliCreateRun(CliTestCase):
         )
         args.temp_folder = str(temp_folder)
         args.verify_structure = False
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build, patch.object(
-            cli,
-            "cleanup_pack_temp_artifacts",
-        ) as mocked_cleanup:
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp_path)) as mocked_build,
+            patch.object(
+                cli,
+                "cleanup_pack_temp_artifacts",
+            ) as mocked_cleanup,
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertEqual(mocked_build.call_args.kwargs["temp_folder"], temp_folder.resolve())
         self.assertEqual(mocked_cleanup.call_args.kwargs["temp_folder"], temp_folder.resolve())
@@ -983,13 +1006,18 @@ class TestCliCreateRun(CliTestCase):
             dry_run=False,
             verify=False,
         )
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "cleanup_pack_temp_artifacts",
-        ) as mocked_cleanup, patch.object(cli, "prompt_overwrite", return_value=False), patch.object(
-            cli,
-            "build_pfs",
-            side_effect=AssertionError("build should not run"),
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "cleanup_pack_temp_artifacts",
+            ) as mocked_cleanup,
+            patch.object(cli, "prompt_overwrite", return_value=False),
+            patch.object(
+                cli,
+                "build_pfs",
+                side_effect=AssertionError("build should not run"),
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         mocked_cleanup.assert_called_once()
@@ -1005,23 +1033,30 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         stderr_buffer: StringIO = StringIO()
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "cleanup_pack_temp_artifacts",
-            side_effect=AssertionError("cleanup should not run"),
-        ), patch.object(
-            cli,
-            "prompt_overwrite",
-            side_effect=AssertionError("prompt should not run"),
-        ), patch.object(
-            cli,
-            "build_pfs",
-            side_effect=AssertionError("build should not run"),
-        ), patch.object(
-            cli.shutil,
-            "disk_usage",
-            return_value=SimpleNamespace(total=10, used=9, free=1),
-        ), redirect_stderr(stderr_buffer):
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "cleanup_pack_temp_artifacts",
+                side_effect=AssertionError("cleanup should not run"),
+            ),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                side_effect=AssertionError("prompt should not run"),
+            ),
+            patch.object(
+                cli,
+                "build_pfs",
+                side_effect=AssertionError("build should not run"),
+            ),
+            patch.object(
+                cli.shutil,
+                "disk_usage",
+                return_value=SimpleNamespace(total=10, used=9, free=1),
+            ),
+            redirect_stderr(stderr_buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 1)
         self.assertIn(
             "ERROR: The destination file is on a disk that does not have enough space", stderr_buffer.getvalue()
@@ -1040,23 +1075,30 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         stderr_buffer: StringIO = StringIO()
-        with patch.object(cli, "validate_input", return_value=(None, [])), patch.object(
-            cli,
-            "cleanup_pack_temp_artifacts",
-            side_effect=AssertionError("cleanup should not run"),
-        ), patch.object(
-            cli,
-            "prompt_overwrite",
-            side_effect=AssertionError("prompt should not run"),
-        ), patch.object(
-            cli,
-            "build_pfs",
-            side_effect=AssertionError("build should not run"),
-        ), patch.object(
-            cli.shutil,
-            "disk_usage",
-            return_value=SimpleNamespace(total=10, used=9, free=1),
-        ), redirect_stderr(stderr_buffer):
+        with (
+            patch.object(cli, "validate_input", return_value=(None, [])),
+            patch.object(
+                cli,
+                "cleanup_pack_temp_artifacts",
+                side_effect=AssertionError("cleanup should not run"),
+            ),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                side_effect=AssertionError("prompt should not run"),
+            ),
+            patch.object(
+                cli,
+                "build_pfs",
+                side_effect=AssertionError("build should not run"),
+            ),
+            patch.object(
+                cli.shutil,
+                "disk_usage",
+                return_value=SimpleNamespace(total=10, used=9, free=1),
+            ),
+            redirect_stderr(stderr_buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 1)
         self.assertIn(
             "ERROR: The destination file is on a disk that does not have enough space", stderr_buffer.getvalue()
@@ -1074,26 +1116,33 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         stderr_buffer: StringIO = StringIO()
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "cleanup_pack_temp_artifacts",
-            side_effect=AssertionError("cleanup should not run"),
-        ), patch.object(
-            cli,
-            "prompt_overwrite",
-            side_effect=AssertionError("prompt should not run"),
-        ), patch.object(
-            cli,
-            "build_pfs",
-            side_effect=AssertionError("build should not run"),
-        ), patch.object(
-            cli.shutil,
-            "disk_usage",
-            side_effect=[
-                SimpleNamespace(total=100, used=1, free=100),
-                SimpleNamespace(total=10, used=9, free=1),
-            ],
-        ), redirect_stderr(stderr_buffer):
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "cleanup_pack_temp_artifacts",
+                side_effect=AssertionError("cleanup should not run"),
+            ),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                side_effect=AssertionError("prompt should not run"),
+            ),
+            patch.object(
+                cli,
+                "build_pfs",
+                side_effect=AssertionError("build should not run"),
+            ),
+            patch.object(
+                cli.shutil,
+                "disk_usage",
+                side_effect=[
+                    SimpleNamespace(total=100, used=1, free=100),
+                    SimpleNamespace(total=10, used=9, free=1),
+                ],
+            ),
+            redirect_stderr(stderr_buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 1)
         self.assertIn("ERROR: The temp folder does not have enough free space", stderr_buffer.getvalue())
         self.assertIn("Use --temp-folder", stderr_buffer.getvalue())
@@ -1111,13 +1160,16 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
 
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(
-            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
-        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check:
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)),
+            patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check,
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
 
         self.assertFalse(mocked_check.call_args.kwargs["verify_payloads"])
@@ -1138,16 +1190,19 @@ class TestCliCreateRun(CliTestCase):
         args.verify_structure = False
         args.skip_verification = True
 
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(
-            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
-        ), patch.object(
-            cli,
-            "run_image_check",
-            side_effect=AssertionError("verify should not run"),
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)),
+            patch.object(
+                cli,
+                "run_image_check",
+                side_effect=AssertionError("verify should not run"),
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
 
@@ -1163,14 +1218,18 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
 
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "build_pfs",
-            return_value=BuildStats(input_path=source_path, output_path=output_path),
-        ), patch.object(
-            cli,
-            "run_image_check",
-            side_effect=AssertionError("verify should not run"),
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "build_pfs",
+                return_value=BuildStats(input_path=source_path, output_path=output_path),
+            ),
+            patch.object(
+                cli,
+                "run_image_check",
+                side_effect=AssertionError("verify should not run"),
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
 
@@ -1187,13 +1246,17 @@ class TestCliCreateRun(CliTestCase):
         )
         stdout_buffer: StringIO = StringIO()
 
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(
-            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
-        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)), redirect_stdout(stdout_buffer):
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)),
+            patch.object(cli, "run_image_check", return_value=([], [], {}, -1)),
+            redirect_stdout(stdout_buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
 
     def test_create_run_runs_post_verify_and_returns_error_when_check_fails(self) -> None:
@@ -1207,16 +1270,19 @@ class TestCliCreateRun(CliTestCase):
             dry_run=False,
             verify=True,
         )
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(
-            cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)
-        ), patch.object(
-            cli,
-            "run_image_check",
-            return_value=(["error"], ["warning"], {}, -1),
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(cli, "build_pfs", return_value=BuildStats(input_path=source_path, output_path=output_path)),
+            patch.object(
+                cli,
+                "run_image_check",
+                return_value=(["error"], ["warning"], {}, -1),
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 1)
 
@@ -1249,11 +1315,14 @@ class TestCliCreateRun(CliTestCase):
         )
         args.encrypted = True
         args.ekpfs_key = "12" * 32
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "build_pfs",
-            return_value=BuildStats(input_path=source_path, output_path=output_path),
-        ) as mocked_build:
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "build_pfs",
+                return_value=BuildStats(input_path=source_path, output_path=output_path),
+            ) as mocked_build,
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
         self.assertTrue(mocked_build.call_args.kwargs["encrypted"])
         self.assertEqual(mocked_build.call_args.kwargs["ekpfs"], bytes.fromhex("12" * 32))
@@ -1270,10 +1339,13 @@ class TestCliCreateRun(CliTestCase):
             dry_run=True,
             verify=False,
         )
-        with patch.object(cli, "_run_stream_pack_file", return_value=0) as mocked_stream, patch.object(
-            cli,
-            "_run_pack_build",
-            side_effect=AssertionError("legacy fallback should not run"),
+        with (
+            patch.object(cli, "_run_stream_pack_file", return_value=0) as mocked_stream,
+            patch.object(
+                cli,
+                "_run_pack_build",
+                side_effect=AssertionError("legacy fallback should not run"),
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
@@ -1292,13 +1364,14 @@ class TestCliCreateRun(CliTestCase):
         )
         args.signed = True
 
-        with patch.object(
-            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
-        ), patch.object(
-            cli,
-            "_run_pack_build",
-            return_value=0,
-        ) as mocked_pack:
+        with (
+            patch.object(cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")),
+            patch.object(
+                cli,
+                "_run_pack_build",
+                return_value=0,
+            ) as mocked_pack,
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
         mocked_pack.assert_called_once()
@@ -1329,12 +1402,13 @@ class TestCliCreateRun(CliTestCase):
             self.assertTrue(staged_file.samefile(source_file))
             return 0
 
-        with patch.object(
-            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
-        ), patch.object(
-            cli,
-            "_run_pack_build",
-            side_effect=fake_run_pack_build,
+        with (
+            patch.object(cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")),
+            patch.object(
+                cli,
+                "_run_pack_build",
+                side_effect=fake_run_pack_build,
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
@@ -1351,15 +1425,19 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
 
-        with patch.object(
-            cli,
-            "build_pfs_stream_single_file",
-            return_value=BuildStats(input_path=source_file, output_path=output_path),
-        ), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check:
+        with (
+            patch.object(
+                cli,
+                "build_pfs_stream_single_file",
+                return_value=BuildStats(input_path=source_file, output_path=output_path),
+            ),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check,
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
         self.assertFalse(mocked_check.call_args.kwargs["verify_payloads"])
@@ -1381,18 +1459,22 @@ class TestCliCreateRun(CliTestCase):
         args.verify_structure = False
         args.skip_verification = True
 
-        with patch.object(
-            cli,
-            "build_pfs_stream_single_file",
-            return_value=BuildStats(input_path=source_file, output_path=output_path),
-        ), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(
-            cli,
-            "run_image_check",
-            side_effect=AssertionError("verify should not run"),
+        with (
+            patch.object(
+                cli,
+                "build_pfs_stream_single_file",
+                return_value=BuildStats(input_path=source_file, output_path=output_path),
+            ),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(
+                cli,
+                "run_image_check",
+                side_effect=AssertionError("verify should not run"),
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
@@ -1409,14 +1491,17 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
 
-        with patch.object(
-            cli,
-            "build_pfs_stream_single_file",
-            return_value=BuildStats(input_path=source_file, output_path=output_path),
-        ), patch.object(
-            cli,
-            "run_image_check",
-            side_effect=AssertionError("verify should not run"),
+        with (
+            patch.object(
+                cli,
+                "build_pfs_stream_single_file",
+                return_value=BuildStats(input_path=source_file, output_path=output_path),
+            ),
+            patch.object(
+                cli,
+                "run_image_check",
+                side_effect=AssertionError("verify should not run"),
+            ),
         ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
@@ -1434,16 +1519,19 @@ class TestCliCreateRun(CliTestCase):
         )
         stdout_buffer: StringIO = StringIO()
 
-        with patch.object(
-            cli,
-            "build_pfs_stream_single_file",
-            return_value=BuildStats(input_path=source_file, output_path=output_path),
-        ), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check, redirect_stdout(
-            stdout_buffer
+        with (
+            patch.object(
+                cli,
+                "build_pfs_stream_single_file",
+                return_value=BuildStats(input_path=source_file, output_path=output_path),
+            ),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check,
+            redirect_stdout(stdout_buffer),
         ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
@@ -1466,15 +1554,19 @@ class TestCliCreateRun(CliTestCase):
             verify=True,
         )
 
-        with patch.object(
-            cli,
-            "build_pfs_stream_single_file",
-            return_value=BuildStats(input_path=source_file, output_path=output_path),
-        ), patch.object(
-            cli,
-            "prompt_overwrite",
-            return_value=True,
-        ), patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check:
+        with (
+            patch.object(
+                cli,
+                "build_pfs_stream_single_file",
+                return_value=BuildStats(input_path=source_file, output_path=output_path),
+            ),
+            patch.object(
+                cli,
+                "prompt_overwrite",
+                return_value=True,
+            ),
+            patch.object(cli, "run_image_check", return_value=([], [], {}, -1)) as mocked_check,
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
         self.assertFalse(mocked_check.call_args.kwargs["require_game_files"])
@@ -1483,13 +1575,12 @@ class TestCliCreateRun(CliTestCase):
         source_file: Path = tmp_path / "sample.bin"
         source_file.write_bytes(b"payload")
 
-        with patch.object(cli.os, "link", side_effect=OSError("hard links unavailable")), patch.object(
-            Path, "symlink_to", side_effect=OSError("symlinks unavailable")
-        ), patch.object(
-            cli.shutil, "copyfile", wraps=cli.shutil.copyfile
-        ) as mocked_copy, cli._stage_single_file_source_root(
-            source_file=source_file, temp_folder=tmp_path
-        ) as staging_root:
+        with (
+            patch.object(cli.os, "link", side_effect=OSError("hard links unavailable")),
+            patch.object(Path, "symlink_to", side_effect=OSError("symlinks unavailable")),
+            patch.object(cli.shutil, "copyfile", wraps=cli.shutil.copyfile) as mocked_copy,
+            cli._stage_single_file_source_root(source_file=source_file, temp_folder=tmp_path) as staging_root,
+        ):
             staged_file: Path = staging_root / source_file.name
             self.assertTrue(staged_file.is_file())
             self.assertEqual(staged_file.read_bytes(), source_file.read_bytes())
@@ -1522,9 +1613,11 @@ class TestCliCreateRun(CliTestCase):
             dry_run=True,
             verify=False,
         )
-        with patch.object(cli, "_run_stream_pack_file", return_value=0), patch.object(
-            cli, "_stream_fallback_reason", return_value="signed images"
-        ), patch.object(cli, "warning") as mocked_warning:
+        with (
+            patch.object(cli, "_run_stream_pack_file", return_value=0),
+            patch.object(cli, "_stream_fallback_reason", return_value="signed images"),
+            patch.object(cli, "warning") as mocked_warning,
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
 
         warning_texts: list[str] = [str(call.args[0]) for call in mocked_warning.call_args_list]
@@ -1542,11 +1635,16 @@ class TestCliCreateRun(CliTestCase):
             verify=False,
         )
         combined: StringIO = StringIO()
-        with patch.object(cli, "validate_input", return_value=("TITLE", [])), patch.object(
-            cli,
-            "build_pfs",
-            return_value=BuildStats(input_path=source_path, output_path=output_path),
-        ), redirect_stdout(combined), redirect_stderr(combined):
+        with (
+            patch.object(cli, "validate_input", return_value=("TITLE", [])),
+            patch.object(
+                cli,
+                "build_pfs",
+                return_value=BuildStats(input_path=source_path, output_path=output_path),
+            ),
+            redirect_stdout(combined),
+            redirect_stderr(combined),
+        ):
             self.assertEqual(cli.cli_mkpfs_create_run(args), 0)
 
         self.assertIn(cli._GAME_FOLDER_COMPRESS_WARNING_TEXT.splitlines()[0], combined.getvalue())
@@ -1594,9 +1692,10 @@ class TestCliCreateRun(CliTestCase):
             new_crypt=False,
             require_game_files=False,
         )
-        with patch.object(cli, "run_image_check", side_effect=fake_run_image_check), patch.object(
-            cli, "warning"
-        ) as mocked_warning:
+        with (
+            patch.object(cli, "run_image_check", side_effect=fake_run_image_check),
+            patch.object(cli, "warning") as mocked_warning,
+        ):
             self.assertEqual(cli.cli_mkpfs_check_run(args), 0)
 
         self.assertEqual(len(seen_source), 1)
@@ -2256,8 +2355,10 @@ class TestRunImageCheck(CliTestCase):
         temp.mkdir()
         out: Path = tmp_path / "PPSA.ffpfsc"
         buffer: StringIO = StringIO()
-        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(buffer), redirect_stderr(
-            StringIO()
+        with (
+            patch.object(cli, "prompt_overwrite", return_value=True),
+            redirect_stdout(buffer),
+            redirect_stderr(StringIO()),
         ):
             rc: int = cli_mkpfs_main(
                 [
@@ -2286,13 +2387,14 @@ class TestRunImageCheck(CliTestCase):
         out: Path = tmp_path / "x.ffpfsc"
         args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
         args.use_spool = True
-        with patch.object(
-            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
-        ), patch.object(
-            cli,
-            "_run_pack_build",
-            return_value=0,
-        ) as mocked_pack:
+        with (
+            patch.object(cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")),
+            patch.object(
+                cli,
+                "_run_pack_build",
+                return_value=0,
+            ) as mocked_pack,
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
         mocked_pack.assert_called_once()
 
@@ -2305,9 +2407,11 @@ class TestRunImageCheck(CliTestCase):
         args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
         args.signed = True
         buffer: StringIO = StringIO()
-        with patch.object(
-            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
-        ), patch.object(cli, "_run_pack_build", return_value=0) as mocked_pack, redirect_stdout(buffer):
+        with (
+            patch.object(cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")),
+            patch.object(cli, "_run_pack_build", return_value=0) as mocked_pack,
+            redirect_stdout(buffer),
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
         mocked_pack.assert_called_once()
         self.assertIn("signed images", buffer.getvalue())
@@ -2325,8 +2429,10 @@ class TestRunImageCheck(CliTestCase):
         src.write_bytes(b"GAMEDATA" * 20000 + b"\x00" * 200000)
         out: Path = tmp_path / "PPSA.ffpfsc"
         buffer: StringIO = StringIO()
-        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(buffer), redirect_stderr(
-            StringIO()
+        with (
+            patch.object(cli, "prompt_overwrite", return_value=True),
+            redirect_stdout(buffer),
+            redirect_stderr(StringIO()),
         ):
             rc: int = cli_mkpfs_main(
                 [
@@ -2354,8 +2460,10 @@ class TestRunImageCheck(CliTestCase):
         out: Path = tmp_path / "PPSA.ffpfsc"
         stdout_buffer: StringIO = StringIO()
         stderr_buffer: StringIO = StringIO()
-        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(stdout_buffer), redirect_stderr(
-            stderr_buffer
+        with (
+            patch.object(cli, "prompt_overwrite", return_value=True),
+            redirect_stdout(stdout_buffer),
+            redirect_stderr(stderr_buffer),
         ):
             rc: int = cli_mkpfs_main(
                 [
@@ -2386,13 +2494,14 @@ class TestRunImageCheck(CliTestCase):
         out: Path = tmp_path / "x.ffpfsc"
         args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
         args.inode_bits = 64
-        with patch.object(
-            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
-        ), patch.object(
-            cli,
-            "_run_pack_build",
-            return_value=0,
-        ) as mocked_pack:
+        with (
+            patch.object(cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")),
+            patch.object(
+                cli,
+                "_run_pack_build",
+                return_value=0,
+            ) as mocked_pack,
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
         mocked_pack.assert_called_once()
 
@@ -2404,13 +2513,14 @@ class TestRunImageCheck(CliTestCase):
         out: Path = tmp_path / "x.ffpfsc"
         args: SimpleNamespace = self.make_pack_file_args(source_path=src, image_path=out, dry_run=True, verify=False)
         args.block_size = "auto-fit"
-        with patch.object(
-            cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")
-        ), patch.object(
-            cli,
-            "_run_pack_build",
-            return_value=0,
-        ) as mocked_pack:
+        with (
+            patch.object(cli, "_run_stream_pack_file", side_effect=AssertionError("streaming should not run")),
+            patch.object(
+                cli,
+                "_run_pack_build",
+                return_value=0,
+            ) as mocked_pack,
+        ):
             self.assertEqual(cli.cli_mkpfs_pack_file_run(args), 0)
         mocked_pack.assert_called_once()
 
@@ -2421,8 +2531,10 @@ class TestRunImageCheck(CliTestCase):
         src.write_bytes(b"DATA" * 20000 + b"\x00" * 60000)
         out: Path = tmp_path / "PPSA.ffpfsc"
         buffer: StringIO = StringIO()
-        with patch.object(cli, "prompt_overwrite", return_value=True), redirect_stdout(buffer), redirect_stderr(
-            StringIO()
+        with (
+            patch.object(cli, "prompt_overwrite", return_value=True),
+            redirect_stdout(buffer),
+            redirect_stderr(StringIO()),
         ):
             rc: int = cli_mkpfs_main(
                 ["pack", "file", str(src), str(out), "--dry-run", "--no-adjust-output-file-extension"]
@@ -2454,8 +2566,10 @@ class TestCliTreeStructureOnly(CliTestCase):
             compress=True,
         )
         buffer: StringIO = StringIO()
-        with patch.object(cli, "verify_file_payload_hashes") as mock_verify, redirect_stdout(buffer), redirect_stderr(
-            StringIO()
+        with (
+            patch.object(cli, "verify_file_payload_hashes") as mock_verify,
+            redirect_stdout(buffer),
+            redirect_stderr(StringIO()),
         ):
             rc: int = cli_mkpfs_main(["tree", str(out)])
         self.assertEqual(rc, 0)

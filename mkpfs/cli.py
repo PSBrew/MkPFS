@@ -67,7 +67,7 @@ _GAME_FOLDER_COMPRESS_WARNING_TEXT: str = (
     "IMPORTANT: Do not pack an application/game folder directly with compression enabled.\n"
     "Although image creation and verification may succeed, the console often misreads compressed files.\n"
     "Either turn off compression (--no-compress) or create the image using the wrapper-based packaging flow.\n"
-    "See: https://github.com/PSBrew/MkPFS/issues/49"
+    "See: https://github.com/PSBrew/MkPFS/issues/49\n"
 )
 
 _SINGLE_FILE_RENAME_WARNING_TEXT: str = (
@@ -236,7 +236,7 @@ def print_build_parameters(
     compression_magic: str = describe_magic(magic=consts.PFSC_MAGIC) if compress else "none"
     info(f"  Header magic:      {describe_magic(magic=consts.PFS_MAGIC)}")
     info(f"  Compression Setup: {compression_magic}")
-    info(f"  Block size:        {block_size:,} bytes ({block_size // 1024} KiB)")
+    info(f"  Block size:        {block_size // 1024} KiB ({block_size:,} bytes)")
     info(f"  Inode width:       {inode_bits}-bit")
     info(
         f"  PFS mode:          0x{mode:04X}  (Bit 0=signed, Bit 1=64-bit inodes, "
@@ -250,11 +250,11 @@ def print_build_parameters(
     info(f"  Compression:       {'enabled' if compress else 'disabled'}")
     if compress:
         info(f"    Skip executables: {'yes' if skip_executable_compression else 'no'}")
-    info(f"  Game-file checks:   {'required' if require_game_files else 'disabled'}")
+    info(f"  Game-file checks:  {'required' if require_game_files else 'disabled'}")
     if compress:
         info(f"  Threshold gain:    {threshold_gain}%")
         resolved_cpu_count: int = resolve_compression_worker_count(requested_cpu_count=cpu_count)
-        cpu_label: str = f"{resolved_cpu_count} (auto, capped at 8)" if cpu_count == 0 else str(max(1, cpu_count))
+        cpu_label: str = f"{resolved_cpu_count} (auto)" if cpu_count == 0 else str(max(1, cpu_count))
         info(f"  CPU cores:         {cpu_label}")
         info(f"  Zlib level:        {zlib_level}")
         if max_compressed_ratio is not None:
@@ -322,22 +322,37 @@ def _detect_title_id_from_source(source_path: Path) -> str | None:
 
 
 def print_summary(stats: BuildStats) -> None:
-    info("" + "=" * 70)
+    info("\n" + "=" * 70)
     info("Build Summary")
     info("" + "=" * 70)
     info(f"  Input path:              {stats.input_path}")
     info(f"  Output path:             {stats.output_path}")
     info(f"  Total files:             {stats.total_files:,}")
-    info(f"  Total uncompressed size: {human_readable_size(stats.uncompressed_total_size)}")
-    info(f"  Total stored size:       {human_readable_size(stats.stored_total_size)}")
+    info(
+        f"  Uncompressed size:       {human_readable_size(stats.uncompressed_total_size)} "
+        f"({stats.uncompressed_total_size:,} bytes)"
+    )
+    info(
+        f"  Stored size:             {human_readable_size(stats.stored_total_size)} "
+        f"({stats.stored_total_size:,} bytes)"
+    )
+
+    # Report final on-disk image size so users can easily see why the image file
+    # on disk may differ from stored payload bytes.
+    try:
+        image_size_bytes: int = stats.output_path.stat().st_size if stats.output_path is not None else 0
+    except OSError:
+        image_size_bytes = 0
+
+    info(f"  Final image size:        {human_readable_size(image_size_bytes)} ({image_size_bytes:,} bytes)")
 
     if stats.compression_enabled:
         info("\n  Compression Statistics:")
-        info(f"    Compressed files:       {stats.compressed_files:,}")
-        info(f"    Uncompressed files:     {stats.uncompressed_files:,}")
-        info(f"    Actual gain achieved:   {stats.actual_gain_pct:.2f}%")
+        info(f"    Compressed files:      {stats.compressed_files:,}")
+        info(f"    Uncompressed files:    {stats.uncompressed_files:,}")
+        info(f"    Actual gain achieved:  {stats.actual_gain_pct:.2f}%")
         info(
-            "    All-PFSC gain:          "
+            "    All-PFSC gain:         "
             f"{stats.max_possible_gain_pct:.2f}%  "
             f"({human_readable_size(stats.all_compressed_total_size)} if every file used PFSC)"
         )
@@ -347,9 +362,9 @@ def print_summary(stats: BuildStats) -> None:
     aligned_total: int = stats.stored_total_size + stats.block_alignment_waste
     waste_pct: float = (stats.block_alignment_waste / aligned_total * 100.0) if aligned_total > 0 else 0.0
     info("\n  Block Alignment Waste:")
-    info(f"    Block size:             {stats.block_size // 1024} KiB ({stats.block_size:,} bytes)")
+    info(f"    Block size:            {stats.block_size // 1024} KiB ({stats.block_size:,} bytes)")
     info(
-        "    Wasted space:           "
+        "    Wasted space:          "
         f"{human_readable_size(stats.block_alignment_waste)} "
         f"({waste_pct:.2f}% of file data blocks)"
     )
@@ -360,7 +375,7 @@ def print_summary(stats: BuildStats) -> None:
         throughput: float = stats.uncompressed_total_size / (stats.elapsed_seconds + 0.001)
         info(f"  Throughput:              {human_readable_size(int(throughput))}/s")
 
-    info("" * 70 + "\n")
+    info("" + "=" * 70 + "\n")
 
 
 def resolve_disk_usage_probe_path(*, output_path: Path) -> Path:
@@ -529,6 +544,7 @@ def run_image_check(
     verify_payloads: bool = True,
     compare_source_contents: bool = True,
     report_title: str = "PFS Check Report",
+    hide_headers: bool = False,
 ) -> tuple[list[str], list[str], dict[int, list[ParsedDirent]], int]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -644,6 +660,7 @@ def run_image_check(
             # files incorrectly.
             if (
                 emit_report
+                and (not hide_headers)
                 and compressed_count > 0
                 and ("eboot.bin" in file_inodes or "sce_sys/param.json" in file_inodes)
             ):
@@ -651,7 +668,8 @@ def run_image_check(
 
             if emit_report:
                 payload_magic: str = describe_magic(magic=consts.PFSC_MAGIC) if compressed_count > 0 else "none"
-                print_version_header()
+                if not hide_headers:
+                    print_version_header()
                 info("=" * 70)
                 info(report_title)
                 info("=" * 70)
@@ -670,7 +688,7 @@ def run_image_check(
                 info(f"  64-bit inodes:       {'yes' if header.mode & consts.PFS_MODE_64BIT_INODES else 'no'}")
                 info(f"  Encrypted:           {'yes' if header.mode & consts.PFS_MODE_ENCRYPTED else 'no'}")
                 info(f"  Case insensitive:    {'yes' if header.mode & consts.PFS_MODE_CASE_INSENSITIVE else 'no'}")
-                info(f"Block size:            {header.block_size:,} bytes")
+                info(f"Block size:            {header.block_size // 1024} KiB ({header.block_size:,} bytes)")
                 info(f"Inodes:                {len(inodes):,}")
                 info(f"Directories:           {len(dir_inodes):,}")
                 info(f"Files:                 {len(file_inodes):,}")
@@ -678,8 +696,16 @@ def run_image_check(
                 info(f"Files hash-checked:    {checked_files:,}")
                 info(f"Data CRC32:            0x{data_crc32:08X}")
                 info(f"Manifest SHA256:       {manifest_sha256}")
-                info(f"Logical file bytes:    {total_logical:,}")
-                info(f"Stored file bytes:     {total_stored:,}")
+                info(f"Logical file bytes:    {human_readable_size(total_logical)} ({total_logical:,} bytes)")
+                info(f"Stored file bytes:     {human_readable_size(total_stored)} ({total_stored:,} bytes)")
+
+                try:
+                    image_size_bytes: int = image.stat().st_size
+                except OSError:
+                    image_size_bytes = 0
+
+                info(f"Final image size:      {human_readable_size(image_size_bytes)} ({image_size_bytes:,} bytes)")
+
                 info(f"flat_path_table keys:  {len(fpt_map):,}")
                 info(f"Warnings:              {len(warnings)}")
                 info(f"Errors:                {len(errors)}")
@@ -735,8 +761,8 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--threshold-gain",
         type=int,
-        default=5,
-        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 5)",
+        default=0,
+        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 0)",
     )
     parser.add_argument(
         "--block-size",
@@ -762,20 +788,20 @@ def cli_mkpfs_add_create_args(
         default=0,
         help=(
             "Number of CPU cores for PFSC compression "
-            "(0 = auto min(8, max(1, cpu_count() - 1)), non-zero = max(1, user value))"
+            "(0 = auto min(16, max(1, cpu_count() - 1)), non-zero = max(1, user value))"
         ),
     )
     parser.add_argument(
         "--compression-level",
         type=int,
-        default=7,
-        help="Zlib compression level (0-9, default: 7)",
+        default=9,
+        help="Zlib compression level (0-9, default: 9)",
     )
     parser.add_argument(
         "--max-compressed-ratio",
         type=int,
-        default=95,
-        help="Maximum PFSC size as percent of the raw file size (0-100, default: 95)",
+        default=100,
+        help="Maximum PFSC size as percent of the raw file size (0-100, default: 100)",
     )
     parser.add_argument(
         "--min-compress-size",
@@ -1061,6 +1087,7 @@ def _run_post_pack_verify(
     new_crypt: bool,
     verification_mode: PackVerificationMode,
     require_game_files: bool = False,
+    hide_headers: bool = False,
 ) -> int:
     """Run the selected post-pack image verification and report warnings and errors.
 
@@ -1071,6 +1098,7 @@ def _run_post_pack_verify(
         new_crypt: Whether to use the alternate newCrypt derivation.
         verification_mode: Effective post-pack verification mode.
         require_game_files: Whether to enable the optional game-file checklist.
+        hide_headers: Whether to hide the mkpfs header from the logs.
 
     Returns:
         ``1`` when the check reports errors, otherwise ``0``.
@@ -1079,7 +1107,7 @@ def _run_post_pack_verify(
     verification_label: str = "full verification" if verify_payloads else "structure verification"
     compare_source_contents: bool = verification_mode != PackVerificationMode.STRUCTURE
     report_title: str = "PFS Full Verify Report" if verify_payloads else "PFS Structure Verify Report"
-    info(f"Running post-pack {verification_label}...")
+    info(f"Running post-pack {verification_label}...\n")
     errors, warnings, _tree, _uroot = run_image_check(
         output_path,
         source,
@@ -1090,6 +1118,7 @@ def _run_post_pack_verify(
         verify_payloads=verify_payloads,
         compare_source_contents=compare_source_contents,
         report_title=report_title,
+        hide_headers=hide_headers,
     )
     for w in warnings:
         warning(w, icon_name="warning")
@@ -1230,14 +1259,21 @@ def _run_pack_build(
     if args.dry_run or verification_mode == PackVerificationMode.SKIP:
         return 0
 
-    return _run_post_pack_verify(
+    rc: int = _run_post_pack_verify(
         output_path=output_path,
         source=compare_source_root,
         ekpfs_key=config.ekpfs_key,
         new_crypt=config.new_crypt,
         verification_mode=verification_mode,
         require_game_files=require_game_files,
+        hide_headers=True,
     )
+    if rc == 0:
+        info("")
+        info("=" * 70)
+        info("Image created successfully!", icon_name="success")
+        info("=" * 70)
+    return rc
 
 
 @contextmanager
@@ -1441,13 +1477,17 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
         temp_folder=temp_folder,
         staged_file_name=internal_file_name,
     ) as staging_root:
-        return _run_post_pack_verify(
+        rc: int = _run_post_pack_verify(
             output_path=output_path,
             source=staging_root,
             ekpfs_key=config.ekpfs_key,
             new_crypt=config.new_crypt,
             verification_mode=verification_mode,
+            hide_headers=True,
         )
+        if rc == 0:
+            info("🎉 Image created successfully!")
+        return rc
 
 
 def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
@@ -1648,7 +1688,7 @@ def cli_mkpfs_info_run(args: argparse.Namespace) -> int:
     info(f"Size (bytes):{info_result.size_bytes}")
     if info_result.header is not None:
         info(f"Version:     {info_result.version_label} ({info_result.header.version})")
-        info(f"Block size:  {info_result.header.block_size}")
+        info(f"Block size:  {info_result.header.block_size // 1024} KiB ({info_result.header.block_size:,} bytes)")
         info(f"Header magic:{describe_magic(magic=info_result.header.magic)}")
 
     for w in info_result.warnings:
