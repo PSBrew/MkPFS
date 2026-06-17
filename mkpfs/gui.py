@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any, ClassVar, ClassVar
+from typing import Any, ClassVar, ClassVar, ClassVar
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -24,7 +24,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "app_subtitle": "PlayStation File System",
         "lang_label": "Language",
         "operations": "OPERATIONS",
-        "version_footer": "v0.0.8",
+        "version_footer": "v{version}",
         # Nav labels
         "nav_pack_folder": "📦  Pack Folder",
         "nav_pack_file": "📄  Pack File",
@@ -126,7 +126,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "app_subtitle": "Sistema de Arquivos PlayStation",
         "lang_label": "Idioma",
         "operations": "OPERAÇÕES",
-        "version_footer": "v0.0.8",
+        "version_footer": "v{version}",
         "nav_pack_folder": "📦  Empacotar Pasta",
         "nav_pack_file": "📄  Empacotar Arquivo",
         "nav_verify": "✅  Verificar",
@@ -220,7 +220,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "app_subtitle": "Sistema de Archivos PlayStation",
         "lang_label": "Idioma",
         "operations": "OPERACIONES",
-        "version_footer": "v0.0.8",
+        "version_footer": "v{version}",
         "nav_pack_folder": "📦  Empaquetar Carpeta",
         "nav_pack_file": "📄  Empaquetar Archivo",
         "nav_verify": "✅  Verificar",
@@ -231,6 +231,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "options": "Opciones",
         "encryption": "Cifrado",
         "output_log": "Registro de Salida",
+        "export_log": "Exportar Registro",
         "export_log": "Exportar Registro",
         "run": "Ejecutar",
         "running": "Ejecutando…",
@@ -330,8 +331,11 @@ def tr(key: str) -> str:
     Returns:
         Translated string, falling back to English when the key is missing.
     """
+    from mkpfs import __version__
+
     lang: dict[str, str] = _TRANSLATIONS.get(_current_locale, _TRANSLATIONS["en"])
-    return lang.get(key, _TRANSLATIONS["en"].get(key, key))
+    value: str = lang.get(key, _TRANSLATIONS["en"].get(key, key))
+    return value.replace("{version}", __version__)
 
 
 # ---------------------------------------------------------------------------
@@ -559,6 +563,7 @@ class LogPane(ctk.CTkFrame):
             parent: Parent widget.
             **kwargs: Extra keyword arguments forwarded to CTkFrame.
         """
+        kwargs.setdefault("height", 240)
         kwargs.setdefault("height", 240)
         super().__init__(
             parent,
@@ -833,6 +838,7 @@ class BasePanel(ctk.CTkFrame):
         self._run_btn.set_label(tr("run"))
         self._log_section_label.configure(text=tr("output_log"))
         self._export_btn.configure(text=tr("export_log"))
+        self._export_btn.configure(text=tr("export_log"))
 
         # Destroy and rebuild the controls card with the new locale strings.
         # pack(before=) keeps the card between the divider and the progress bar.
@@ -886,6 +892,31 @@ class BasePanel(ctk.CTkFrame):
         except queue.Empty:
             pass
         self.after(80, self._poll_log_queue)
+
+    def _on_export_log(self) -> None:
+        """Open a save dialog and write the current log content to a file."""
+        import json as _json
+
+        content: str = self._log.get_text().strip()
+        if not content:
+            return
+        path: str | None = filedialog.asksaveasfilename(
+            title="Export Log",
+            defaultextension=".txt",
+            filetypes=[("Text file", "*.txt"), ("JSON file", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            if path.endswith(".json"):
+                lines: list[str] = content.splitlines()
+                with open(path, "w", encoding="utf-8") as fh:
+                    _json.dump({"log": lines}, fh, indent=2, ensure_ascii=False)
+            else:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(content + "\n")
+        except OSError as exc:
+            self._emit(f"Export failed: {exc}", "error")
 
     def _on_export_log(self) -> None:
         """Open a save dialog and write the current log content to a file."""
