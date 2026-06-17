@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -1550,7 +1550,7 @@ class NavButton(ctk.CTkButton):
 class MkPFSApp(ctk.CTk):
     """Main application window with neon sidebar and language selector."""
 
-    _PAGES: list[tuple[str, str, type, str]] = [
+    _PAGES: ClassVar[list[tuple[str, str, type, str]]] = [
         ("nav_pack_folder", "nav_pack_folder", PackFolderPanel, _NEON_BLUE),
         ("nav_pack_file",   "nav_pack_file",   PackFilePanel,   _NEON_CYAN),
         ("nav_verify",      "nav_verify",       VerifyPanel,     _NEON_GREEN),
