@@ -18,7 +18,6 @@ import struct
 import subprocess
 import time
 import uuid
-import zlib
 from collections.abc import Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -26,6 +25,7 @@ from pathlib import Path
 from typing import BinaryIO, Protocol
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from zlib_ng import zlib_ng as zlib
 
 from . import consts
 from .logging import info, warning

@@ -18,6 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "cryptography>=47.0.0",
+    "zlib-ng>=0.5.1",
 ]
 
 [project.scripts]

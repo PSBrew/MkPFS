@@ -3348,3 +3348,36 @@ class TestExtractOptimization(PfsTestCase):
         last = extract_calls[-1]
         self.assertEqual(last.args[1], last.args[2])  # reaches 100%
         self.assertEqual(last.args[2], len(payload))  # progress is byte-based, not file-count-based
+
+
+class TestZlibBackend(PfsTestCase):
+    """The compression backend is zlib-ng but stays format-compatible with stdlib zlib."""
+
+    def test_decode_accepts_stdlib_zlib_compressed_block(self) -> None:
+        """A PFSC payload whose block was compressed by stdlib zlib still decodes."""
+        import struct
+        import zlib as stdlib_zlib
+
+        lb: int = c.PFSC_LOGICAL_BLOCK_SIZE
+        raw: bytes = (b"OLD-IMAGE-DATA" * 6000).ljust(lb, b"\x00")[:lb]
+        stored: bytes = stdlib_zlib.compress(raw, 9)  # produced by the previous backend
+        header_size: int = pfs_mod._pfsc_header_size(block_count=1, logical_block_size=lb)
+        offsets: list[int] = [header_size, header_size + len(stored)]
+        header: bytearray = bytearray(header_size)
+        struct.pack_into(
+            "<iiiiqqQq",
+            header,
+            0,
+            c.PFSC_MAGIC,
+            c.PFSC_UNK4,
+            c.PFSC_UNK8,
+            lb,
+            lb,
+            c.PFSC_BLOCK_OFFSETS_OFFSET,
+            header_size,
+            lb,
+        )
+        struct.pack_into("<2Q", header, c.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
+        payload: bytes = bytes(header) + stored
+        decoded: bytes = pfs_mod.decode_pfsc_payload(payload, expected_logical_size=lb)
+        self.assertEqual(decoded, raw)
