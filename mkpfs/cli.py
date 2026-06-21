@@ -1421,6 +1421,7 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
         case_insensitive=case_insensitive,
         zlib_level=args.compression_level,
         threshold_gain=args.threshold_gain,
+        cpu_count=args.cpu_count,
         encrypted=encrypted,
         new_crypt=new_crypt,
         ekpfs=ekpfs_key,

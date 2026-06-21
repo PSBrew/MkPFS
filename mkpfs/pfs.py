@@ -19,7 +19,9 @@ import struct
 import subprocess
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1426,14 +1428,16 @@ def _encode_pfsc_stream_into_handle(
     threshold_gain: int,
     zlib_level: int,
     logical_block_size: int,
+    cpu_count: int = 0,
     progress_callback: Callable[[int], None] | None = None,
 ) -> tuple[int, int]:
     """Encode a forward byte stream into a PFSC payload at ``base_offset``.
 
-    Re-chunks ``source_blocks`` into logical blocks, compresses each (single
-    pass, no random access needed), records offsets, and backfills the header.
-    The payload is always PFSC-wrapped (suitable for a stream that cannot be
-    re-read for a whole-file raw fallback).
+    Re-chunks ``source_blocks`` into logical blocks and compresses them across a
+    bounded thread pool (zlib-ng releases the GIL, so this scales across cores)
+    while writing results strictly in order; then backfills the header. The
+    payload is always PFSC-wrapped (a stream cannot be re-read for a whole-file
+    raw fallback). Memory stays bounded by the in-flight window.
 
     Args:
         out: Open writable and seekable output handle.
@@ -1443,6 +1447,7 @@ def _encode_pfsc_stream_into_handle(
         threshold_gain: Minimum per-block gain percent to keep compressed bytes.
         zlib_level: zlib compression level.
         logical_block_size: PFSC logical block size.
+        cpu_count: Requested compression worker count (0 = auto).
         progress_callback: Optional callback receiving processed raw byte deltas.
 
     Returns:
@@ -1458,10 +1463,13 @@ def _encode_pfsc_stream_into_handle(
     emitted_blocks: int = 0
     out.seek(base_offset + header_size)
 
-    def _flush(raw_block: bytes) -> None:
-        nonlocal all_compressed_size, emitted_blocks
+    def _compress(raw_block: bytes) -> tuple[int, bytes, bytes]:
         padded: bytes = raw_block.ljust(logical_block_size, b"\x00")
-        compressed: bytes = zlib.compress(padded, level=zlib_level)
+        return len(raw_block), padded, zlib.compress(padded, level=zlib_level)
+
+    def _write(result: tuple[int, bytes, bytes]) -> None:
+        nonlocal all_compressed_size, emitted_blocks
+        raw_len, padded, compressed = result
         all_compressed_size += len(compressed)
         gain_pct: float = ((len(padded) - len(compressed)) / len(padded)) * 100.0
         store_compressed: bool = _should_store_pfsc_block_compressed(
@@ -1475,16 +1483,33 @@ def _encode_pfsc_stream_into_handle(
         offsets.append(offsets[-1] + len(selected))
         emitted_blocks += 1
         if progress_callback is not None:
-            progress_callback(len(raw_block))
+            progress_callback(raw_len)
 
-    buffer: bytearray = bytearray()
-    for piece in source_blocks:
-        buffer += piece
-        while len(buffer) >= logical_block_size:
-            _flush(bytes(buffer[:logical_block_size]))
-            del buffer[:logical_block_size]
-    if buffer:
-        _flush(bytes(buffer))
+    def _iter_logical_blocks() -> Iterator[bytes]:
+        buffer: bytearray = bytearray()
+        for piece in source_blocks:
+            buffer += piece
+            while len(buffer) >= logical_block_size:
+                yield bytes(buffer[:logical_block_size])
+                del buffer[:logical_block_size]
+        if buffer:
+            yield bytes(buffer)
+
+    workers: int = resolve_compression_worker_count(requested_cpu_count=cpu_count)
+    if workers <= 1:
+        for raw_block in _iter_logical_blocks():
+            _write(_compress(raw_block))
+    else:
+        # Compress up to ``workers * 4`` blocks ahead, writing results in submit order.
+        max_in_flight: int = workers * 4
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pending: deque[Future[tuple[int, bytes, bytes]]] = deque()
+            for raw_block in _iter_logical_blocks():
+                if len(pending) >= max_in_flight:
+                    _write(pending.popleft().result())
+                pending.append(pool.submit(_compress, raw_block))
+            while pending:
+                _write(pending.popleft().result())
 
     if emitted_blocks != block_count:
         raise BuildError(f"exFAT stream length mismatch: expected {block_count} blocks, got {emitted_blocks}")
@@ -4221,6 +4246,7 @@ def build_pfs_stream_from_exfat(
     zlib_level: int,
     threshold_gain: int,
     cluster_size: int | None = None,
+    cpu_count: int = 0,
     encrypted: bool = False,
     new_crypt: bool = False,
     ekpfs: bytes | None = None,
@@ -4242,6 +4268,7 @@ def build_pfs_stream_from_exfat(
         zlib_level: zlib compression level.
         threshold_gain: Minimum per-block gain percent to keep PFSC blocks.
         cluster_size: Optional inner exFAT cluster size (auto when omitted).
+        cpu_count: Requested compression worker count (0 = auto).
         encrypted: Whether to encrypt filesystem blocks.
         new_crypt: Whether to use the alternate EKPFS derivation.
         ekpfs: Optional EKPFS key bytes.
@@ -4421,6 +4448,7 @@ def build_pfs_stream_from_exfat(
                 threshold_gain=threshold_gain,
                 zlib_level=zlib_level,
                 logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                cpu_count=cpu_count,
                 progress_callback=report,
             )
 
