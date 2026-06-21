@@ -57,7 +57,7 @@ class ExfatGeometry:
 
     @property
     def cluster_size(self) -> int:
-        """Return the cluster size in bytes."""
+        """Cluster size in bytes."""
         return self.bytes_per_sector * self.sectors_per_cluster
 
 
