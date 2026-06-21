@@ -1792,6 +1792,7 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
         progress=Progress(enabled=True),
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
         new_crypt=bool(getattr(args, "new_crypt", False)),
+        deep=bool(getattr(args, "deep", False)),
     )
 
     for w in result.warnings:
@@ -1920,6 +1921,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     extract_parser.add_argument("image_file", help="Path to input .ffpfs image")
     extract_parser.add_argument("output_dir", help="Destination directory for extraction")
     extract_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output path")
+    extract_parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="If the image wraps a single exFAT, extract the files inside it instead of the inner .exfat",
+    )
     extract_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     extract_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
     extract_parser.set_defaults(func=cli_mkpfs_extract_run)

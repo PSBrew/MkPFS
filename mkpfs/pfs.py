@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from zlib_ng import zlib_ng as zlib
 
 from . import consts
+from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatReader
 from .logging import info, warning
 from .pbar import Progress
 from .utils import (
@@ -5614,12 +5615,214 @@ def verify_pfs_image(
     )
 
 
+class _LogicalFileView:
+    """Seekable, read-only view over one inode's logical payload.
+
+    Decodes PFSC blocks on demand (with a small LRU cache) so a consumer can
+    randomly seek into a compressed inner file without materializing it. Supports
+    the contiguous, unsigned layout produced by single-file packing; encryption is
+    handled transparently via :func:`read_image_bytes`.
+    """
+
+    _CACHE_BLOCKS: int = 16
+
+    def __init__(
+        self,
+        fh: BinaryIO,
+        header: ParsedHeader,
+        inode: ParsedInode,
+        ekpfs: bytes | None = None,
+        new_crypt: bool = False,
+    ) -> None:
+        self._fh: BinaryIO = fh
+        self._header: ParsedHeader = header
+        self._ekpfs: bytes | None = ekpfs
+        self._new_crypt: bool = new_crypt
+        self._base: int = inode.db[0] * header.block_size
+        self._compressed: bool = inode.is_compressed
+        self._size: int = inode.logical_size
+        self._pos: int = 0
+        self._cache: dict[int, bytes] = {}
+        self._order: list[int] = []
+        if self._compressed:
+            head: bytes = self._raw(self._base, consts.PFSC_HEADER_SIZE)
+            self._lbs, block_count, block_offsets_offset, _data_offset, _logical = _parse_pfsc_header(head)
+            offsets_blob: bytes = self._raw(self._base + block_offsets_offset, (block_count + 1) * 8)
+            self._offsets: list[int] = list(struct.unpack_from(f"<{block_count + 1}Q", offsets_blob, 0))
+
+    def _raw(self, offset: int, size: int) -> bytes:
+        return read_image_bytes(self._fh, self._header, offset, size, ekpfs=self._ekpfs, new_crypt=self._new_crypt)
+
+    def _decode_block(self, index: int) -> bytes:
+        cached: bytes | None = self._cache.get(index)
+        if cached is not None:
+            return cached
+        start: int = self._offsets[index]
+        stored: bytes = self._raw(self._base + start, self._offsets[index + 1] - start)
+        block: bytes = stored if len(stored) == self._lbs else zlib.decompress(stored)
+        self._cache[index] = block
+        self._order.append(index)
+        if len(self._order) > self._CACHE_BLOCKS:
+            self._cache.pop(self._order.pop(0), None)
+        return block
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 1:
+            offset += self._pos
+        elif whence == 2:
+            offset += self._size
+        self._pos = max(0, offset)
+        return self._pos
+
+    def tell(self) -> int:
+        return self._pos
+
+    def read(self, size: int = -1) -> bytes:
+        end: int = self._size if size is None or size < 0 else min(self._pos + size, self._size)
+        if end <= self._pos:
+            return b""
+        if not self._compressed:
+            data: bytes = self._raw(self._base + self._pos, end - self._pos)
+            self._pos += len(data)
+            return data
+        out: bytearray = bytearray()
+        pos: int = self._pos
+        while pos < end:
+            block_index: int = pos // self._lbs
+            within: int = pos % self._lbs
+            take: int = min(self._lbs - within, end - pos)
+            out += self._decode_block(block_index)[within : within + take]
+            pos += take
+        self._pos = pos
+        return bytes(out)
+
+
+def open_inner_file_view(
+    image: Path,
+    ekpfs: bytes | None = None,
+    new_crypt: bool = False,
+) -> tuple[_LogicalFileView, BinaryIO, str] | None:
+    """Open a seekable view over a single-file image's inner payload.
+
+    Args:
+        image: Input PFS image path.
+        ekpfs: Optional EKPFS key material for encrypted images.
+        new_crypt: When True, use the alternate newCrypt key derivation path.
+
+    Returns:
+        ``(view, file_handle, inner_name)`` when the image holds exactly one file
+        stored in the contiguous, unsigned layout; otherwise ``None``. The caller
+        owns and must close ``file_handle``.
+    """
+    inspection: PFSImageInspection = inspect_pfs_image(
+        image=image, ekpfs=ekpfs, new_crypt=new_crypt, verify_payloads=False
+    )
+    if inspection.errors or inspection.header is None or len(inspection.file_inodes) != 1:
+        return None
+    rel_name, inode_num = next(iter(inspection.file_inodes.items()))
+    inode: ParsedInode = inspection.inodes[inode_num]
+    if inode.db_sig or inode.ib_sig or inode.blocks <= 0 or inode.logical_size <= 0:
+        return None  # signed/scattered/empty payloads are not served by the on-demand view
+    fh: BinaryIO = image.open("rb")
+    try:
+        view: _LogicalFileView = _LogicalFileView(fh, inspection.header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
+    except Exception:
+        fh.close()
+        raise
+    return view, fh, rel_name
+
+
+def _flatten_exfat_entries(entries: list[ExfatEntry]) -> tuple[list[ExfatEntry], list[ExfatEntry]]:
+    """Split an exFAT entry tree into (directories, files), each depth-ordered."""
+    dirs: list[ExfatEntry] = []
+    files: list[ExfatEntry] = []
+
+    def _walk(nodes: list[ExfatEntry]) -> None:
+        for node in sorted(nodes, key=lambda n: n.rel_path.lower()):
+            if node.is_dir:
+                dirs.append(node)
+                _walk(node.children)
+            else:
+                files.append(node)
+
+    _walk(entries)
+    return dirs, files
+
+
+def _extract_inner_exfat(
+    image: Path,
+    output_path: Path,
+    progress: Progress | None,
+    ekpfs: bytes | None,
+    new_crypt: bool,
+) -> PFSExtractionResult | None:
+    """Extract the contents of an inner exFAT image, or None if there isn't one.
+
+    Returns ``None`` (so the caller can fall back to normal unpack) when the image
+    is not a single inner file or that file is not an exFAT volume.
+    """
+    opened: tuple[_LogicalFileView, BinaryIO, str] | None = open_inner_file_view(
+        image, ekpfs=ekpfs, new_crypt=new_crypt
+    )
+    if opened is None:
+        return None
+    view, fh, _inner_name = opened
+    try:
+        view.seek(0)
+        if view.read(len(EXFAT_SIGNATURE) + 3)[3:] != EXFAT_SIGNATURE:
+            return None
+        reader: ExfatReader = ExfatReader(view)
+        result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
+        if output_path.exists() and not output_path.is_dir():
+            result.errors.append(f"output path exists and is not a directory: {output_path}")
+            return result
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        dirs, files = _flatten_exfat_entries(reader.root_entries())
+        for directory in dirs:
+            (output_path / directory.rel_path).mkdir(parents=True, exist_ok=True)
+            result.directories_created += 1
+
+        total_bytes: int = sum(f.length for f in files)
+        progress_total: int = max(total_bytes, 1)
+        last_reported: int = 0
+        update_interval: int = 8 * 1024 * 1024
+        if progress is not None:
+            progress.status(f"\nExtracting {len(files)} files from inner exFAT to {output_path}...")
+        for file_entry in files:
+            target: Path = output_path / file_entry.rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with target.open("wb") as out_fh:
+                    for chunk in reader.read_file(file_entry):
+                        out_fh.write(chunk)
+                        result.bytes_written += len(chunk)
+                        if progress is not None and result.bytes_written - last_reported >= update_interval:
+                            last_reported = result.bytes_written
+                            progress.step(
+                                "extract",
+                                min(result.bytes_written, total_bytes),
+                                progress_total,
+                                bytes_processed=result.bytes_written,
+                            )
+            except (OSError, ValueError) as exc:
+                result.errors.append(f"failed to extract '{file_entry.rel_path}': {exc}")
+                return result
+            result.files_written += 1
+        if progress is not None:
+            progress.step("extract", progress_total, progress_total, bytes_processed=result.bytes_written)
+        return result
+    finally:
+        fh.close()
+
+
 def extract_pfs_image(
     image: Path,
     output_path: Path,
     progress: Progress | None = None,
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
+    deep: bool = False,
 ) -> PFSExtractionResult:
     """Extract all logical files from a PFS image.
 
@@ -5629,11 +5832,22 @@ def extract_pfs_image(
         progress: Optional progress reporter.
         ekpfs: Optional EKPFS key material for encrypted images.
         new_crypt: When True, use the alternate newCrypt key derivation path.
+        deep: When True and the image wraps a single inner exFAT, extract the
+            files inside that exFAT instead of the inner image file itself.
 
     Returns:
         A structured extraction result.
     """
     result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
+
+    # Deep mode: descend one level into a wrapped exFAT and extract its contents
+    # with no temporary inner image. Falls back to a normal unpack otherwise.
+    if deep:
+        deep_result: PFSExtractionResult | None = _extract_inner_exfat(image, output_path, progress, ekpfs, new_crypt)
+        if deep_result is not None:
+            return deep_result
+        result.warnings.append("--deep: no inner exFAT found; extracting image contents as-is")
+
     # Structure only: extraction decodes each payload once while writing, so the
     # upfront payload-hash verification would be a redundant second decode.
     inspection: PFSImageInspection = inspect_pfs_image(
