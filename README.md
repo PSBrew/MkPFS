@@ -223,6 +223,7 @@ Notes:
 - Folder output names are adjusted automatically by default.
 - MkPFS chooses `.ffpfs` when `sce_sys/param.json` exposes a title ID, otherwise it falls back to `.ffpfsc`.
 - When the source folder contains `fakelib/libSceAmpr.sprx`, MkPFS regenerates an `ampr_emu.index` in the folder before packing so it is included in the image and stays in sync with the current files. The rebuild is metadata-only and inexpensive. Use `--no-ampr-index` to skip it and preserve any existing index.
+- OS-generated metadata is never packed: macOS entries (`.DS_Store`, `._*`, `__MACOSX`, `.Spotlight-V100`, ...) and Windows entries (`Thumbs.db`, `desktop.ini`, `$RECYCLE.BIN`, ...) are skipped during scanning and excluded from the AMPR index.
 - `--ekpfs-key` is only meaningful when used with `--encrypted`.
 
 ### `pack file`

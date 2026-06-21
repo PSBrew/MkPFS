@@ -171,3 +171,22 @@ class TestEnsureAmprIndex(AmprTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAmprExcludesOsMetadata(AmprTestCase):
+    """AMPR index must not include OS-generated metadata, consistent with packing."""
+
+    def test_junk_is_not_indexed(self) -> None:
+        root = self.make_temp_path()
+        (root / "data.bin").write_bytes(b"DATA")
+        (root / ".DS_Store").write_bytes(b"junk")
+        (root / "._data.bin").write_bytes(b"junk")
+        (root / "__MACOSX").mkdir()
+        (root / "__MACOSX" / "x.plist").write_bytes(b"junk")
+        out = root / "ampr_emu.index"
+        count = ampr.build_ampr_index(root, out)
+        self.assertEqual(count, 1)  # only data.bin
+        blob = out.read_bytes()
+        self.assertNotIn(b"DS_Store", blob)
+        self.assertNotIn(b"MACOSX", blob)
+        self.assertNotIn(b"._data", blob)

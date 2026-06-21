@@ -18,6 +18,7 @@ import struct
 from pathlib import Path
 
 from .logging import info, warning
+from .utils import is_ignored_name
 
 # AMPRIDX3 on-disk structures. Do not change without matching the resolver.
 RECORD_STRUCT = struct.Struct("<IIQq")  # path_blob_offset, path_len, size, mtime
@@ -134,11 +135,14 @@ def build_ampr_index(root: Path, output_path: Path) -> int:
     seen: dict[str, str] = {}
     rows: list[tuple[int, int, str]] = []  # (size, mtime, indexed_path)
 
-    # Scan files deterministically (case-insensitive order), skipping the index itself.
+    # Scan files deterministically (case-insensitive order), skipping the index
+    # itself and OS-generated metadata (consistent with what gets packed).
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort(key=str.lower)
+        dirnames[:] = sorted((d for d in dirnames if not is_ignored_name(d)), key=str.lower)
         filenames.sort(key=str.lower)
         for filename in filenames:
+            if is_ignored_name(filename):
+                continue
             path: Path = Path(dirpath) / filename
             try:
                 resolved: Path = path.resolve()

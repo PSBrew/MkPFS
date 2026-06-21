@@ -3286,3 +3286,25 @@ class TestVerifyProgress(PfsTestCase):
         # Final verify update reaches 100% (done == total == logical size).
         self.assertEqual(verify_calls[-1][1], verify_calls[-1][2])
         self.assertEqual(verify_calls[-1][2], len(payload))
+
+
+class TestScanExcludesOsMetadata(PfsTestCase):
+    """scan_source_tree must drop OS-generated metadata files and dirs."""
+
+    def test_scan_excludes_junk_files_and_dirs(self) -> None:
+        root = self.make_temp_path()
+        (root / "sce_sys").mkdir()
+        (root / "sce_sys" / "param.json").write_text("{}", encoding="utf-8")
+        (root / "eboot.bin").write_bytes(b"x")
+        # junk at root, nested, and a whole junk dir
+        (root / ".DS_Store").write_bytes(b"junk")
+        (root / "._eboot.bin").write_bytes(b"junk")
+        (root / "Thumbs.db").write_bytes(b"junk")
+        (root / "__MACOSX").mkdir()
+        (root / "__MACOSX" / "buried.txt").write_bytes(b"junk")
+        (root / "sce_sys" / ".DS_Store").write_bytes(b"junk")
+
+        _dirs, files, _total = pfs_mod.scan_source_tree(root, Progress(enabled=False))
+        rels = set(files.keys())
+        self.assertEqual(rels, {"sce_sys/param.json", "eboot.bin"})
+        self.assertFalse(any("MACOSX" in r or "DS_Store" in r or r.startswith("._") or "Thumbs" in r for r in rels))

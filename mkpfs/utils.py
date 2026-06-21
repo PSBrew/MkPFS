@@ -7,6 +7,45 @@ import tempfile
 from pathlib import Path
 from typing import BinaryIO
 
+# OS-generated metadata files/directories that should never be packed into an
+# image or indexed. Matched case-insensitively against the entry's base name;
+# AppleDouble resource forks ("._*") are matched by prefix.
+IGNORED_NAMES: frozenset[str] = frozenset(
+    {
+        # macOS
+        ".ds_store",
+        ".spotlight-v100",
+        ".trashes",
+        ".fseventsd",
+        ".temporaryitems",
+        ".documentrevisions-v100",
+        ".apdisk",
+        "__macosx",
+        ".volumeicon.icns",
+        # Windows
+        "thumbs.db",
+        "ehthumbs.db",
+        "desktop.ini",
+        "$recycle.bin",
+        "system volume information",
+    }
+)
+
+
+def is_ignored_name(name: str) -> bool:
+    """Return True if ``name`` is OS-generated metadata to exclude from images.
+
+    Args:
+        name: A single path component (file or directory base name).
+
+    Returns:
+        True for known macOS/Windows metadata entries (case-insensitive) and for
+        AppleDouble resource forks (names starting with ``._``).
+    """
+    if name.startswith("._"):
+        return True
+    return name.lower() in IGNORED_NAMES
+
 
 def human_readable_size(size: int) -> str:
     """Convert a byte count to a human-readable string.
