@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from . import __version__, consts
+from .ampr import ensure_ampr_index
 from .logging import error, info, warning
 from .pbar import Progress
 from .pfs import (
@@ -1347,6 +1348,10 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     """
     source_path: Path = Path(args.source_dir).expanduser().resolve()
     temp_folder: Path = _resolve_pack_temp_folder(args)
+    # Generate the AMPR emulation index into the source tree before packing so it
+    # is included in the image (only when an emulation build marker is present).
+    if not args.dry_run:
+        ensure_ampr_index(source_path, enabled=bool(getattr(args, "ampr_index", True)))
     title_id: str | None = _detect_title_id_from_source(source_path)
     desired_output_suffix: str = ".ffpfs" if title_id is not None else ".ffpfsc"
     output_adjustment_message: str
@@ -1823,6 +1828,13 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
 
     folder_parser = pack_sub.add_parser("folder", help="Build image from a source directory")
     cli_mkpfs_add_create_args(folder_parser)
+    folder_parser.add_argument(
+        "--no-ampr-index",
+        dest="ampr_index",
+        action="store_false",
+        default=True,
+        help="Do not generate ampr_emu.index even when fakelib/libSceAmpr.sprx is present",
+    )
     folder_parser.set_defaults(func=cli_mkpfs_create_run)
 
     file_parser = pack_sub.add_parser("file", help="Build image from a single source file")
