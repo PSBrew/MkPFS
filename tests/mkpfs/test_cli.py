@@ -2641,3 +2641,56 @@ class TestCliAmprIndex(CliTestCase):
         self.assertEqual(rc, 0)
         self.assertFalse((source / "ampr_emu.index").exists())
         self.assertFalse((dest / "ampr_emu.index").exists())
+
+
+class TestCliPackExfat(CliTestCase):
+    """`pack exfat` builds a raw exFAT image from a folder, cross-platform."""
+
+    def _game(self, root: Path) -> Path:
+        src = root / "game"
+        (src / "sce_sys").mkdir(parents=True)
+        (src / "sce_sys" / "param.json").write_text('{"titleId": "PPSA25872"}', encoding="utf-8")
+        (src / "eboot.bin").write_bytes(b"BOOT" * 1000)
+        return src
+
+    def test_pack_exfat_auto_names_from_title_id(self) -> None:
+        from mkpfs.exfat import ExfatReader
+
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out_dir = tmp / "out"
+        out_dir.mkdir()
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["pack", "exfat", str(src), str(out_dir)])
+        self.assertEqual(rc, 0)
+        produced = out_dir / "PPSA25872.exfat"
+        self.assertTrue(produced.is_file())
+        with produced.open("rb") as fh:
+            files = {f.rel_path for f in ExfatReader(fh).iter_files()}
+        self.assertEqual(files, {"eboot.bin", "sce_sys/param.json"})
+
+    def test_pack_exfat_explicit_output_path(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "custom.exfat"
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["pack", "exfat", str(src), str(out)])
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.is_file())
+
+    def test_pack_exfat_refuses_existing_without_overwrite(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "x.exfat"
+        out.write_bytes(b"existing")
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["pack", "exfat", str(src), str(out)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out.read_bytes(), b"existing")
+
+    def test_pack_exfat_rejects_bad_cluster_size(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "x.exfat"
+        with self.assertRaises(BuildError):
+            cli_mkpfs_main(["pack", "exfat", str(src), str(out), "--cluster-size", "777"])

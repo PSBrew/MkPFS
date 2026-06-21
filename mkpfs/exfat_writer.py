@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import os
 import struct
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ._exfat_upcase import UPCASE_CHECKSUM, UPCASE_TABLE
+from .pbar import Progress
 from .utils import default_image_basename, is_ignored_name
 
 BYTES_PER_SECTOR: int = 512
@@ -340,13 +341,19 @@ def _build_fat(
     return bytes(fat)
 
 
-def iter_exfat_image(source_root: Path, cluster_size: int | None = None) -> Iterator[bytes]:
+def iter_exfat_image(
+    source_root: Path,
+    cluster_size: int | None = None,
+    on_layout: Callable[[int], None] | None = None,
+) -> Iterator[bytes]:
     """Yield a complete exFAT image for ``source_root`` in strict offset order.
 
     Args:
         source_root: Directory whose contents become the volume root.
         cluster_size: Optional cluster size in bytes; chosen by file-size policy
             when omitted (32 KiB, or 64 KiB for large-average-file trees).
+        on_layout: Optional callback invoked once with the total image size in
+            bytes before any chunk is yielded (useful for progress reporting).
 
     Yields:
         Image byte chunks in increasing offset order; concatenation is the volume.
@@ -362,6 +369,9 @@ def iter_exfat_image(source_root: Path, cluster_size: int | None = None) -> Iter
     fat_length_sectors: int = _align_up(_ceil_div(fat_entries * 4, BYTES_PER_SECTOR), spc)
     heap_offset: int = _align_up(_FAT_OFFSET_SECTORS + fat_length_sectors * _NUMBER_OF_FATS, spc)
     volume_length: int = heap_offset + cluster_count * spc
+
+    if on_layout is not None:
+        on_layout(volume_length * BYTES_PER_SECTOR)
 
     # 1. Boot region + its backup copy.
     boot: bytes = _build_boot_region(
@@ -423,7 +433,12 @@ def iter_exfat_image(source_root: Path, cluster_size: int | None = None) -> Iter
     yield from _emit(root)
 
 
-def write_exfat_image(source_root: Path, output_path: Path, cluster_size: int | None = None) -> Path:
+def write_exfat_image(
+    source_root: Path,
+    output_path: Path,
+    cluster_size: int | None = None,
+    progress: Progress | None = None,
+) -> Path:
     """Write a complete exFAT image and return the path written.
 
     Args:
@@ -432,13 +447,32 @@ def write_exfat_image(source_root: Path, output_path: Path, cluster_size: int | 
             create ``<titleId>.exfat`` (the title ID comes from
             ``sce_sys/param.json``, falling back to the source folder name).
         cluster_size: Optional cluster size in bytes (auto-selected when omitted).
+        progress: Optional progress reporter, updated by bytes written.
 
     Returns:
         The path of the written image.
     """
     if output_path.is_dir():
         output_path = output_path / f"{default_image_basename(source_root)}.exfat"
+
+    total: int = 0
+    written: int = 0
+    last_reported: int = 0
+    update_interval: int = 8 * 1024 * 1024
+
+    def on_layout(size: int) -> None:
+        nonlocal total
+        total = size
+        if progress is not None:
+            progress.step("exfat", 0, max(size, 1), bytes_processed=0)
+
     with output_path.open("wb") as out:
-        for chunk in iter_exfat_image(source_root, cluster_size=cluster_size):
+        for chunk in iter_exfat_image(source_root, cluster_size=cluster_size, on_layout=on_layout):
             out.write(chunk)
+            written += len(chunk)
+            if progress is not None and written - last_reported >= update_interval:
+                last_reported = written
+                progress.step("exfat", min(written, total), max(total, 1), bytes_processed=written)
+    if progress is not None:
+        progress.step("exfat", max(total, 1), max(total, 1), bytes_processed=written)
     return output_path

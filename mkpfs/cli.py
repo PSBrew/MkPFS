@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import __version__, consts
 from .ampr import ensure_ampr_index
+from .exfat_writer import write_exfat_image
 from .logging import error, info, warning
 from .pbar import Progress
 from .pfs import (
@@ -55,6 +56,7 @@ from .pfs import (
     verify_signed_image_signatures,
 )
 from .utils import (
+    default_image_basename,
     is_power_of_two,
     normalize_output_path,
     resolve_temp_root,
@@ -1323,6 +1325,52 @@ def _stage_single_file_source_root(
         yield staging_root
 
 
+def cli_mkpfs_pack_exfat_run(args: argparse.Namespace) -> int:
+    """Build a raw exFAT image from a source directory.
+
+    Args:
+        args: Parsed CLI arguments with ``source_dir`` and optional ``output``.
+
+    Returns:
+        Process exit code for the exFAT packing workflow.
+    """
+    source: Path = Path(args.source_dir).expanduser().resolve()
+    if not source.is_dir():
+        raise BuildError(f"source must be an existing directory: {source}")
+
+    cluster_arg: str = str(args.cluster_size).strip().lower()
+    cluster_size: int | None
+    if cluster_arg in {"auto", ""}:
+        cluster_size = None
+    else:
+        try:
+            cluster_size = int(args.cluster_size)
+        except (TypeError, ValueError) as exc:
+            raise BuildError("--cluster-size must be an integer or 'auto'") from exc
+        if not is_power_of_two(cluster_size) or cluster_size < 512 or cluster_size > 32 * 1024 * 1024:
+            raise BuildError("--cluster-size must be a power of two between 512 and 33554432")
+
+    # Resolve the final output path so we can pre-check overwrite and report it.
+    basename: str = f"{default_image_basename(source)}.exfat"
+    if args.output is None:
+        target: Path = source.parent / basename
+    else:
+        requested: Path = Path(args.output).expanduser().resolve()
+        target = requested / basename if requested.is_dir() else requested
+
+    if target.exists() and not args.overwrite:
+        error(f"output already exists (use --overwrite): {target}")
+        return 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    print_version_header()
+    info(f"Building exFAT image from {source}")
+    info(f"  Output: {target}")
+    written: Path = write_exfat_image(source, target, cluster_size=cluster_size, progress=Progress(enabled=True))
+    info(f"Successfully wrote {human_readable_size(written.stat().st_size)} exFAT image: {written}")
+    return 0
+
+
 def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     """Pack a folder into a PFS image.
 
@@ -1824,6 +1872,23 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     )
     folder_parser.set_defaults(func=cli_mkpfs_create_run)
 
+    exfat_parser = pack_sub.add_parser("exfat", help="Build a raw exFAT image from a source directory")
+    exfat_parser.epilog = "Examples:\r\n   mkpfs pack exfat './BREW1234-app' './BREW1234.exfat'\r\n"
+    exfat_parser.add_argument("source_dir", help="Source app or homebrew folder")
+    exfat_parser.add_argument(
+        "output",
+        nargs="?",
+        help="Output .exfat path, or a directory to auto-name <titleId>.exfat (default: alongside the source)",
+    )
+    exfat_parser.add_argument(
+        "--cluster-size",
+        default="auto",
+        help="exFAT cluster size in bytes or 'auto' (32 KiB, or 64 KiB for large-average-file trees)",
+    )
+    exfat_parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output file")
+    exfat_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    exfat_parser.set_defaults(func=cli_mkpfs_pack_exfat_run)
+
     file_parser = pack_sub.add_parser("file", help="Build image from a single source file")
     file_parser.epilog = "Examples:\r\n   mkpfs pack file './BREW1234.exfat' './BREW1234.exfat.ffpfsc'\r\n"
     cli_mkpfs_add_create_args(
@@ -1939,7 +2004,7 @@ def normalize_cli_argv_for_pack_compat(argv: list[str] | None = None) -> list[st
         return argv
 
     explicit_pack_mode: str = effective_argv[1]
-    if explicit_pack_mode in {"folder", "file"} or explicit_pack_mode.startswith("-"):
+    if explicit_pack_mode in {"folder", "file", "exfat"} or explicit_pack_mode.startswith("-"):
         return argv
 
     source_path: Path = Path(explicit_pack_mode).expanduser()
