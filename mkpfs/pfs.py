@@ -5276,7 +5276,7 @@ class PFSImageInfo(PFSOperationResult):
 
     @property
     def version_label(self) -> str:
-        """Return the human-friendly version label."""
+        """The human-friendly version label."""
         if self.header is None:
             return ""
         return "PS5" if self.header.version == consts.PFS_VERSION_PS5 else "PS4"
@@ -5325,7 +5325,7 @@ class PFSImageInspection(PFSImageInfo):
 
     @property
     def has_tree(self) -> bool:
-        """Return whether the inspection contains a parsed filesystem tree."""
+        """Whether the inspection contains a parsed filesystem tree."""
         return self.uroot_inode >= 0 and len(self.dirents_by_inode) > 0
 
 
