@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import __version__, consts
 from .ampr import ensure_ampr_index
+from .exfat import EXFAT_SIGNATURE, ExfatReader, render_exfat_tree
 from .exfat_writer import write_exfat_image
 from .logging import error, info, warning
 from .pbar import Progress
@@ -39,6 +40,7 @@ from .pfs import (
     extract_pfs_image,
     human_readable_size,
     inspect_pfs_image,
+    open_inner_file_view,
     parse_ekpfs_key_hex,
     parse_image_header,
     parse_image_inodes,
@@ -1760,6 +1762,26 @@ def _run_verify_check(
 
 def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
     image: Path = Path(args.image_file).expanduser().resolve()
+    ekpfs: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
+    new_crypt: bool = bool(getattr(args, "new_crypt", False))
+
+    # Deep mode: if the image wraps a single exFAT, list the files inside it.
+    if bool(getattr(args, "deep", False)):
+        opened = open_inner_file_view(image, ekpfs=ekpfs, new_crypt=new_crypt)
+        if opened is not None:
+            view, fh, _name = opened
+            try:
+                view.seek(0)
+                if view.read(len(EXFAT_SIGNATURE) + 3)[3:] == EXFAT_SIGNATURE:
+                    print_version_header()
+                    info("/")
+                    for line in render_exfat_tree(ExfatReader(view).root_entries()):
+                        info(line)
+                    return 0
+            finally:
+                fh.close()
+        info("--deep: no inner exFAT found; showing the image tree")
+
     errors: list[str]
     _warnings: list[str]
     tree: dict[int, list[ParsedDirent]]
@@ -1769,8 +1791,8 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
         source=None,
         print_tree=False,
         emit_report=False,
-        ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
-        new_crypt=bool(getattr(args, "new_crypt", False)),
+        ekpfs=ekpfs,
+        new_crypt=new_crypt,
         verify_payloads=False,
     )
     if errors:
@@ -2043,6 +2065,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
 
     ls_parser = sub.add_parser("tree", help="Print image tree representation")
     ls_parser.add_argument("image_file", help="Path to input .ffpfs image")
+    ls_parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="If the image wraps a single exFAT, list the files inside it",
+    )
     ls_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     ls_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
     ls_parser.set_defaults(func=cli_mkpfs_ls_run)

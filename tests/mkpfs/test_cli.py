@@ -2740,3 +2740,48 @@ class TestCliPackFolderExfat(CliTestCase):
             cli_mkpfs_main(
                 ["pack", "folder", str(src), str(out), "--exfat", "--signed", "--no-adjust-output-file-extension"]
             )
+
+
+class TestCliTreeDeep(CliTestCase):
+    """`tree --deep` lists files inside a wrapped exFAT."""
+
+    def _wrapped(self, tmp: Path) -> Path:
+        from mkpfs import consts
+        from mkpfs.pfs import build_pfs_stream_from_exfat
+
+        src = tmp / "game"
+        (src / "sce_sys").mkdir(parents=True)
+        (src / "sce_sys" / "param.json").write_text('{"titleId": "PPSA25872"}', encoding="utf-8")
+        (src / "eboot.bin").write_bytes(b"BOOT" * 100)
+        out = tmp / "game.ffpfsc"
+        build_pfs_stream_from_exfat(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=consts.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=6,
+            threshold_gain=0,
+        )
+        return out
+
+    def test_tree_deep_shows_inner_files(self) -> None:
+        tmp = self.make_temp_path()
+        out = self._wrapped(tmp)
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["tree", str(out), "--deep"])
+        self.assertEqual(rc, 0)
+        text = buf.getvalue()
+        self.assertIn("eboot.bin", text)
+        self.assertIn("sce_sys", text)
+        self.assertIn("param.json", text)
+
+    def test_tree_without_deep_shows_inner_image_name(self) -> None:
+        tmp = self.make_temp_path()
+        out = self._wrapped(tmp)
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["tree", str(out)])
+        self.assertEqual(rc, 0)
+        self.assertIn("PPSA25872.exfat", buf.getvalue())

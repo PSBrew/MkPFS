@@ -273,6 +273,26 @@ class ExfatReader:
             raise ExfatError(f"file '{entry.rel_path}' truncated: {remaining} bytes short")
 
 
+def render_exfat_tree(entries: list[ExfatEntry], prefix: str = "") -> list[str]:
+    """Render an exFAT directory tree as ASCII lines (directories first).
+
+    Args:
+        entries: Directory entries at one level (e.g. ``reader.root_entries()``).
+        prefix: Internal indentation prefix used during recursion.
+
+    Returns:
+        Lines using ``|-- `` / `` `-- `` branch markers, matching the PFS tree style.
+    """
+    lines: list[str] = []
+    ordered: list[ExfatEntry] = sorted(entries, key=lambda e: (not e.is_dir, e.name.lower(), e.name))
+    for idx, entry in enumerate(ordered):
+        last: bool = idx == len(ordered) - 1
+        lines.append(prefix + ("`-- " if last else "|-- ") + entry.name)
+        if entry.is_dir:
+            lines.extend(render_exfat_tree(entry.children, prefix + ("    " if last else "|   ")))
+    return lines
+
+
 def open_exfat(path: str) -> ExfatReader:
     """Open an exFAT image file for reading.
 
