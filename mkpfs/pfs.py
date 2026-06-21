@@ -5615,7 +5615,13 @@ def validate_source_paths(
         errors.append(f"source path does not exist or is not a directory: {source}")
         return None
 
-    source_files: list[Path] = sorted(path for path in source.rglob("*") if path.is_file())
+    # Exclude OS-generated metadata so the comparison matches what the packer
+    # writes (it drops the same junk), avoiding spurious "missing in image" errors.
+    source_files: list[Path] = sorted(
+        path
+        for path in source.rglob("*")
+        if path.is_file() and not any(is_ignored_name(part) for part in path.relative_to(source).parts)
+    )
     source_rel: set[str] = {path.relative_to(source).as_posix() for path in source_files}
     image_rel: set[str] = set(file_inodes.keys())
 

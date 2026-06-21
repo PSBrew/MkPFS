@@ -3402,3 +3402,24 @@ class TestZlibBackend(PfsTestCase):
         payload: bytes = bytes(header) + stored
         decoded: bytes = pfs_mod.decode_pfsc_payload(payload, expected_logical_size=lb)
         self.assertEqual(decoded, raw)
+
+
+class TestSourceMatchExcludesJunk(PfsTestCase):
+    """Source/image comparison must ignore OS metadata the packer excludes."""
+
+    def test_validate_source_paths_ignores_os_metadata(self) -> None:
+        root = self.make_temp_path()
+        (root / "sce_sys").mkdir()
+        (root / "sce_sys" / "param.json").write_text("{}", encoding="utf-8")
+        (root / "eboot.bin").write_bytes(b"x")
+        # Junk present in the source but (correctly) absent from the image.
+        (root / ".DS_Store").write_bytes(b"junk")
+        (root / "._eboot.bin").write_bytes(b"junk")
+        (root / "__MACOSX").mkdir()
+        (root / "__MACOSX" / "x").write_bytes(b"junk")
+
+        file_inodes = {"sce_sys/param.json": 4, "eboot.bin": 3}  # what a packed image would contain
+        errors: list[str] = []
+        common = pfs_mod.validate_source_paths(file_inodes=file_inodes, source=root, errors=errors)
+        self.assertEqual(errors, [])  # no "missing in image" for junk
+        self.assertEqual(set(common or []), {"sce_sys/param.json", "eboot.bin"})
