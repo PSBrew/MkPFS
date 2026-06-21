@@ -2694,3 +2694,49 @@ class TestCliPackExfat(CliTestCase):
         out = tmp / "x.exfat"
         with self.assertRaises(BuildError):
             cli_mkpfs_main(["pack", "exfat", str(src), str(out), "--cluster-size", "777"])
+
+
+class TestCliPackFolderExfat(CliTestCase):
+    """`pack folder --exfat` fuses folder -> exFAT -> .ffpfsc with no temp image."""
+
+    def _game(self, root: Path) -> Path:
+        src = root / "game"
+        (src / "sce_sys").mkdir(parents=True)
+        (src / "sce_sys" / "param.json").write_text('{"titleId": "PPSA25872"}', encoding="utf-8")
+        (src / "eboot.bin").write_bytes(b"BOOT" * 5000)
+        (src / "Media").mkdir()
+        (src / "Media" / "data.bin").write_bytes(bytes(range(256)) * 2000)
+        return src
+
+    def test_pack_folder_exfat_deep_round_trips(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "game.ffpfsc"
+        with (
+            patch.object(cli, "prompt_overwrite", return_value=True),
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc = cli_mkpfs_main(["pack", "folder", str(src), str(out), "--exfat", "--no-adjust-output-file-extension"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.exists())
+        # no temporary .exfat was produced anywhere under the temp tree
+        self.assertEqual([p for p in tmp.rglob("*.exfat")], [])
+        # deep-unpack reproduces the source tree
+        dest = tmp / "deep"
+        from mkpfs.pfs import extract_pfs_image
+
+        result = extract_pfs_image(image=out, output_path=dest, deep=True)
+        self.assertEqual(result.errors, [])
+        self.assertEqual((dest / "eboot.bin").read_bytes(), (src / "eboot.bin").read_bytes())
+        self.assertEqual((dest / "Media" / "data.bin").read_bytes(), (src / "Media" / "data.bin").read_bytes())
+        self.assertEqual((dest / "sce_sys" / "param.json").read_bytes(), (src / "sce_sys" / "param.json").read_bytes())
+
+    def test_pack_folder_exfat_rejects_signed(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "game.ffpfsc"
+        with patch.object(cli, "prompt_overwrite", return_value=True), self.assertRaises(BuildError):
+            cli_mkpfs_main(
+                ["pack", "folder", str(src), str(out), "--exfat", "--signed", "--no-adjust-output-file-extension"]
+            )

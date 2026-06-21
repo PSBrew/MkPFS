@@ -29,6 +29,7 @@ from .pfs import (
     PFSImageInspection,
     build_expected_fpt,
     build_pfs,
+    build_pfs_stream_from_exfat,
     build_pfs_stream_single_file,
     build_tree_from_uroot,
     choose_auto_fit_block_size,
@@ -1371,6 +1372,74 @@ def cli_mkpfs_pack_exfat_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
+    """Wrap a folder in an exFAT and compress it into a .ffpfsc in one pass.
+
+    Args:
+        args: Parsed pack-folder CLI arguments.
+        source_path: Resolved source directory.
+
+    Returns:
+        Process exit code.
+    """
+    output_path, output_changed = normalize_output_path(
+        args.image_file, ".ffpfsc", adjust=bool(getattr(args, "adjust_output_file_extension", True))
+    )
+    output_path = output_path.expanduser().resolve()
+    if output_changed:
+        info("exFAT wrapping mode enabled, adjusting output file extension to .ffpfsc")
+
+    if args.threshold_gain < 0 or args.threshold_gain > 100:
+        raise BuildError("--threshold-gain must be within 0..100")
+    if args.compression_level < 0 or args.compression_level > 9:
+        raise BuildError("--compression-level must be within 0..9")
+
+    case_insensitive: bool = args.case_insensitive or not args.case_sensitive
+    pfs_version: int = consts.PFS_VERSION_PS5 if args.version == "PS5" else consts.PFS_VERSION_PS4
+    encrypted: bool = bool(getattr(args, "encrypted", False))
+    new_crypt: bool = bool(getattr(args, "new_crypt", False))
+    ekpfs_key: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
+    if getattr(args, "ekpfs_key", None) and not encrypted:
+        raise BuildError("--ekpfs-key requires --encrypted")
+    if args.signed:
+        raise BuildError("--exfat wrapping does not support --signed images")
+
+    if not args.dry_run and not prompt_overwrite(output_path):
+        info("Operation cancelled.")
+        return 0
+    if args.dry_run:
+        info("--dry-run is not supported with --exfat; nothing written.")
+        return 0
+
+    stats: BuildStats = build_pfs_stream_from_exfat(
+        source_root=source_path,
+        output_path=output_path,
+        block_size=65536,
+        pfs_version=pfs_version,
+        case_insensitive=case_insensitive,
+        zlib_level=args.compression_level,
+        threshold_gain=args.threshold_gain,
+        encrypted=encrypted,
+        new_crypt=new_crypt,
+        ekpfs=ekpfs_key,
+        verbose=args.verbose,
+    )
+    stats.input_path = source_path
+    print_summary(stats)
+    if not args.verify:
+        return 0
+
+    info("Running post-create check...")
+    errors, warnings, _tree, _uroot = run_image_check(
+        output_path, None, print_tree=False, ekpfs=ekpfs_key, new_crypt=new_crypt
+    )
+    for w in warnings:
+        warning(w)
+    for e in errors:
+        error(e)
+    return 1 if errors else 0
+
+
 def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     """Pack a folder into a PFS image.
 
@@ -1386,6 +1455,12 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     # is included in the image (only when an emulation build marker is present).
     if not args.dry_run:
         ensure_ampr_index(source_path, enabled=bool(getattr(args, "ampr_index", True)))
+
+    # Fused exFAT mode: wrap the folder in an exFAT and compress it into the
+    # .ffpfsc in one pass, with no temporary .exfat on disk.
+    if bool(getattr(args, "exfat", False)):
+        return _run_exfat_pack(args=args, source_path=source_path)
+
     title_id: str | None = _detect_title_id_from_source(source_path)
     desired_output_suffix: str = ".ffpfs" if title_id is not None else ".ffpfsc"
     output_adjustment_message: str
@@ -1863,6 +1938,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
 
     folder_parser = pack_sub.add_parser("folder", help="Build image from a source directory")
     cli_mkpfs_add_create_args(folder_parser)
+    folder_parser.add_argument(
+        "--exfat",
+        action="store_true",
+        help="Wrap the folder in an exFAT and compress it into the .ffpfsc in one pass (no temporary .exfat)",
+    )
     folder_parser.add_argument(
         "--no-ampr-index",
         dest="ampr_index",
