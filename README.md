@@ -366,7 +366,7 @@ mkpfs tree ./game.ffpfs
 ### `unpack`
 
 ```text
-mkpfs unpack [-h] [--overwrite] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file output_dir
+mkpfs unpack [-h] [--overwrite] [--ekpfs-key EKPFS_KEY] [--new-crypt] [--no-progress] image_file output_dir
 ```
 
 Examples:
@@ -384,6 +384,7 @@ mkpfs unpack ./game.ffpfs ./extracted/ --overwrite
 | `--overwrite` | Overwrite an existing output path. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
+| `--no-progress` | Disable the extraction progress bar on stderr. |
 
 
 ## 💻 Example Output

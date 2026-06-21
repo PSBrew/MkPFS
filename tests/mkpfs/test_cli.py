@@ -755,6 +755,33 @@ class TestCliOutputFormatting(CliTestCase):
         self.assertIn(cli.get_output_title(), output_text)
         self.assertIn("Extraction complete:", output_text)
 
+    def test_extract_run_disables_progress_with_no_progress_flag(self) -> None:
+        """The --no-progress flag should yield a disabled Progress reporter."""
+        extraction_result: PFSExtractionResult = PFSExtractionResult(
+            image=Path("img.ffpfs"),
+            output_path=Path("out"),
+        )
+        stdout_buffer: StringIO = StringIO()
+        with (
+            patch.object(cli, "extract_pfs_image", return_value=extraction_result) as mocked_extract,
+            redirect_stdout(stdout_buffer),
+        ):
+            exit_code: int = cli.cli_mkpfs_extract_run(
+                SimpleNamespace(
+                    image_file="img.ffpfs",
+                    output_dir="out",
+                    overwrite=True,
+                    ekpfs_key=None,
+                    new_crypt=False,
+                    no_progress=True,
+                )
+            )
+
+        self.assertEqual(exit_code, 0)
+        passed_progress: cli.Progress = mocked_extract.call_args.kwargs["progress"]
+        self.assertIsInstance(passed_progress, cli.Progress)
+        self.assertFalse(passed_progress.enabled)
+
 
 class TestCliCreateRun(CliTestCase):
     """Tests for pack command execution and validation branches."""

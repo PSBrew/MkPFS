@@ -1780,11 +1780,15 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
         info(f"output path {output_path} exists (use --overwrite to force)")
         return 2
 
+    # Stream extraction progress to stderr unless the caller opted out. The
+    # extract loop reports a per-file "extract" phase with byte throughput.
+    progress: Progress = Progress(enabled=not bool(getattr(args, "no_progress", False)))
+
     # Perform extraction via library API
     result: PFSExtractionResult = extract_pfs_image(
         image=image,
         output_path=output_path,
-        progress=None,
+        progress=progress,
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
         new_crypt=bool(getattr(args, "new_crypt", False)),
     )
@@ -1910,6 +1914,9 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     extract_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output path")
     extract_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     extract_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
+    extract_parser.add_argument(
+        "--no-progress", action="store_true", help="Disable the extraction progress bar on stderr"
+    )
     extract_parser.set_defaults(func=cli_mkpfs_extract_run)
 
     return parser
