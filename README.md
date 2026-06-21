@@ -37,16 +37,14 @@ python -m mkpfs pack file './BREW1234.exfat' './BREW1234.ffpfsc'
 # Creating Images: Option 2: .ffpkg -> .ffpfsc (Works with ShadowMountPlus) 
 python -m mkpfs pack file './BREW1234.ffpkg' './BREW1234.ffpfsc'
 
-# Creating Images: Option 3: Game folder wrapped twice into .ffpfsc (two-pass) (Works with ShadowMountPlus) 
-python -m mkpfs pack folder --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
-python -m mkpfs pack file './pfs_image.dat' './BREW1234.ffpfsc'
-rm './pfs_image.dat'
+# Creating Images: Option 3: Game folder -> .ffpfsc in one pass (default: exFAT-wrapped, no temp file)
+python -m mkpfs pack folder './BREW1234-app' './BREW1234.ffpfsc'
 
-# Creating Images: Option 4: Game folder without a wrapper (single-pass) (--no-compress) (Avoid; See Notes!)
-python -m mkpfs pack folder --no-compress './BREW1234-app/' './BREW1234.ffpfs'
+# Creating Images: Option 4: Game folder packed directly as PFS (advanced)
+python -m mkpfs pack folder --raw './BREW1234-app/' './BREW1234.ffpfs'
 
-# Extracting Existing Images (Reverse operation)
-python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
+# Extracting Existing Images (Reverse operation; --deep lists/extracts inside a wrapped exFAT)
+python -m mkpfs unpack './BREW1234.ffpfsc' './BREW1234-extracted/' --deep
 ```
 
 ## ⚠️ Limitations and Known Issues
@@ -166,8 +164,11 @@ Use `pack folder` to build from a directory tree, or `pack file` to treat one fi
 
 ### `pack folder`
 
+By default, `pack folder` wraps the folder in an exFAT image and compresses that into the `.ffpfsc` in a single pass, with no temporary `.exfat` on disk (the most PS-compatible layout). Use `--raw` to instead pack the folder directly into a PFS image.
+
 ```text
 mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file-extension]
+                  [--raw]
                   [--compress | --no-compress] [--threshold-gain THRESHOLD_GAIN]
                   [--block-size BLOCK_SIZE] [--version {PS4,PS5}] [--inode-bits {32,64}]
                   [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
@@ -193,6 +194,7 @@ mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 | `source_dir` | Source app or homebrew folder to pack.                                                                                                                                                                                                        |
 | `image_file` | Output image file path.                                                                                                                                                                                                                       |
 | `-h`, `--help` | Show help and exit.                                                                                                                                                                                                                           |
+| `--raw` | Pack the folder directly into a PFS image instead of the default exFAT-wrapped `.ffpfsc`.                                                                                                                                                      |
 | `--adjust-output-file-extension` | Automatically adjust the output extension to match the detected pack mode. This is the default.                                                                                                                                               |
 | `--no-adjust-output-file-extension` | Keep the requested output file name unchanged.                                                                                                                                                                                                |
 | `--compress` | Enable PFSC block compression. This is the default.                                                                                                                                                                                           |

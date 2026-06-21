@@ -18,7 +18,7 @@ from pathlib import Path
 from . import __version__, consts
 from .ampr import ensure_ampr_index
 from .exfat import EXFAT_SIGNATURE, ExfatReader, render_exfat_tree
-from .exfat_writer import write_exfat_image
+from .exfat_writer import iter_exfat_image, write_exfat_image
 from .logging import error, info, warning
 from .pbar import Progress
 from .pfs import (
@@ -1407,7 +1407,16 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
     )
 
     if args.dry_run:
-        info("--dry-run is not supported with --exfat; nothing written.")
+        size_box: list[int] = []
+        blocks = iter_exfat_image(source_path, on_layout=size_box.append)
+        try:
+            next(blocks)  # trigger the scan + layout to learn the inner exFAT size
+        finally:
+            blocks.close()
+        info(
+            f"Dry run: would wrap {source_path} into a {human_readable_size(size_box[0])} "
+            f"exFAT and compress it to {output_path}; nothing written."
+        )
         return 0
     if not prompt_overwrite(output_path):
         info("Operation cancelled.")
@@ -1459,9 +1468,9 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     if not args.dry_run:
         ensure_ampr_index(source_path, enabled=bool(getattr(args, "ampr_index", True)))
 
-    # Fused exFAT mode: wrap the folder in an exFAT and compress it into the
-    # .ffpfsc in one pass, with no temporary .exfat on disk.
-    if bool(getattr(args, "exfat", False)):
+    # Default: wrap the folder in an exFAT and compress it into the .ffpfsc in one
+    # pass, with no temporary .exfat. Use --raw to pack the folder directly as PFS.
+    if not bool(getattr(args, "raw", False)):
         return _run_exfat_pack(args=args, source_path=source_path)
 
     title_id: str | None = _detect_title_id_from_source(source_path)
@@ -1962,9 +1971,9 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     folder_parser = pack_sub.add_parser("folder", help="Build image from a source directory")
     cli_mkpfs_add_create_args(folder_parser)
     folder_parser.add_argument(
-        "--exfat",
+        "--raw",
         action="store_true",
-        help="Wrap the folder in an exFAT and compress it into the .ffpfsc in one pass (no temporary .exfat)",
+        help="Pack the folder directly into a PFS image instead of the default exFAT-wrapped .ffpfsc",
     )
     folder_parser.add_argument(
         "--no-ampr-index",

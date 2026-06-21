@@ -87,6 +87,8 @@ class CliTestCase(unittest.TestCase):
             verify=verify,
             verify_structure=True,
             skip_verification=False,
+            raw=True,  # exercise the direct PFS path; exFAT wrapping is the default
+            ampr_index=True,
         )
 
     def make_pack_file_args(
@@ -2612,7 +2614,16 @@ class TestCliAmprIndex(CliTestCase):
             redirect_stderr(StringIO()),
         ):
             rc: int = cli_mkpfs_main(
-                ["pack", "folder", str(source), str(out), "--no-compress", "--no-adjust-output-file-extension", *extra]
+                [
+                    "pack",
+                    "folder",
+                    str(source),
+                    str(out),
+                    "--raw",  # direct PFS so the index is a top-level entry for plain unpack
+                    "--no-compress",
+                    "--no-adjust-output-file-extension",
+                    *extra,
+                ]
             )
             if rc == 0:
                 cli_mkpfs_main(["unpack", str(out), str(dest)])
@@ -2697,7 +2708,7 @@ class TestCliPackExfat(CliTestCase):
 
 
 class TestCliPackFolderExfat(CliTestCase):
-    """`pack folder --exfat` fuses folder -> exFAT -> .ffpfsc with no temp image."""
+    """`pack folder` defaults to fusing folder -> exFAT -> .ffpfsc with no temp image."""
 
     def _game(self, root: Path) -> Path:
         src = root / "game"
@@ -2717,7 +2728,7 @@ class TestCliPackFolderExfat(CliTestCase):
             redirect_stdout(StringIO()),
             redirect_stderr(StringIO()),
         ):
-            rc = cli_mkpfs_main(["pack", "folder", str(src), str(out), "--exfat", "--no-adjust-output-file-extension"])
+            rc = cli_mkpfs_main(["pack", "folder", str(src), str(out), "--no-adjust-output-file-extension"])
         self.assertEqual(rc, 0)
         self.assertTrue(out.exists())
         # no temporary .exfat was produced anywhere under the temp tree
@@ -2732,14 +2743,41 @@ class TestCliPackFolderExfat(CliTestCase):
         self.assertEqual((dest / "Media" / "data.bin").read_bytes(), (src / "Media" / "data.bin").read_bytes())
         self.assertEqual((dest / "sce_sys" / "param.json").read_bytes(), (src / "sce_sys" / "param.json").read_bytes())
 
-    def test_pack_folder_exfat_rejects_signed(self) -> None:
+    def test_pack_folder_default_rejects_signed(self) -> None:
         tmp = self.make_temp_path()
         src = self._game(tmp)
         out = tmp / "game.ffpfsc"
         with patch.object(cli, "prompt_overwrite", return_value=True), self.assertRaises(BuildError):
-            cli_mkpfs_main(
-                ["pack", "folder", str(src), str(out), "--exfat", "--signed", "--no-adjust-output-file-extension"]
+            cli_mkpfs_main(["pack", "folder", str(src), str(out), "--signed", "--no-adjust-output-file-extension"])
+
+    def test_pack_folder_raw_uses_direct_pfs(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "game.ffpfs"
+        with (
+            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp)) as mocked_build,
+            patch.object(cli, "build_pfs_stream_from_exfat", side_effect=AssertionError("exFAT path should not run")),
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc = cli_mkpfs_main(
+                ["pack", "folder", str(src), str(out), "--raw", "--dry-run", "--no-adjust-output-file-extension"]
             )
+        self.assertEqual(rc, 0)
+        mocked_build.assert_called_once()
+
+    def test_pack_folder_default_dry_run_reports_without_writing(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "game.ffpfsc"
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(
+                ["pack", "folder", str(src), str(out), "--dry-run", "--no-adjust-output-file-extension"]
+            )
+        self.assertEqual(rc, 0)
+        self.assertFalse(out.exists())
+        self.assertIn("Dry run", buf.getvalue())
 
 
 class TestCliTreeDeep(CliTestCase):
