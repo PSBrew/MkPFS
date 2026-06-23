@@ -755,6 +755,24 @@ class TestCliOutputFormatting(CliTestCase):
         self.assertIn(cli.get_output_title(), output_text)
         self.assertIn("Extraction complete:", output_text)
 
+    def test_unpack_passes_progress_reporter_to_extraction(self) -> None:
+        """The unpack command drives a progress reporter through extraction."""
+        extraction_result: PFSExtractionResult = PFSExtractionResult(
+            image=Path("img.ffpfs"),
+            output_path=Path("out"),
+        )
+        with (
+            patch.object(cli, "extract_pfs_image", return_value=extraction_result) as mocked_extract,
+            redirect_stdout(StringIO()),
+        ):
+            exit_code: int = cli.cli_mkpfs_extract_run(
+                SimpleNamespace(
+                    image_file="img.ffpfs", output_dir="out", overwrite=True, ekpfs_key=None, new_crypt=False
+                )
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertIsNotNone(mocked_extract.call_args.kwargs["progress"])
+
 
 class TestCliCreateRun(CliTestCase):
     """Tests for pack command execution and validation branches."""

@@ -18,7 +18,6 @@ import struct
 import subprocess
 import time
 import uuid
-import zlib
 from collections.abc import Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -26,6 +25,7 @@ from pathlib import Path
 from typing import BinaryIO, Protocol
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from zlib_ng import zlib_ng as zlib
 
 from . import consts
 from .logging import info, warning
@@ -5409,6 +5409,7 @@ def inspect_pfs_image(
     expected_manifest_sha256: str | None = None,
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
+    verify_payloads: bool = True,
 ) -> PFSImageInspection:
     """Inspect a PFS image and collect structural validation details.
 
@@ -5419,6 +5420,8 @@ def inspect_pfs_image(
         expected_manifest_sha256: Optional expected manifest SHA256 digest.
         ekpfs: Optional EKPFS key material for encrypted images.
         new_crypt: When True, use the alternate newCrypt key derivation path.
+        verify_payloads: When False, skip the payload-content passes (checklist and
+            per-file hash verification); structural checks still run.
 
     Returns:
         A detailed inspection report with parsed tree data, warnings, and errors.
@@ -5482,46 +5485,50 @@ def inspect_pfs_image(
                 )
 
                 validate_fpt_maps(inspection.fpt_map, inspection.collision_map, expected_fpt, inspection.errors)
-                validate_ps5_checklist(
-                    fh,
-                    header,
-                    inodes,
-                    inspection.file_inodes,
-                    inspection.warnings,
-                    inspection.errors,
-                    ekpfs=ekpfs,
-                    new_crypt=new_crypt,
-                )
 
-                try:
-                    (
-                        inspection.checked_files,
-                        inspection.data_crc32,
-                        inspection.manifest_sha256,
-                    ) = verify_file_payload_hashes(
+                # Payload-content passes (decode every file). Skipped for callers that
+                # only need structure, such as unpack, which decodes once while writing.
+                if verify_payloads:
+                    validate_ps5_checklist(
                         fh,
                         header,
                         inodes,
                         inspection.file_inodes,
+                        inspection.warnings,
                         inspection.errors,
                         ekpfs=ekpfs,
                         new_crypt=new_crypt,
                     )
-                except (OSError, ValueError) as exc:
-                    inspection.errors.append(f"failed to verify file payload hashes: {exc}")
 
-                if expected_crc32 is not None and inspection.data_crc32 != expected_crc32:
-                    inspection.errors.append(
-                        f"CRC32 mismatch: actual 0x{inspection.data_crc32:08X}, expected 0x{expected_crc32:08X}"
-                    )
-                if (
-                    expected_manifest_sha256 is not None
-                    and inspection.manifest_sha256.lower() != expected_manifest_sha256.lower()
-                ):
-                    inspection.errors.append(
-                        "Manifest SHA256 mismatch: actual "
-                        f"{inspection.manifest_sha256}, expected {expected_manifest_sha256.lower()}"
-                    )
+                    try:
+                        (
+                            inspection.checked_files,
+                            inspection.data_crc32,
+                            inspection.manifest_sha256,
+                        ) = verify_file_payload_hashes(
+                            fh,
+                            header,
+                            inodes,
+                            inspection.file_inodes,
+                            inspection.errors,
+                            ekpfs=ekpfs,
+                            new_crypt=new_crypt,
+                        )
+                    except (OSError, ValueError) as exc:
+                        inspection.errors.append(f"failed to verify file payload hashes: {exc}")
+
+                    if expected_crc32 is not None and inspection.data_crc32 != expected_crc32:
+                        inspection.errors.append(
+                            f"CRC32 mismatch: actual 0x{inspection.data_crc32:08X}, expected 0x{expected_crc32:08X}"
+                        )
+                    if (
+                        expected_manifest_sha256 is not None
+                        and inspection.manifest_sha256.lower() != expected_manifest_sha256.lower()
+                    ):
+                        inspection.errors.append(
+                            "Manifest SHA256 mismatch: actual "
+                            f"{inspection.manifest_sha256}, expected {expected_manifest_sha256.lower()}"
+                        )
 
                 reachable = (
                     set(inspection.file_inodes.values())
@@ -5627,7 +5634,11 @@ def extract_pfs_image(
         A structured extraction result.
     """
     result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
-    inspection: PFSImageInspection = inspect_pfs_image(image=image, ekpfs=ekpfs, new_crypt=new_crypt)
+    # Structure only: extraction decodes each payload once while writing, so the
+    # upfront payload-hash verification would be a redundant second decode.
+    inspection: PFSImageInspection = inspect_pfs_image(
+        image=image, ekpfs=ekpfs, new_crypt=new_crypt, verify_payloads=False
+    )
     result.warnings.extend(inspection.warnings)
     result.errors.extend(inspection.errors)
 
@@ -5672,8 +5683,15 @@ def extract_pfs_image(
                     directory_target.mkdir(parents=True, exist_ok=False)
                     result.directories_created += 1
 
-            total_files: int = len(file_targets)
-            for index, (rel_path, file_target, inode_num) in enumerate(file_targets, start=1):
+            # Drive progress by logical bytes so a single large file shows smooth
+            # intra-file movement instead of one jump to 100% at the end.
+            total_bytes: int = sum(
+                max(0, inspection.inodes[inode_num].logical_size) for _rel, _target, inode_num in file_targets
+            )
+            progress_total: int = max(total_bytes, 1)
+            last_reported: int = 0
+            update_interval: int = 8 * 1024 * 1024
+            for rel_path, file_target, inode_num in file_targets:
                 inode: ParsedInode = inspection.inodes[inode_num]
                 file_target.parent.mkdir(parents=True, exist_ok=True)
                 # Stream logical blocks straight to disk to keep memory flat for large files.
@@ -5684,14 +5702,22 @@ def extract_pfs_image(
                         ):
                             out_fh.write(chunk)
                             result.bytes_written += len(chunk)
+                            if progress is not None and result.bytes_written - last_reported >= update_interval:
+                                last_reported = result.bytes_written
+                                progress.step(
+                                    "extract",
+                                    min(result.bytes_written, total_bytes),
+                                    progress_total,
+                                    bytes_processed=result.bytes_written,
+                                )
                 except ValueError as exc:
                     result.errors.append(f"failed to decode file '{rel_path}' payload: {exc}")
                     return result
 
                 result.files_written += 1
 
-                if progress is not None:
-                    progress.step("extract", index, total_files, bytes_processed=result.bytes_written)
+            if progress is not None:
+                progress.step("extract", progress_total, progress_total, bytes_processed=result.bytes_written)
     except (OSError, ValueError) as exc:
         result.errors.append(f"failed to extract image: {exc}")
 

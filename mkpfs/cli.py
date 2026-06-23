@@ -1789,7 +1789,7 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
     result: PFSExtractionResult = extract_pfs_image(
         image=image,
         output_path=output_path,
-        progress=None,
+        progress=Progress(enabled=True),
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
         new_crypt=bool(getattr(args, "new_crypt", False)),
     )
