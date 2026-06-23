@@ -2593,3 +2593,51 @@ class TestCliTreeStructureOnly(CliTestCase):
         self.assertEqual(rc, 0)
         mock_verify.assert_not_called()
         self.assertIn("blob.exfat", buffer.getvalue())
+
+
+class TestCliAmprIndex(CliTestCase):
+    """Folder packing generates ampr_emu.index when the emulation marker is present."""
+
+    def _make_emu_source(self, root: Path) -> Path:
+        source: Path = root / "game"
+        (source / "fakelib").mkdir(parents=True)
+        (source / "fakelib" / "libSceAmpr.sprx").write_bytes(b"\x00" * 16)
+        (source / "data.bin").write_bytes(b"PAYLOAD" * 1000)
+        return source
+
+    def _pack_unpack(self, source: Path, out: Path, dest: Path, extra: list[str]) -> int:
+        with (
+            patch.object(cli, "prompt_overwrite", return_value=True),
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc: int = cli_mkpfs_main(
+                ["pack", "folder", str(source), str(out), "--no-compress", "--no-adjust-output-file-extension", *extra]
+            )
+            if rc == 0:
+                cli_mkpfs_main(["unpack", str(out), str(dest)])
+        return rc
+
+    def test_pack_folder_generates_ampr_index_into_image(self) -> None:
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        rc: int = self._pack_unpack(source, out, dest, extra=[])
+        self.assertEqual(rc, 0)
+        # Written into the source tree...
+        self.assertTrue((source / "ampr_emu.index").exists())
+        # ...and therefore present inside the unpacked image, with the right magic.
+        extracted: Path = dest / "ampr_emu.index"
+        self.assertTrue(extracted.exists())
+        self.assertEqual(extracted.read_bytes()[:8], b"AMPRIDX3")
+
+    def test_no_ampr_index_flag_suppresses_generation(self) -> None:
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        rc: int = self._pack_unpack(source, out, dest, extra=["--no-ampr-index"])
+        self.assertEqual(rc, 0)
+        self.assertFalse((source / "ampr_emu.index").exists())
+        self.assertFalse((dest / "ampr_emu.index").exists())

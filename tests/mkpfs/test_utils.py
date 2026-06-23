@@ -82,3 +82,31 @@ class TestUtilityFileHelpers(unittest.TestCase):
         truncated: BytesIO = BytesIO(b"abc")
         with self.assertRaises(ValueError):
             utils._read_exact(truncated, 0, 10)
+
+
+class TestIgnoredNames(unittest.TestCase):
+    """OS metadata filenames must be recognized for exclusion from packing/indexing."""
+
+    def test_macos_junk_is_ignored(self) -> None:
+        for name in (".DS_Store", "._payload.bin", ".Spotlight-V100", ".Trashes", ".fseventsd", "__MACOSX"):
+            self.assertTrue(utils.is_ignored_name(name), name)
+
+    def test_windows_junk_is_ignored_case_insensitively(self) -> None:
+        for name in (
+            "Thumbs.db",
+            "thumbs.db",
+            "desktop.ini",
+            "Desktop.ini",
+            "$RECYCLE.BIN",
+            "System Volume Information",
+        ):
+            self.assertTrue(utils.is_ignored_name(name), name)
+
+    def test_regular_names_are_kept(self) -> None:
+        for name in ("eboot.bin", "data.pkg", "sce_sys", "._notjunk_but_real"[2:], "ds_store.txt"):
+            self.assertFalse(utils.is_ignored_name(name), name)
+
+    def test_appledouble_prefix_only_matches_dot_underscore(self) -> None:
+        self.assertTrue(utils.is_ignored_name("._foo"))
+        self.assertFalse(utils.is_ignored_name("_foo"))
+        self.assertFalse(utils.is_ignored_name(".foo"))

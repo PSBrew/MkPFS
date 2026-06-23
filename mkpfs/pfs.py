@@ -30,7 +30,14 @@ from zlib_ng import zlib_ng as zlib
 from . import consts
 from .logging import info, warning
 from .pbar import Progress
-from .utils import _read_exact, ceil_div, human_readable_size, read_param_json, resolve_temp_root
+from .utils import (
+    _read_exact,
+    ceil_div,
+    human_readable_size,
+    is_ignored_name,
+    read_param_json,
+    resolve_temp_root,
+)
 
 PFSC_PROGRESS_REPORT_BYTES: int = consts.PFSC_LOGICAL_BLOCK_SIZE * 16
 PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE: int = 256 * 1024 * 1024
@@ -2523,7 +2530,13 @@ def scan_source_tree(root: Path, progress: Progress) -> tuple[dict[str, DirNode]
         by relative path and total_files is the number of files discovered.
     """
     progress.status("\nDiscovering files...")
-    abs_files: list[Path] = [p for p in root.rglob("*") if p.is_file()]
+    # Exclude OS-generated metadata (.DS_Store, ._*, Thumbs.db, __MACOSX, ...) so it
+    # never ends up in the image, including files nested under an ignored directory.
+    abs_files: list[Path] = [
+        p
+        for p in root.rglob("*")
+        if p.is_file() and not any(is_ignored_name(part) for part in p.relative_to(root).parts)
+    ]
     abs_files.sort(key=lambda p: p.relative_to(root).as_posix().lower())
 
     # Validate filenames before compression work begins; non-ASCII names are unsupported.
