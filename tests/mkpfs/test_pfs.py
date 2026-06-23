@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import mkpfs.consts as c
 import mkpfs.pfs as pfs_mod
@@ -3286,3 +3286,98 @@ class TestVerifyProgress(PfsTestCase):
         # Final verify update reaches 100% (done == total == logical size).
         self.assertEqual(verify_calls[-1][1], verify_calls[-1][2])
         self.assertEqual(verify_calls[-1][2], len(payload))
+
+
+class TestExtractOptimization(PfsTestCase):
+    """Unpack should decode each payload once and report progress."""
+
+    def _build(self, tmp_path: Path, payload: bytes) -> Path:
+        src: Path = tmp_path / "blob.exfat"
+        src.write_bytes(payload)
+        out: Path = tmp_path / "blob.ffpfsc"
+        pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+        )
+        return out
+
+    def test_extract_skips_payload_verification(self) -> None:
+        """Extraction must not run the payload hash pass; it decodes once to write."""
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = (b"GAMEDATA" * 4000) + b"\x00" * 200_000
+        out: Path = self._build(tmp_path, payload)
+        dest: Path = tmp_path / "u"
+        with patch.object(pfs_mod, "verify_file_payload_hashes") as mock_verify:
+            result = extract_pfs_image(image=out, output_path=dest)
+        self.assertEqual(result.errors, [])
+        mock_verify.assert_not_called()
+        self.assertEqual((dest / "blob.exfat").read_bytes(), payload)
+
+    def test_extract_reports_progress(self) -> None:
+        """Extraction drives an 'extract' progress phase when a reporter is supplied."""
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = (b"GAMEDATA" * 4000) + b"\x00" * 200_000
+        out: Path = self._build(tmp_path, payload)
+        dest: Path = tmp_path / "u"
+        progress = MagicMock()
+        result = extract_pfs_image(image=out, output_path=dest, progress=progress)
+        self.assertEqual(result.errors, [])
+        phases = [call.args[0] for call in progress.step.call_args_list]
+        self.assertIn("extract", phases)
+
+    def test_extract_reports_incremental_progress_for_large_file(self) -> None:
+        """A single large file should produce multiple extract updates, not just one at the end."""
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = b"GAMEDATA" * (2 * 1024 * 1024)  # 16 MiB logical, highly compressible
+        out: Path = self._build(tmp_path, payload)
+        dest: Path = tmp_path / "u"
+        progress = MagicMock()
+        result = extract_pfs_image(image=out, output_path=dest, progress=progress)
+        self.assertEqual(result.errors, [])
+        extract_calls = [call for call in progress.step.call_args_list if call.args[0] == "extract"]
+        self.assertGreaterEqual(len(extract_calls), 2)
+        last = extract_calls[-1]
+        self.assertEqual(last.args[1], last.args[2])  # reaches 100%
+        self.assertEqual(last.args[2], len(payload))  # progress is byte-based, not file-count-based
+
+
+class TestZlibBackend(PfsTestCase):
+    """The compression backend is zlib-ng but stays format-compatible with stdlib zlib."""
+
+    def test_decode_accepts_stdlib_zlib_compressed_block(self) -> None:
+        """A PFSC payload whose block was compressed by stdlib zlib still decodes."""
+        import struct
+        import zlib as stdlib_zlib
+
+        lb: int = c.PFSC_LOGICAL_BLOCK_SIZE
+        raw: bytes = (b"OLD-IMAGE-DATA" * 6000).ljust(lb, b"\x00")[:lb]
+        stored: bytes = stdlib_zlib.compress(raw, 9)  # produced by the previous backend
+        header_size: int = pfs_mod._pfsc_header_size(block_count=1, logical_block_size=lb)
+        offsets: list[int] = [header_size, header_size + len(stored)]
+        header: bytearray = bytearray(header_size)
+        struct.pack_into(
+            "<iiiiqqQq",
+            header,
+            0,
+            c.PFSC_MAGIC,
+            c.PFSC_UNK4,
+            c.PFSC_UNK8,
+            lb,
+            lb,
+            c.PFSC_BLOCK_OFFSETS_OFFSET,
+            header_size,
+            lb,
+        )
+        struct.pack_into("<2Q", header, c.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
+        payload: bytes = bytes(header) + stored
+        decoded: bytes = pfs_mod.decode_pfsc_payload(payload, expected_logical_size=lb)
+        self.assertEqual(decoded, raw)
