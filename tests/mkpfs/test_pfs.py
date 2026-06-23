@@ -3309,6 +3309,7 @@ class TestScanExcludesOsMetadata(PfsTestCase):
         self.assertEqual(rels, {"sce_sys/param.json", "eboot.bin"})
         self.assertFalse(any("MACOSX" in r or "DS_Store" in r or r.startswith("._") or "Thumbs" in r for r in rels))
 
+
 class TestExtractOptimization(PfsTestCase):
     """Unpack should decode each payload once and report progress."""
 
