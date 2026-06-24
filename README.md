@@ -405,7 +405,7 @@ mkpfs tree ./game.ffpfsc --deep
 ### `unpack`
 
 ```text
-mkpfs unpack [-h] [--overwrite] [--deep] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file output_dir
+mkpfs unpack [-h] [--overwrite] [--deep] [--only PATH] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file output_dir
 ```
 
 Examples:
@@ -414,6 +414,7 @@ Examples:
 mkpfs unpack ./game.ffpfs ./extracted/
 mkpfs unpack ./game.ffpfs ./extracted/ --overwrite
 mkpfs unpack ./game.ffpfsc ./extracted/ --deep
+mkpfs unpack ./game.ffpfsc ./extracted/ --deep --only sce_sys --only eboot.bin
 ```
 
 | Parameter | Description |
@@ -423,6 +424,7 @@ mkpfs unpack ./game.ffpfsc ./extracted/ --deep
 | `-h`, `--help` | Show help and exit. |
 | `--overwrite` | Overwrite an existing output path. |
 | `--deep` | When the image wraps a single exFAT, extract the files inside it instead of the inner `.exfat`. |
+| `--only PATH` | With `--deep`, extract only this inner exFAT path (a file, or a folder and everything under it). Repeatable. Only the matching entries are read, so cherry-picking a few files from a large image is cheap. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 

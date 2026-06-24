@@ -775,6 +775,48 @@ class TestCliOutputFormatting(CliTestCase):
         self.assertEqual(exit_code, 0)
         self.assertIsNotNone(mocked_extract.call_args.kwargs["progress"])
 
+    def test_unpack_only_requires_deep(self) -> None:
+        """`--only` without `--deep` is rejected before any extraction runs."""
+        with patch.object(cli, "extract_pfs_image") as mocked_extract, redirect_stdout(StringIO()):
+            exit_code: int = cli.cli_mkpfs_extract_run(
+                SimpleNamespace(
+                    image_file="img.ffpfsc",
+                    output_dir="out",
+                    overwrite=True,
+                    ekpfs_key=None,
+                    new_crypt=False,
+                    deep=False,
+                    only=["sce_sys"],
+                )
+            )
+        self.assertEqual(exit_code, 2)
+        mocked_extract.assert_not_called()
+
+    def test_unpack_passes_selectors_with_deep(self) -> None:
+        """`--only` paths are forwarded to extraction when `--deep` is set."""
+        extraction_result: PFSExtractionResult = PFSExtractionResult(
+            image=Path("img.ffpfsc"),
+            output_path=Path("out"),
+        )
+        with (
+            patch.object(cli, "extract_pfs_image", return_value=extraction_result) as mocked_extract,
+            redirect_stdout(StringIO()),
+        ):
+            exit_code: int = cli.cli_mkpfs_extract_run(
+                SimpleNamespace(
+                    image_file="img.ffpfsc",
+                    output_dir="out",
+                    overwrite=True,
+                    ekpfs_key=None,
+                    new_crypt=False,
+                    deep=True,
+                    only=["sce_sys", "eboot.bin"],
+                )
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(mocked_extract.call_args.kwargs["selectors"], ["sce_sys", "eboot.bin"])
+        self.assertTrue(mocked_extract.call_args.kwargs["deep"])
+
 
 class TestCliCreateRun(CliTestCase):
     """Tests for pack command execution and validation branches."""

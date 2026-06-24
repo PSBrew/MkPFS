@@ -6178,17 +6178,40 @@ def _flatten_exfat_entries(entries: list[ExfatEntry]) -> tuple[list[ExfatEntry],
     return dirs, files
 
 
+def _normalize_extract_selectors(selectors: list[str] | None) -> list[str] | None:
+    """Normalize selector paths to POSIX-relative form, or None when unfiltered.
+
+    Args:
+        selectors: Raw selector strings, or None.
+
+    Returns:
+        A list of cleaned selectors (slashes normalized, leading/trailing slashes
+        and blanks dropped), or None when no usable selector remains.
+    """
+    if not selectors:
+        return None
+    cleaned: list[str] = []
+    for raw in selectors:
+        norm: str = raw.strip().replace("\\", "/").strip("/")
+        if norm:
+            cleaned.append(norm)
+    return cleaned or None
+
+
 def _extract_inner_exfat(
     image: Path,
     output_path: Path,
     progress: Progress | None,
     ekpfs: bytes | None,
     new_crypt: bool,
+    selectors: list[str] | None = None,
 ) -> PFSExtractionResult | None:
     """Extract the contents of an inner exFAT image, or None if there isn't one.
 
     Returns ``None`` (so the caller can fall back to normal unpack) when the image
-    is not a single inner file or that file is not an exFAT volume.
+    is not a single inner file or that file is not an exFAT volume. When
+    ``selectors`` is given, only files and directories matching one of the
+    selectors (by exact path or directory prefix) are written.
     """
     opened: tuple[_LogicalFileView, BinaryIO, str] | None = open_inner_file_view(
         image, ekpfs=ekpfs, new_crypt=new_crypt
@@ -6208,9 +6231,34 @@ def _extract_inner_exfat(
         output_path.mkdir(parents=True, exist_ok=True)
 
         dirs, files = _flatten_exfat_entries(reader.root_entries())
+
+        # Optional cherry-pick: keep only entries matching a selector (exact path
+        # or directory prefix). Each selected file's parents are created in the
+        # write loop, so here we only pre-create directories that match directly.
+        selectors_norm: list[str] | None = _normalize_extract_selectors(selectors)
+        matched: set[str] = set()
+
+        def _selected(rel_path: str) -> bool:
+            if selectors_norm is None:
+                return True
+            hit: bool = False
+            for sel in selectors_norm:
+                if rel_path == sel or rel_path.startswith(sel + "/"):
+                    matched.add(sel)
+                    hit = True
+            return hit
+
+        dirs = [d for d in dirs if _selected(d.rel_path)]
+        files = [f for f in files if _selected(f.rel_path)]
+
         for directory in dirs:
             (output_path / directory.rel_path).mkdir(parents=True, exist_ok=True)
             result.directories_created += 1
+
+        if selectors_norm is not None:
+            for sel in selectors_norm:
+                if sel not in matched:
+                    result.warnings.append(f"--only: no inner exFAT entry matched '{sel}'")
 
         total_bytes: int = sum(f.length for f in files)
         progress_total: int = max(total_bytes, 1)
@@ -6252,6 +6300,7 @@ def extract_pfs_image(
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
     deep: bool = False,
+    selectors: list[str] | None = None,
 ) -> PFSExtractionResult:
     """Extract all logical files from a PFS image.
 
@@ -6263,16 +6312,24 @@ def extract_pfs_image(
         new_crypt: When True, use the alternate newCrypt key derivation path.
         deep: When True and the image wraps a single inner exFAT, extract the
             files inside that exFAT instead of the inner image file itself.
+        selectors: Optional list of inner exFAT paths (files or directory
+            prefixes) to extract; when given, only matching entries are written.
+            Only honored together with ``deep``.
 
     Returns:
         A structured extraction result.
     """
     result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
 
+    if selectors and not deep:
+        result.warnings.append("path selection is only supported with --deep; extracting everything")
+
     # Deep mode: descend one level into a wrapped exFAT and extract its contents
     # with no temporary inner image. Falls back to a normal unpack otherwise.
     if deep:
-        deep_result: PFSExtractionResult | None = _extract_inner_exfat(image, output_path, progress, ekpfs, new_crypt)
+        deep_result: PFSExtractionResult | None = _extract_inner_exfat(
+            image, output_path, progress, ekpfs, new_crypt, selectors=selectors
+        )
         if deep_result is not None:
             return deep_result
         result.warnings.append("--deep: no inner exFAT found; extracting image contents as-is")

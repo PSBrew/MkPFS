@@ -1921,6 +1921,12 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
     """
     image: Path = Path(args.image_file).expanduser().resolve()
     output_path: Path = Path(args.output_dir).expanduser().resolve()
+    deep: bool = bool(getattr(args, "deep", False))
+    selectors: list[str] | None = getattr(args, "only", None)
+
+    if selectors and not deep:
+        info("--only requires --deep (it selects entries inside the wrapped exFAT)")
+        return 2
 
     if output_path.exists() and not args.overwrite:
         info(f"output path {output_path} exists (use --overwrite to force)")
@@ -1933,7 +1939,8 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
         progress=Progress(enabled=True),
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
         new_crypt=bool(getattr(args, "new_crypt", False)),
-        deep=bool(getattr(args, "deep", False)),
+        deep=deep,
+        selectors=selectors,
     )
 
     for w in result.warnings:
@@ -2093,6 +2100,12 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         "--deep",
         action="store_true",
         help="If the image wraps a single exFAT, extract the files inside it instead of the inner .exfat",
+    )
+    extract_parser.add_argument(
+        "--only",
+        action="append",
+        metavar="PATH",
+        help="With --deep, extract only this inner exFAT path (file or folder). Repeatable.",
     )
     extract_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     extract_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")

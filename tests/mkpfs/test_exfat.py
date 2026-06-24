@@ -164,6 +164,55 @@ class TestDeepUnpack(unittest.TestCase):
         self.assertEqual((out / "sub" / "inner.bin").read_bytes(), b"nested data here")
         self.assertEqual((out / "big.bin").read_bytes(), b"AB" * 5000)
 
+    def test_deep_extract_only_single_file(self) -> None:
+        from mkpfs.pfs import extract_pfs_image
+
+        tmp = self._make_tmp()
+        ffpfsc = self._wrap(tmp)
+        out = tmp / "only_file"
+        result = extract_pfs_image(image=ffpfsc, output_path=out, deep=True, selectors=["hello.txt"])
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.files_written, 1)
+        self.assertEqual((out / "hello.txt").read_bytes(), b"hello exfat")
+        self.assertFalse((out / "big.bin").exists())
+        self.assertFalse((out / "sub").exists())
+
+    def test_deep_extract_only_folder_prefix(self) -> None:
+        from mkpfs.pfs import extract_pfs_image
+
+        tmp = self._make_tmp()
+        ffpfsc = self._wrap(tmp)
+        out = tmp / "only_folder"
+        result = extract_pfs_image(image=ffpfsc, output_path=out, deep=True, selectors=["sub"])
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.files_written, 1)
+        self.assertEqual((out / "sub" / "inner.bin").read_bytes(), b"nested data here")
+        self.assertFalse((out / "hello.txt").exists())
+
+    def test_deep_extract_only_multiple_selectors(self) -> None:
+        from mkpfs.pfs import extract_pfs_image
+
+        tmp = self._make_tmp()
+        ffpfsc = self._wrap(tmp)
+        out = tmp / "only_multi"
+        result = extract_pfs_image(image=ffpfsc, output_path=out, deep=True, selectors=["hello.txt", "big.bin"])
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.files_written, 2)
+        self.assertEqual((out / "hello.txt").read_bytes(), b"hello exfat")
+        self.assertEqual((out / "big.bin").read_bytes(), b"AB" * 5000)
+        self.assertFalse((out / "sub").exists())
+
+    def test_deep_extract_only_warns_on_unmatched(self) -> None:
+        from mkpfs.pfs import extract_pfs_image
+
+        tmp = self._make_tmp()
+        ffpfsc = self._wrap(tmp)
+        out = tmp / "only_unmatched"
+        result = extract_pfs_image(image=ffpfsc, output_path=out, deep=True, selectors=["hello.txt", "does/not/exist"])
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.files_written, 1)
+        self.assertTrue(any("does/not/exist" in w for w in result.warnings))
+
     def test_deep_extract_encrypted(self) -> None:
         from mkpfs.pfs import extract_pfs_image
 
