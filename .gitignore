@@ -222,3 +222,5 @@ target/
 *.ffpfs
 *.exfat
 *.ffpkg
+/research/
+/scripts/replace-ypkg-key.py
