@@ -1373,7 +1373,12 @@ def cli_mkpfs_pack_exfat_run(args: argparse.Namespace) -> int:
     print_version_header()
     info(f"Building exFAT image from {source}")
     info(f"  Output: {target}")
-    written: Path = write_exfat_image(source, target, cluster_size=cluster_size, progress=Progress(enabled=True))
+    written: Path = write_exfat_image(
+        source,
+        target,
+        cluster_size=cluster_size,
+        progress=Progress(enabled=not bool(getattr(args, "no_progress", False))),
+    )
     info(f"Successfully wrote {human_readable_size(written.stat().st_size)} exFAT image: {written}")
     return 0
 
@@ -1974,7 +1979,7 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
         result: PFSExtractionResult = extract_exfat_image(
             image=image,
             output_path=output_path,
-            progress=Progress(enabled=True),
+            progress=Progress(enabled=not bool(getattr(args, "no_progress", False))),
         )
         for w in result.warnings:
             info(w)
@@ -1996,7 +2001,7 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
     result: PFSExtractionResult = extract_pfs_image(
         image=image,
         output_path=output_path,
-        progress=Progress(enabled=True),
+        progress=Progress(enabled=not bool(getattr(args, "no_progress", False))),
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
         new_crypt=bool(getattr(args, "new_crypt", False)),
         deep=deep,
@@ -2066,6 +2071,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     )
     exfat_parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output file")
     exfat_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    exfat_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the exFAT packing progress bar on stderr",
+    )
     exfat_parser.set_defaults(func=cli_mkpfs_pack_exfat_run)
 
     file_parser = pack_sub.add_parser("file", help="Build image from a single source file")
@@ -2195,6 +2205,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
             "Image format hint (auto: detect exFAT by extension/signature, "
             "pfs: force PFS handling, exfat: force exFAT handling)"
         ),
+    )
+    extract_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the extraction progress bar on stderr",
     )
     extract_parser.set_defaults(func=cli_mkpfs_extract_run)
 
