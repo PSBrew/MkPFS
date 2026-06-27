@@ -308,7 +308,7 @@ Notes:
 Build a raw exFAT image from a source directory, without compressing it into a `.ffpfsc`. This is useful when you want a standalone `.exfat` to inspect, mount, or pass to `pack file` later. The same exFAT layout is produced cross-platform, with no external `mkexfat` tooling required.
 
 ```text
-mkpfs pack exfat [-h] [--cluster-size CLUSTER_SIZE] [--overwrite] [--verbose] source_dir [output]
+mkpfs pack exfat [-h] [--cluster-size CLUSTER_SIZE] [--overwrite] [--verbose] [--no-progress] source_dir [output]
 ```
 
 Examples:
@@ -326,6 +326,8 @@ mkpfs pack exfat ./BREW1234-app          # auto-name <titleId>.exfat alongside t
 | `--cluster-size CLUSTER_SIZE` | exFAT cluster size in bytes or `auto`. Default: `auto` (32 KiB, or 64 KiB for trees with a large average file size). |
 | `--overwrite` | Overwrite an existing output file. |
 | `--verbose` | Print verbose output. |
+| `--no-progress` | Disable the packing progress bar on stderr. |
+| `--no-progress` | Disable the packing progress bar on stderr. |
 
 Notes:
 
@@ -411,7 +413,7 @@ mkpfs tree ./game.ffpfsc --deep
 ```text
 mkpfs unpack [-h] [--overwrite] [--deep] [--only PATH]
              [--ekpfs-key EKPFS_KEY] [--new-crypt]
-             [--format {auto,pfs,exfat}]
+             [--format {auto,pfs,exfat}] [--no-progress]
              image_file output_dir
 ```
 
@@ -436,6 +438,7 @@ mkpfs unpack ./BREW1234.exfat ./BREW1234-extracted/ --format exfat
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 | `--format {auto,pfs,exfat}` | Image format hint. `auto` (default) detects exFAT by extension/signature and treats everything else as PFS; `pfs` forces PFS handling; `exfat` forces exFAT handling. |
+| `--no-progress` | Disable the extraction progress bar on stderr. |
 
 
 ## 💻 Example Output
