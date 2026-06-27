@@ -549,7 +549,7 @@ uv run --frozen ruff format .
 uv run --frozen ruff check .
 ```
 
-## 💙 Special thanks and Contributors
+## 💙 Special thanks
 
 Special thanks to the people and communities helping shape MkPFS:
 
@@ -557,7 +557,12 @@ Special thanks to the people and communities helping shape MkPFS:
 - **Darkmor @ ShadowMountPlus**: creator of [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus), whose work helped inspire practical PFS mounting workflows
 - **The PlayStation and reverse-engineering community**: for tools, research threads, testing feedback, technical notes, and historical knowledge
 - **Community-maintained references and wiki pages**: especially the projects and archives that preserve PFS, PKG, and FPKG implementation details
-- **Special Code Contributors**: @Abdo-ka, @rdmrocha, @RenanGBarreto.
+
+## 💻 Contributors
+
+<a href="https://github.com/PSBrew/MkPFS/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=PSBrew/MkPFS" />
+</a>
 
 ## ⚠️ Disclaimer
 
