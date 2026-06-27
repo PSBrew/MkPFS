@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import itertools
 import json
 import multiprocessing as mp
 import os
@@ -18,9 +19,12 @@ import struct
 import subprocess
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
+from multiprocessing.pool import AsyncResult
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
@@ -28,11 +32,14 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from zlib_ng import zlib_ng as zlib
 
 from . import consts
+from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatReader
+from .exfat_writer import iter_exfat_image
 from .logging import info, warning
 from .pbar import Progress
 from .utils import (
     _read_exact,
     ceil_div,
+    default_image_basename,
     human_readable_size,
     is_ignored_name,
     read_param_json,
@@ -1375,6 +1382,150 @@ def _analyze_pfsc_file_storage(
     return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
 
 
+def _write_pfsc_header_and_offsets(
+    *,
+    out: BinaryIO,
+    base_offset: int,
+    block_count: int,
+    logical_block_size: int,
+    header_size: int,
+    offsets: list[int],
+) -> None:
+    """Write the PFSC header and block offset table at ``base_offset``."""
+    header: PFSCHeader = PFSCHeader(
+        magic=consts.PFSC_MAGIC,
+        unk4=consts.PFSC_UNK4,
+        unk8=consts.PFSC_UNK8,
+        logical_block_size=logical_block_size,
+        block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
+        data_offset=header_size,
+        data_length=block_count * logical_block_size,
+    )
+    header_area: bytearray = bytearray(header_size)
+    struct.pack_into(
+        "<iiiiqqQq",
+        header_area,
+        0,
+        header.magic,
+        header.unk4,
+        header.unk8,
+        header.logical_block_size,
+        header.logical_block_size,
+        header.block_offsets_offset,
+        header.data_offset,
+        header.data_length,
+    )
+    struct.pack_into(f"<{block_count + 1}Q", header_area, consts.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
+    out.seek(base_offset)
+    out.write(header_area)
+
+
+def _encode_pfsc_stream_into_handle(
+    *,
+    out: BinaryIO,
+    base_offset: int,
+    source_blocks: Iterator[bytes],
+    raw_size: int,
+    threshold_gain: int,
+    zlib_level: int,
+    logical_block_size: int,
+    cpu_count: int = 0,
+    progress_callback: Callable[[int], None] | None = None,
+) -> tuple[int, int]:
+    """Encode a forward byte stream into a PFSC payload at ``base_offset``.
+
+    Re-chunks ``source_blocks`` into logical blocks and compresses them across a
+    bounded thread pool (zlib-ng releases the GIL, so this scales across cores)
+    while writing results strictly in order; then backfills the header. The
+    payload is always PFSC-wrapped (a stream cannot be re-read for a whole-file
+    raw fallback). Memory stays bounded by the in-flight window.
+
+    Args:
+        out: Open writable and seekable output handle.
+        base_offset: Absolute byte offset where the PFSC payload begins.
+        source_blocks: Iterator yielding the raw payload bytes in order.
+        raw_size: Total raw payload size in bytes (must match the stream length).
+        threshold_gain: Minimum per-block gain percent to keep compressed bytes.
+        zlib_level: zlib compression level.
+        logical_block_size: PFSC logical block size.
+        cpu_count: Requested compression worker count (0 = auto).
+        progress_callback: Optional callback receiving processed raw byte deltas.
+
+    Returns:
+        Tuple ``(stored_size, hypothetical_all_compressed_size)``.
+
+    Raises:
+        BuildError: If the stream length does not match ``raw_size``.
+    """
+    block_count: int = ceil_div(raw_size, logical_block_size)
+    header_size: int = _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size)
+    offsets: list[int] = [header_size]
+    all_compressed_size: int = 0
+    emitted_blocks: int = 0
+    out.seek(base_offset + header_size)
+
+    def _compress(raw_block: bytes) -> tuple[int, bytes, bytes]:
+        padded: bytes = raw_block.ljust(logical_block_size, b"\x00")
+        return len(raw_block), padded, zlib.compress(padded, level=zlib_level)
+
+    def _write(result: tuple[int, bytes, bytes]) -> None:
+        nonlocal all_compressed_size, emitted_blocks
+        raw_len, padded, compressed = result
+        all_compressed_size += len(compressed)
+        gain_pct: float = ((len(padded) - len(compressed)) / len(padded)) * 100.0
+        store_compressed: bool = _should_store_pfsc_block_compressed(
+            compressed_block_size=len(compressed),
+            logical_block_size=logical_block_size,
+            gain_pct=gain_pct,
+            threshold_gain=threshold_gain,
+        )
+        selected: bytes = compressed if store_compressed else padded
+        out.write(selected)
+        offsets.append(offsets[-1] + len(selected))
+        emitted_blocks += 1
+        if progress_callback is not None:
+            progress_callback(raw_len)
+
+    def _iter_logical_blocks() -> Iterator[bytes]:
+        buffer: bytearray = bytearray()
+        for piece in source_blocks:
+            buffer += piece
+            while len(buffer) >= logical_block_size:
+                yield bytes(buffer[:logical_block_size])
+                del buffer[:logical_block_size]
+        if buffer:
+            yield bytes(buffer)
+
+    workers: int = resolve_compression_worker_count(requested_cpu_count=cpu_count)
+    if workers <= 1:
+        for raw_block in _iter_logical_blocks():
+            _write(_compress(raw_block))
+    else:
+        # Compress up to ``workers * 4`` blocks ahead, writing results in submit order.
+        max_in_flight: int = workers * 4
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pending: deque[Future[tuple[int, bytes, bytes]]] = deque()
+            for raw_block in _iter_logical_blocks():
+                if len(pending) >= max_in_flight:
+                    _write(pending.popleft().result())
+                pending.append(pool.submit(_compress, raw_block))
+            while pending:
+                _write(pending.popleft().result())
+
+    if emitted_blocks != block_count:
+        raise BuildError(f"exFAT stream length mismatch: expected {block_count} blocks, got {emitted_blocks}")
+
+    _write_pfsc_header_and_offsets(
+        out=out,
+        base_offset=base_offset,
+        block_count=block_count,
+        logical_block_size=logical_block_size,
+        header_size=header_size,
+        offsets=offsets,
+    )
+    return offsets[-1], header_size + all_compressed_size
+
+
 def _encode_pfsc_into_handle(
     *,
     out: BinaryIO,
@@ -1450,31 +1601,44 @@ def _encode_pfsc_into_handle(
             logical_block_size=logical_block_size,
             zlib_level=zlib_level,
         )
+
+        def _write_block_result(result: tuple[bytes, bytes]) -> None:
+            nonlocal all_compressed_size, compressed_blocks
+            raw_chunk, compressed_chunk = result
+            padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
+            all_compressed_size += len(compressed_chunk)
+            gain_pct: float = ((logical_block_size - len(compressed_chunk)) / logical_block_size) * 100.0
+            store_compressed: bool = _should_store_pfsc_block_compressed(
+                compressed_block_size=len(compressed_chunk),
+                logical_block_size=logical_block_size,
+                gain_pct=gain_pct,
+                threshold_gain=threshold_gain,
+            )
+            selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
+            if store_compressed:
+                compressed_blocks += 1
+            out.write(selected_chunk)
+            offsets.append(offsets[-1] + len(selected_chunk))
+            if progress_callback is not None:
+                progress_callback(len(raw_chunk))
+
+        # Bound in-flight work to ``max_in_flight`` blocks and write results in
+        # submit order. An unbounded ``imap`` lets a fast compressor pool outrun
+        # the single writer and buffer finished blocks without limit, which OOMs
+        # on large, highly-compressible inputs; this window keeps memory flat.
+        max_in_flight: int = effective_block_workers * 4
         with mp.Pool(
             processes=effective_block_workers,
             initializer=_init_pfsc_block_worker_for_pool,
             initargs=(source_path,),
         ) as pool:
-            results_iter = pool.imap(_compress_pfsc_block_payload_worker, worker_args_iter, chunksize=1)
-            raw_chunk: bytes
-            compressed_chunk: bytes
-            for raw_chunk, compressed_chunk in results_iter:
-                padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-                all_compressed_size += len(compressed_chunk)
-                gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
-                store_compressed: bool = _should_store_pfsc_block_compressed(
-                    compressed_block_size=len(compressed_chunk),
-                    logical_block_size=logical_block_size,
-                    gain_pct=gain_pct,
-                    threshold_gain=threshold_gain,
-                )
-                selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
-                if store_compressed:
-                    compressed_blocks += 1
-                out.write(selected_chunk)
-                offsets.append(offsets[-1] + len(selected_chunk))
-                if progress_callback is not None:
-                    progress_callback(len(raw_chunk))
+            pending: deque[AsyncResult[tuple[bytes, bytes]]] = deque()
+            for worker_args in worker_args_iter:
+                if len(pending) >= max_in_flight:
+                    _write_block_result(pending.popleft().get())
+                pending.append(pool.apply_async(_compress_pfsc_block_payload_worker, (worker_args,)))
+            while pending:
+                _write_block_result(pending.popleft().get())
 
     encoded_payload_size: int = offsets[-1]
     hypothetical_all_compressed_size: int = header_size + all_compressed_size
@@ -1486,32 +1650,14 @@ def _encode_pfsc_into_handle(
         return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
 
     # Backfill the PFSC header and block offset table at the payload base.
-    header: PFSCHeader = PFSCHeader(
-        magic=consts.PFSC_MAGIC,
-        unk4=consts.PFSC_UNK4,
-        unk8=consts.PFSC_UNK8,
+    _write_pfsc_header_and_offsets(
+        out=out,
+        base_offset=base_offset,
+        block_count=block_count,
         logical_block_size=logical_block_size,
-        block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
-        data_offset=header_size,
-        data_length=block_count * logical_block_size,
+        header_size=header_size,
+        offsets=offsets,
     )
-    header_area: bytearray = bytearray(header_size)
-    struct.pack_into(
-        "<iiiiqqQq",
-        header_area,
-        0,
-        header.magic,
-        header.unk4,
-        header.unk8,
-        header.logical_block_size,
-        header.logical_block_size,
-        header.block_offsets_offset,
-        header.data_offset,
-        header.data_length,
-    )
-    struct.pack_into(f"<{block_count + 1}Q", header_area, consts.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
-    out.seek(base_offset)
-    out.write(header_area)
     return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
 
 
@@ -4104,6 +4250,298 @@ def build_pfs_stream_single_file(
     )
 
 
+def build_pfs_stream_from_exfat(
+    *,
+    source_root: Path,
+    output_path: Path,
+    block_size: int,
+    pfs_version: int,
+    case_insensitive: bool,
+    zlib_level: int,
+    threshold_gain: int,
+    cluster_size: int | None = None,
+    cpu_count: int = 0,
+    encrypted: bool = False,
+    new_crypt: bool = False,
+    ekpfs: bytes | None = None,
+    verbose: bool = False,
+) -> BuildStats:
+    """Pack a folder into a compressed PFS image with an inner exFAT, in one pass.
+
+    Wraps ``source_root`` in an exFAT volume and compresses that volume straight
+    into the PFS payload region with no temporary ``.exfat`` on disk: the exFAT
+    serializer streams forward into the PFSC encoder. The single inner file is
+    named ``<titleId>.exfat`` (from ``sce_sys/param.json``, else the folder name).
+
+    Args:
+        source_root: Source directory to wrap.
+        output_path: Final ``.ffpfsc`` path.
+        block_size: PFS filesystem block size in bytes.
+        pfs_version: PFS profile version.
+        case_insensitive: Whether to set the case-insensitive mode bit.
+        zlib_level: zlib compression level.
+        threshold_gain: Minimum per-block gain percent to keep PFSC blocks.
+        cluster_size: Optional inner exFAT cluster size (auto when omitted).
+        cpu_count: Requested compression worker count (0 = auto).
+        encrypted: Whether to encrypt filesystem blocks.
+        new_crypt: Whether to use the alternate EKPFS derivation.
+        ekpfs: Optional EKPFS key bytes.
+        verbose: Whether to emit a verbose per-file decision line.
+
+    Returns:
+        Build statistics for the completed image.
+    """
+    start: float = time.time()
+    progress: Progress = Progress(enabled=True)
+    if not source_root.is_dir():
+        raise BuildError(f"source must be an existing directory: {source_root}")
+    now: int = int(time.time())
+    resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)
+    seed: bytes = consts.ZERO_PFS_SEED
+    inner_name: str = f"{default_image_basename(source_root)}.exfat"
+
+    # Plan the exFAT layout to learn the inner payload size before laying out the
+    # PFS container, then stream the same image forward into the PFSC encoder.
+    size_box: list[int] = []
+    exfat_blocks: Iterator[bytes] = iter_exfat_image(source_root, cluster_size=cluster_size, on_layout=size_box.append)
+    first_chunk: bytes = next(exfat_blocks)
+    raw_size: int = size_box[0]
+    payload_stream: Iterator[bytes] = itertools.chain([first_chunk], exfat_blocks)
+
+    # Four-inode single-file PFS scaffolding (unsigned, contiguous).
+    super_root_inode = Inode(
+        number=0,
+        mode=consts.INODE_MODE_DIR | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_INTERNAL | consts.INODE_FLAG_READONLY,
+        size=block_size,
+        size_compressed=block_size,
+        blocks=1,
+        time_sec=now,
+    )
+    fpt_inode = Inode(
+        number=1,
+        mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_INTERNAL | consts.INODE_FLAG_READONLY,
+        size=0,
+        size_compressed=0,
+        blocks=1,
+        time_sec=now,
+    )
+    uroot_inode = Inode(
+        number=2,
+        mode=consts.INODE_MODE_DIR | consts.INODE_RX_ONLY,
+        nlink=3,
+        flags=consts.INODE_FLAG_READONLY,
+        size=block_size,
+        size_compressed=block_size,
+        blocks=1,
+        time_sec=now,
+    )
+    file_inode = Inode(
+        number=3,
+        mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_READONLY,
+        size=0,
+        size_compressed=0,
+        blocks=1,
+        time_sec=now,
+    )
+    inodes: list[Inode] = [super_root_inode, fpt_inode, uroot_inode, file_inode]
+
+    file_node = FileNode(
+        rel_path=inner_name, abs_path=source_root, parent_rel_dir="", name=inner_name, raw_size=raw_size
+    )
+    file_node.inode = file_inode
+    uroot_dir = DirNode(rel_dir="", name="", parent_rel_dir=None, children_files=[inner_name])
+    uroot_dir.inode = uroot_inode
+    inode_by_path: dict[str, Inode] = {"dir:": uroot_inode, f"file:{inner_name}": file_inode}
+    fpt_blob, _collision_blob, has_collision = make_fpt_and_collision_blob(
+        [uroot_dir], [file_node], inode_by_path, case_insensitive=case_insensitive
+    )
+    if has_collision:
+        raise BuildError("unexpected FPT collision in exFAT streaming builder")
+
+    uroot_dirents: list[Dirent] = [
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DOT, "."),
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DOTDOT, ".."),
+        Dirent(file_inode.number, consts.DIRENT_TYPE_FILE, inner_name),
+    ]
+    uroot_blob: bytes = b"".join(d.to_bytes() for d in uroot_dirents)
+    super_root_dirents: list[Dirent] = [
+        Dirent(fpt_inode.number, consts.DIRENT_TYPE_FILE, "flat_path_table"),
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DIRECTORY, "uroot"),
+    ]
+
+    inode_count: int = len(inodes)
+    inode_size: int = consts.INODE_D32_SIZE
+    inode_block_count: int = ceil_div(inode_count, block_size // inode_size)
+
+    ndblock: int = 1 + inode_block_count
+    super_root_inode.db[0] = ndblock
+    ndblock += super_root_inode.blocks
+    fpt_inode.size = len(fpt_blob)
+    fpt_inode.size_compressed = len(fpt_blob)
+    fpt_inode.blocks = max(1, ceil_div(len(fpt_blob), block_size))
+    fpt_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        fpt_inode.db[i] = -1
+    ndblock += fpt_inode.blocks
+    ndblock += 1
+    reserved_empty_blocks: set[int] = {ndblock - 1}
+    uroot_inode.blocks = max(1, ceil_div(len(uroot_blob), block_size))
+    uroot_inode.size = uroot_inode.blocks * block_size
+    uroot_inode.size_compressed = uroot_inode.size
+    uroot_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        uroot_inode.db[i] = -1
+    ndblock += uroot_inode.blocks
+    file_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        file_inode.db[i] = -1
+    payload_base: int = file_inode.db[0] * block_size
+
+    mode: int = compose_pfs_mode_with_options(
+        inode_bits=32, case_insensitive=case_insensitive, signed=False, encrypted=encrypted
+    )
+
+    progress.status(f"\nWrapping {source_root} into an exFAT and compressing to {output_path} (no temp image)...")
+    progress.status(f"Inner image: {inner_name} ({human_readable_size(raw_size)})")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path = Path(str(output_path) + ".tmp")
+    try:
+        with tmp_path.open("w+b") as out:
+            out.write(
+                _pack_pfs_header_block(
+                    block_size=block_size,
+                    pfs_version=pfs_version,
+                    mode=mode,
+                    nblock=1,
+                    inode_count=inode_count,
+                    final_ndblock=0,
+                    inode_block_count=inode_block_count,
+                    now=now,
+                    signed=False,
+                    encrypted=encrypted,
+                    seed=seed,
+                )
+            )
+            out.seek(block_size)
+            _write_inode_table(
+                out=out,
+                inodes=inodes,
+                signed=False,
+                signed_inode_bits=32,
+                block_size=block_size,
+                inode_size=inode_size,
+            )
+            out.seek(super_root_inode.db[0] * block_size)
+            for d in super_root_dirents:
+                out.write(d.to_bytes())
+            out.seek(fpt_inode.db[0] * block_size)
+            out.write(fpt_blob)
+            out.seek(uroot_inode.db[0] * block_size)
+            out.write(uroot_blob)
+
+            total_units: int = max(raw_size, 1)
+            processed: int = 0
+
+            def report(delta: int) -> None:
+                nonlocal processed
+                processed += delta
+                progress.step("compress", min(processed, total_units), total_units, bytes_processed=processed)
+
+            progress.status(f"\nCompressing inner exFAT ({human_readable_size(raw_size)})...")
+            stored_size, hypothetical_size = _encode_pfsc_stream_into_handle(
+                out=out,
+                base_offset=payload_base,
+                source_blocks=payload_stream,
+                raw_size=raw_size,
+                threshold_gain=threshold_gain,
+                zlib_level=zlib_level,
+                logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                cpu_count=cpu_count,
+                progress_callback=report,
+            )
+
+            file_inode.blocks = max(1, ceil_div(stored_size, block_size))
+            file_inode.size = stored_size
+            file_inode.flags = consts.INODE_FLAG_READONLY | consts.INODE_FLAG_COMPRESSED
+            file_inode.size_compressed = raw_size
+            final_ndblock: int = file_inode.db[0] + file_inode.blocks
+
+            validate_d32_ranges(inodes, final_ndblock)
+
+            out.seek(0)
+            out.write(
+                _pack_pfs_header_block(
+                    block_size=block_size,
+                    pfs_version=pfs_version,
+                    mode=mode,
+                    nblock=1,
+                    inode_count=inode_count,
+                    final_ndblock=final_ndblock,
+                    inode_block_count=inode_block_count,
+                    now=now,
+                    signed=False,
+                    encrypted=encrypted,
+                    seed=seed,
+                )
+            )
+            out.seek(block_size)
+            _write_inode_table(
+                out=out,
+                inodes=inodes,
+                signed=False,
+                signed_inode_bits=32,
+                block_size=block_size,
+                inode_size=inode_size,
+            )
+            out.truncate(final_ndblock * block_size)
+
+            if encrypted:
+                encrypt_image_filesystem(
+                    out,
+                    block_size=block_size,
+                    total_blocks=final_ndblock,
+                    ekpfs=resolved_ekpfs,
+                    seed=seed,
+                    new_crypt=new_crypt,
+                    skip_block_numbers=reserved_empty_blocks,
+                )
+
+        validate_image_quick(
+            tmp_path,
+            block_size,
+            mode,
+            pfs_version,
+            ekpfs=resolved_ekpfs if encrypted else None,
+            new_crypt=new_crypt,
+        )
+        shutil.move(str(tmp_path), str(output_path))
+        progress.status(f"Successfully wrote {human_readable_size(final_ndblock * block_size)} image")
+    except Exception:
+        if tmp_path.exists():
+            with suppress(FileNotFoundError):
+                tmp_path.unlink()
+        raise
+
+    return _single_file_build_stats(
+        source_file=source_root,
+        output_path=output_path,
+        raw_size=raw_size,
+        stored_size=stored_size,
+        is_compressed=True,
+        hypothetical_size=hypothetical_size,
+        block_size=block_size,
+        gain_pct=((raw_size - stored_size) / raw_size * 100.0) if raw_size else 0.0,
+        elapsed_seconds=time.time() - start,
+        verbose=verbose,
+    )
+
+
 def validate_image_quick(
     image_path: Path,
     expected_block_size: int,
@@ -5191,7 +5629,13 @@ def validate_source_paths(
         errors.append(f"source path does not exist or is not a directory: {source}")
         return None
 
-    source_files: list[Path] = sorted(path for path in source.rglob("*") if path.is_file())
+    # Exclude OS-generated metadata so the comparison matches what the packer
+    # writes (it drops the same junk), avoiding spurious "missing in image" errors.
+    source_files: list[Path] = sorted(
+        path
+        for path in source.rglob("*")
+        if path.is_file() and not any(is_ignored_name(part) for part in path.relative_to(source).parts)
+    )
     source_rel: set[str] = {path.relative_to(source).as_posix() for path in source_files}
     image_rel: set[str] = set(file_inodes.keys())
 
@@ -5614,12 +6058,263 @@ def verify_pfs_image(
     )
 
 
+class _LogicalFileView:
+    """Seekable, read-only view over one inode's logical payload.
+
+    Decodes PFSC blocks on demand (with a small LRU cache) so a consumer can
+    randomly seek into a compressed inner file without materializing it. Supports
+    the contiguous, unsigned layout produced by single-file packing; encryption is
+    handled transparently via :func:`read_image_bytes`.
+    """
+
+    _CACHE_BLOCKS: int = 16
+
+    def __init__(
+        self,
+        fh: BinaryIO,
+        header: ParsedHeader,
+        inode: ParsedInode,
+        ekpfs: bytes | None = None,
+        new_crypt: bool = False,
+    ) -> None:
+        self._fh: BinaryIO = fh
+        self._header: ParsedHeader = header
+        self._ekpfs: bytes | None = ekpfs
+        self._new_crypt: bool = new_crypt
+        self._base: int = inode.db[0] * header.block_size
+        self._compressed: bool = inode.is_compressed
+        self._size: int = inode.logical_size
+        self._pos: int = 0
+        self._cache: dict[int, bytes] = {}
+        self._order: list[int] = []
+        if self._compressed:
+            head: bytes = self._raw(self._base, consts.PFSC_HEADER_SIZE)
+            self._lbs, block_count, block_offsets_offset, _data_offset, _logical = _parse_pfsc_header(head)
+            offsets_blob: bytes = self._raw(self._base + block_offsets_offset, (block_count + 1) * 8)
+            self._offsets: list[int] = list(struct.unpack_from(f"<{block_count + 1}Q", offsets_blob, 0))
+
+    def _raw(self, offset: int, size: int) -> bytes:
+        return read_image_bytes(self._fh, self._header, offset, size, ekpfs=self._ekpfs, new_crypt=self._new_crypt)
+
+    def _decode_block(self, index: int) -> bytes:
+        cached: bytes | None = self._cache.get(index)
+        if cached is not None:
+            return cached
+        start: int = self._offsets[index]
+        stored: bytes = self._raw(self._base + start, self._offsets[index + 1] - start)
+        block: bytes = stored if len(stored) == self._lbs else zlib.decompress(stored)
+        self._cache[index] = block
+        self._order.append(index)
+        if len(self._order) > self._CACHE_BLOCKS:
+            self._cache.pop(self._order.pop(0), None)
+        return block
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 1:
+            offset += self._pos
+        elif whence == 2:
+            offset += self._size
+        self._pos = max(0, offset)
+        return self._pos
+
+    def tell(self) -> int:
+        return self._pos
+
+    def read(self, size: int = -1) -> bytes:
+        end: int = self._size if size is None or size < 0 else min(self._pos + size, self._size)
+        if end <= self._pos:
+            return b""
+        if not self._compressed:
+            data: bytes = self._raw(self._base + self._pos, end - self._pos)
+            self._pos += len(data)
+            return data
+        out: bytearray = bytearray()
+        pos: int = self._pos
+        while pos < end:
+            block_index: int = pos // self._lbs
+            within: int = pos % self._lbs
+            take: int = min(self._lbs - within, end - pos)
+            out += self._decode_block(block_index)[within : within + take]
+            pos += take
+        self._pos = pos
+        return bytes(out)
+
+
+def open_inner_file_view(
+    image: Path,
+    ekpfs: bytes | None = None,
+    new_crypt: bool = False,
+) -> tuple[_LogicalFileView, BinaryIO, str] | None:
+    """Open a seekable view over a single-file image's inner payload.
+
+    Args:
+        image: Input PFS image path.
+        ekpfs: Optional EKPFS key material for encrypted images.
+        new_crypt: When True, use the alternate newCrypt key derivation path.
+
+    Returns:
+        ``(view, file_handle, inner_name)`` when the image holds exactly one file
+        stored in the contiguous, unsigned layout; otherwise ``None``. The caller
+        owns and must close ``file_handle``.
+    """
+    inspection: PFSImageInspection = inspect_pfs_image(
+        image=image, ekpfs=ekpfs, new_crypt=new_crypt, verify_payloads=False
+    )
+    if inspection.errors or inspection.header is None or len(inspection.file_inodes) != 1:
+        return None
+    rel_name, inode_num = next(iter(inspection.file_inodes.items()))
+    inode: ParsedInode = inspection.inodes[inode_num]
+    if inode.db_sig or inode.ib_sig or inode.blocks <= 0 or inode.logical_size <= 0:
+        return None  # signed/scattered/empty payloads are not served by the on-demand view
+    fh: BinaryIO = image.open("rb")
+    try:
+        view: _LogicalFileView = _LogicalFileView(fh, inspection.header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
+    except Exception:
+        fh.close()
+        raise
+    return view, fh, rel_name
+
+
+def _flatten_exfat_entries(entries: list[ExfatEntry]) -> tuple[list[ExfatEntry], list[ExfatEntry]]:
+    """Split an exFAT entry tree into (directories, files), each depth-ordered."""
+    dirs: list[ExfatEntry] = []
+    files: list[ExfatEntry] = []
+
+    def _walk(nodes: list[ExfatEntry]) -> None:
+        for node in sorted(nodes, key=lambda n: n.rel_path.lower()):
+            if node.is_dir:
+                dirs.append(node)
+                _walk(node.children)
+            else:
+                files.append(node)
+
+    _walk(entries)
+    return dirs, files
+
+
+def _normalize_extract_selectors(selectors: list[str] | None) -> list[str] | None:
+    """Normalize selector paths to POSIX-relative form, or None when unfiltered.
+
+    Args:
+        selectors: Raw selector strings, or None.
+
+    Returns:
+        A list of cleaned selectors (slashes normalized, leading/trailing slashes
+        and blanks dropped), or None when no usable selector remains.
+    """
+    if not selectors:
+        return None
+    cleaned: list[str] = []
+    for raw in selectors:
+        norm: str = raw.strip().replace("\\", "/").strip("/")
+        if norm:
+            cleaned.append(norm)
+    return cleaned or None
+
+
+def _extract_inner_exfat(
+    image: Path,
+    output_path: Path,
+    progress: Progress | None,
+    ekpfs: bytes | None,
+    new_crypt: bool,
+    selectors: list[str] | None = None,
+) -> PFSExtractionResult | None:
+    """Extract the contents of an inner exFAT image, or None if there isn't one.
+
+    Returns ``None`` (so the caller can fall back to normal unpack) when the image
+    is not a single inner file or that file is not an exFAT volume. When
+    ``selectors`` is given, only files and directories matching one of the
+    selectors (by exact path or directory prefix) are written.
+    """
+    opened: tuple[_LogicalFileView, BinaryIO, str] | None = open_inner_file_view(
+        image, ekpfs=ekpfs, new_crypt=new_crypt
+    )
+    if opened is None:
+        return None
+    view, fh, _inner_name = opened
+    try:
+        view.seek(0)
+        if view.read(len(EXFAT_SIGNATURE) + 3)[3:] != EXFAT_SIGNATURE:
+            return None
+        reader: ExfatReader = ExfatReader(view)
+        result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
+        if output_path.exists() and not output_path.is_dir():
+            result.errors.append(f"output path exists and is not a directory: {output_path}")
+            return result
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        dirs, files = _flatten_exfat_entries(reader.root_entries())
+
+        # Optional cherry-pick: keep only entries matching a selector (exact path
+        # or directory prefix). Each selected file's parents are created in the
+        # write loop, so here we only pre-create directories that match directly.
+        selectors_norm: list[str] | None = _normalize_extract_selectors(selectors)
+        matched: set[str] = set()
+
+        def _selected(rel_path: str) -> bool:
+            if selectors_norm is None:
+                return True
+            hit: bool = False
+            for sel in selectors_norm:
+                if rel_path == sel or rel_path.startswith(sel + "/"):
+                    matched.add(sel)
+                    hit = True
+            return hit
+
+        dirs = [d for d in dirs if _selected(d.rel_path)]
+        files = [f for f in files if _selected(f.rel_path)]
+
+        for directory in dirs:
+            (output_path / directory.rel_path).mkdir(parents=True, exist_ok=True)
+            result.directories_created += 1
+
+        if selectors_norm is not None:
+            for sel in selectors_norm:
+                if sel not in matched:
+                    result.warnings.append(f"--only: no inner exFAT entry matched '{sel}'")
+
+        total_bytes: int = sum(f.length for f in files)
+        progress_total: int = max(total_bytes, 1)
+        last_reported: int = 0
+        update_interval: int = 8 * 1024 * 1024
+        if progress is not None:
+            progress.status(f"\nExtracting {len(files)} files from inner exFAT to {output_path}...")
+        for file_entry in files:
+            target: Path = output_path / file_entry.rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with target.open("wb") as out_fh:
+                    for chunk in reader.read_file(file_entry):
+                        out_fh.write(chunk)
+                        result.bytes_written += len(chunk)
+                        if progress is not None and result.bytes_written - last_reported >= update_interval:
+                            last_reported = result.bytes_written
+                            progress.step(
+                                "extract",
+                                min(result.bytes_written, total_bytes),
+                                progress_total,
+                                bytes_processed=result.bytes_written,
+                            )
+            except (OSError, ValueError) as exc:
+                result.errors.append(f"failed to extract '{file_entry.rel_path}': {exc}")
+                return result
+            result.files_written += 1
+        if progress is not None:
+            progress.step("extract", progress_total, progress_total, bytes_processed=result.bytes_written)
+        return result
+    finally:
+        fh.close()
+
+
 def extract_pfs_image(
     image: Path,
     output_path: Path,
     progress: Progress | None = None,
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
+    deep: bool = False,
+    selectors: list[str] | None = None,
 ) -> PFSExtractionResult:
     """Extract all logical files from a PFS image.
 
@@ -5629,11 +6324,30 @@ def extract_pfs_image(
         progress: Optional progress reporter.
         ekpfs: Optional EKPFS key material for encrypted images.
         new_crypt: When True, use the alternate newCrypt key derivation path.
+        deep: When True and the image wraps a single inner exFAT, extract the
+            files inside that exFAT instead of the inner image file itself.
+        selectors: Optional list of inner exFAT paths (files or directory
+            prefixes) to extract; when given, only matching entries are written.
+            Only honored together with ``deep``.
 
     Returns:
         A structured extraction result.
     """
     result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
+
+    if selectors and not deep:
+        result.warnings.append("path selection is only supported with --deep; extracting everything")
+
+    # Deep mode: descend one level into a wrapped exFAT and extract its contents
+    # with no temporary inner image. Falls back to a normal unpack otherwise.
+    if deep:
+        deep_result: PFSExtractionResult | None = _extract_inner_exfat(
+            image, output_path, progress, ekpfs, new_crypt, selectors=selectors
+        )
+        if deep_result is not None:
+            return deep_result
+        result.warnings.append("--deep: no inner exFAT found; extracting image contents as-is")
+
     # Structure only: extraction decodes each payload once while writing, so the
     # upfront payload-hash verification would be a redundant second decode.
     inspection: PFSImageInspection = inspect_pfs_image(

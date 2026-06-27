@@ -37,24 +37,25 @@ python -m mkpfs pack file './BREW1234.exfat' './BREW1234.ffpfsc'
 # Creating Images: Option 2: .ffpkg -> .ffpfsc (Works with ShadowMountPlus) 
 python -m mkpfs pack file './BREW1234.ffpkg' './BREW1234.ffpfsc'
 
-# Creating Images: Option 3: Game folder wrapped twice into .ffpfsc (two-pass) (Works with ShadowMountPlus) 
-python -m mkpfs pack folder --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
-python -m mkpfs pack file './pfs_image.dat' './BREW1234.ffpfsc'
-rm './pfs_image.dat'
+# Creating Images: Option 3: Game folder -> .ffpfsc in one pass (default: exFAT-wrapped, no temp file)
+python -m mkpfs pack folder './BREW1234-app' './BREW1234.ffpfsc'
 
-# Creating Images: Option 4: Game folder without a wrapper (single-pass) (--no-compress) (Avoid; See Notes!)
-python -m mkpfs pack folder --no-compress './BREW1234-app/' './BREW1234.ffpfs'
+# Creating Images: Option 4: Game folder packed directly as PFS (advanced)
+python -m mkpfs pack folder --raw './BREW1234-app/' './BREW1234.ffpfs'
 
-# Extracting Existing Images (Reverse operation)
-python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
+# Extracting Existing Images (Reverse operation; --deep lists/extracts inside a wrapped exFAT)
+python -m mkpfs unpack './BREW1234.ffpfsc' './BREW1234-extracted/' --deep
 ```
 
 ## ⚠️ Limitations and Known Issues
 
-- `exfat->ffpfsc` is currently the most stable format for compressed game backups.
-- Packing an application folder directly into an image without a wrapper (single-pass) does not work when 
-  file compression is enabled. Although the image is created and verification passes, the console reads the files 
-  incorrectly due to technical limitations, so this option provides no practical benefit.
+- `exfat->ffpfsc` is the most stable format for compressed game backups. `pack folder` produces this layout by
+  default: it wraps the folder in an exFAT image and compresses that into the `.ffpfsc` in a single pass, with no
+  temporary `.exfat` on disk.
+- `pack folder --raw` packs the folder directly into a PFS image without the exFAT wrapper. When file compression is
+  enabled, the image is created and verification passes, but the console reads the files incorrectly due to technical
+  limitations, so this advanced option provides no practical benefit for game backups. Prefer the default wrapped
+  layout.
 - With the default `--block-size 65536`, very small files can cause significant block-alignment waste, which may make
   the resulting image larger than the source in corner cases.
     - For small-file-heavy folders, prefer the two-pass strategy (`raw-folder -> .dat -> .ffpfsc`) or try a smaller
@@ -159,15 +160,18 @@ mkpfs [-h] {pack,verify,inspect,tree,unpack} ...
 ### `pack`
 
 ```text
-mkpfs pack [-h] {folder,file} ...
+mkpfs pack [-h] {folder,file,exfat} ...
 ```
 
-Use `pack folder` to build from a directory tree, or `pack file` to treat one file as a virtual single-file tree.
+Use `pack folder` to build a PS image from a directory tree, `pack file` to treat one file as a virtual single-file tree, or `pack exfat` to build a raw `.exfat` image from a directory tree without compressing it into a `.ffpfsc`.
 
 ### `pack folder`
 
+By default, `pack folder` wraps the folder in an exFAT image and compresses that into the `.ffpfsc` in a single pass, with no temporary `.exfat` on disk (the most PS-compatible layout). Use `--raw` to instead pack the folder directly into a PFS image.
+
 ```text
 mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file-extension]
+                  [--raw]
                   [--compress | --no-compress] [--threshold-gain THRESHOLD_GAIN]
                   [--block-size BLOCK_SIZE] [--version {PS4,PS5}] [--inode-bits {32,64}]
                   [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
@@ -193,6 +197,7 @@ mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 | `source_dir` | Source app or homebrew folder to pack.                                                                                                                                                                                                        |
 | `image_file` | Output image file path.                                                                                                                                                                                                                       |
 | `-h`, `--help` | Show help and exit.                                                                                                                                                                                                                           |
+| `--raw` | Pack the folder directly into a PFS image instead of the default exFAT-wrapped `.ffpfsc`.                                                                                                                                                      |
 | `--adjust-output-file-extension` | Automatically adjust the output extension to match the detected pack mode. This is the default.                                                                                                                                               |
 | `--no-adjust-output-file-extension` | Keep the requested output file name unchanged.                                                                                                                                                                                                |
 | `--compress` | Enable PFSC block compression. This is the default.                                                                                                                                                                                           |
@@ -298,6 +303,35 @@ Notes:
 - If `pack file` fails on macOS with `OSError: [Errno 22] Invalid argument` during PFSC compression, rerun with `--cpu-count 1` to keep block compression in-process.
   If the source lives on a removable or network volume, also try a local `--temp-folder` on a writable APFS volume.
 
+### `pack exfat`
+
+Build a raw exFAT image from a source directory, without compressing it into a `.ffpfsc`. This is useful when you want a standalone `.exfat` to inspect, mount, or pass to `pack file` later. The same exFAT layout is produced cross-platform, with no external `mkexfat` tooling required.
+
+```text
+mkpfs pack exfat [-h] [--cluster-size CLUSTER_SIZE] [--overwrite] [--verbose] source_dir [output]
+```
+
+Examples:
+
+```bash
+mkpfs pack exfat ./BREW1234-app ./BREW1234.exfat
+mkpfs pack exfat ./BREW1234-app          # auto-name <titleId>.exfat alongside the source
+```
+
+| Parameter | Description |
+| --- | --- |
+| `source_dir` | Source app or homebrew folder to pack. |
+| `output` | Output `.exfat` path, or a directory to auto-name `<titleId>.exfat`. When omitted, the image is written alongside the source. |
+| `-h`, `--help` | Show help and exit. |
+| `--cluster-size CLUSTER_SIZE` | exFAT cluster size in bytes or `auto`. Default: `auto` (32 KiB, or 64 KiB for trees with a large average file size). |
+| `--overwrite` | Overwrite an existing output file. |
+| `--verbose` | Print verbose output. |
+
+Notes:
+
+- OS-generated metadata is excluded from the image (see the `pack folder` notes for the full list).
+- The resulting `.exfat` can be packed straight into a `.ffpfsc` with `mkpfs pack file ./BREW1234.exfat ./BREW1234.ffpfsc`.
+
 ### `verify`
 
 ```text
@@ -350,26 +384,28 @@ mkpfs inspect ./game.ffpfs --format json
 ### `tree`
 
 ```text
-mkpfs tree [-h] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
+mkpfs tree [-h] [--deep] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
 ```
 
 Examples:
 
 ```bash
 mkpfs tree ./game.ffpfs
+mkpfs tree ./game.ffpfsc --deep
 ```
 
 | Parameter | Description |
 | --- | --- |
 | `image_file` | Path to the input `.ffpfs` image. |
 | `-h`, `--help` | Show help and exit. |
+| `--deep` | When the image wraps a single exFAT, list the files inside it instead of the inner `.exfat`. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 
 ### `unpack`
 
 ```text
-mkpfs unpack [-h] [--overwrite] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file output_dir
+mkpfs unpack [-h] [--overwrite] [--deep] [--only PATH] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file output_dir
 ```
 
 Examples:
@@ -377,6 +413,8 @@ Examples:
 ```bash
 mkpfs unpack ./game.ffpfs ./extracted/
 mkpfs unpack ./game.ffpfs ./extracted/ --overwrite
+mkpfs unpack ./game.ffpfsc ./extracted/ --deep
+mkpfs unpack ./game.ffpfsc ./extracted/ --deep --only sce_sys --only eboot.bin
 ```
 
 | Parameter | Description |
@@ -385,6 +423,8 @@ mkpfs unpack ./game.ffpfs ./extracted/ --overwrite
 | `output_dir` | Destination directory for extraction. |
 | `-h`, `--help` | Show help and exit. |
 | `--overwrite` | Overwrite an existing output path. |
+| `--deep` | When the image wraps a single exFAT, extract the files inside it instead of the inner `.exfat`. |
+| `--only PATH` | With `--deep`, extract only this inner exFAT path (a file, or a folder and everything under it). Repeatable. Only the matching entries are read, so cherry-picking a few files from a large image is cheap. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 

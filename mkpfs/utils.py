@@ -32,6 +32,51 @@ IGNORED_NAMES: frozenset[str] = frozenset(
 )
 
 
+def _sanitize_name_component(name: str) -> str:
+    """Replace filesystem-unsafe characters in a single name component with ``_``."""
+    return "".join(c if (c.isalnum() or c in "._-") else "_" for c in name)
+
+
+def title_id_from_source(source_root: Path) -> str | None:
+    """Return the title ID from ``sce_sys/param.json`` when present.
+
+    Args:
+        source_root: Source tree root to inspect.
+
+    Returns:
+        The trimmed ``titleId`` / ``title_id`` value, or ``None`` when missing or
+        unreadable.
+    """
+    param_json: Path = source_root / "sce_sys" / "param.json"
+    if not param_json.exists():
+        return None
+    try:
+        parsed: dict[str, object] = read_param_json(param_json)
+    except ValueError:
+        return None
+    value: object | None = parsed.get("titleId") or parsed.get("title_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def default_image_basename(source_root: Path) -> str:
+    """Return the base name (no extension) for an image built from ``source_root``.
+
+    Prefers the title ID from ``sce_sys/param.json``; falls back to the source
+    directory name. The result is sanitized for use as a filename.
+
+    Args:
+        source_root: Source tree root.
+
+    Returns:
+        A non-empty, filesystem-safe base name.
+    """
+    base: str = title_id_from_source(source_root) or source_root.name or "image"
+    sanitized: str = _sanitize_name_component(base)
+    return sanitized or "image"
+
+
 def is_ignored_name(name: str) -> bool:
     """Return True if ``name`` is OS-generated metadata to exclude from images.
 
