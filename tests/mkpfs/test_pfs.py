@@ -3424,3 +3424,84 @@ class TestSourceMatchExcludesJunk(PfsTestCase):
         common = pfs_mod.validate_source_paths(file_inodes=file_inodes, source=root, errors=errors)
         self.assertEqual(errors, [])  # no "missing in image" for junk
         self.assertEqual(set(common or []), {"sce_sys/param.json", "eboot.bin"})
+
+
+class TestEncodePfscIntoHandleBounded(unittest.TestCase):
+    """The multi-worker PFSC encoder caps in-flight blocks so memory stays flat."""
+
+    def test_multi_worker_bounds_in_flight_and_round_trips(self) -> None:
+        # A mix of highly-compressible and incompressible blocks reproduces the
+        # fast-producer/slow-consumer condition that previously buffered without
+        # limit. The in-flight window must stay at workers*4, far below the block
+        # count, while output stays byte-correct.
+        lbs: int = c.PFSC_LOGICAL_BLOCK_SIZE
+        workers: int = 2
+        block_count: int = 20
+        rng: random.Random = random.Random(20240627)
+        payload: bytearray = bytearray()
+        for index in range(block_count):
+            payload += b"\x00" * lbs if index % 2 == 0 else rng.randbytes(lbs)
+        original: bytes = bytes(payload)
+
+        peak_in_flight: list[int] = [0]
+
+        class _FakeAsyncResult:
+            def __init__(self, pool: _FakePool, value: tuple[bytes, bytes]) -> None:
+                self._pool = pool
+                self._value = value
+
+            def get(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+                self._pool.outstanding -= 1
+                return self._value
+
+        class _FakePool:
+            def __init__(
+                self,
+                processes: int | None = None,
+                initializer: Callable[..., None] | None = None,
+                initargs: tuple = (),
+            ) -> None:
+                self.outstanding: int = 0
+                if initializer is not None:
+                    initializer(*initargs)
+
+            def apply_async(self, func: Callable[..., tuple[bytes, bytes]], args: tuple = ()) -> _FakeAsyncResult:
+                value: tuple[bytes, bytes] = func(*args)
+                self.outstanding += 1
+                peak_in_flight[0] = max(peak_in_flight[0], self.outstanding)
+                return _FakeAsyncResult(self, value)
+
+            def __enter__(self) -> _FakePool:
+                return self
+
+            def __exit__(self, *exc: object) -> bool:
+                return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src: Path = Path(tmp) / "payload.bin"
+            src.write_bytes(original)
+            out_path: Path = Path(tmp) / "out.pfsc"
+            try:
+                with patch.object(pfs_mod.mp, "Pool", _FakePool), out_path.open("w+b") as out:
+                    stored_size, is_compressed, _gain, _hyp = pfs_mod._encode_pfsc_into_handle(
+                        out=out,
+                        base_offset=0,
+                        source_path=src,
+                        threshold_gain=0,
+                        min_file_gain=0,
+                        zlib_level=6,
+                        logical_block_size=lbs,
+                        block_worker_count=workers,
+                    )
+                    out.truncate(stored_size)
+            finally:
+                if pfs_mod._PFSC_WORKER_SOURCE_HANDLE is not None:
+                    pfs_mod._PFSC_WORKER_SOURCE_HANDLE.close()
+                    pfs_mod._PFSC_WORKER_SOURCE_HANDLE = None
+                    pfs_mod._PFSC_WORKER_SOURCE_PATH = None
+
+            self.assertTrue(is_compressed)
+            self.assertGreater(peak_in_flight[0], 0)
+            self.assertLessEqual(peak_in_flight[0], workers * 4)
+            self.assertLess(peak_in_flight[0], block_count)
+            self.assertEqual(pfs_mod.decode_pfsc_payload(out_path.read_bytes()), original)

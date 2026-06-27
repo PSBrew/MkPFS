@@ -25,6 +25,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
+from multiprocessing.pool import AsyncResult
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
@@ -1609,31 +1610,44 @@ def _encode_pfsc_into_handle(
             logical_block_size=logical_block_size,
             zlib_level=zlib_level,
         )
+
+        def _write_block_result(result: tuple[bytes, bytes]) -> None:
+            nonlocal all_compressed_size, compressed_blocks
+            raw_chunk, compressed_chunk = result
+            padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
+            all_compressed_size += len(compressed_chunk)
+            gain_pct: float = ((logical_block_size - len(compressed_chunk)) / logical_block_size) * 100.0
+            store_compressed: bool = _should_store_pfsc_block_compressed(
+                compressed_block_size=len(compressed_chunk),
+                logical_block_size=logical_block_size,
+                gain_pct=gain_pct,
+                threshold_gain=threshold_gain,
+            )
+            selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
+            if store_compressed:
+                compressed_blocks += 1
+            out.write(selected_chunk)
+            offsets.append(offsets[-1] + len(selected_chunk))
+            if progress_callback is not None:
+                progress_callback(len(raw_chunk))
+
+        # Bound in-flight work to ``max_in_flight`` blocks and write results in
+        # submit order. An unbounded ``imap`` lets a fast compressor pool outrun
+        # the single writer and buffer finished blocks without limit, which OOMs
+        # on large, highly-compressible inputs; this window keeps memory flat.
+        max_in_flight: int = effective_block_workers * 4
         with mp.Pool(
             processes=effective_block_workers,
             initializer=_init_pfsc_block_worker_for_pool,
             initargs=(source_path,),
         ) as pool:
-            results_iter = pool.imap(_compress_pfsc_block_payload_worker, worker_args_iter, chunksize=1)
-            raw_chunk: bytes
-            compressed_chunk: bytes
-            for raw_chunk, compressed_chunk in results_iter:
-                padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-                all_compressed_size += len(compressed_chunk)
-                gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
-                store_compressed: bool = _should_store_pfsc_block_compressed(
-                    compressed_block_size=len(compressed_chunk),
-                    logical_block_size=logical_block_size,
-                    gain_pct=gain_pct,
-                    threshold_gain=threshold_gain,
-                )
-                selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
-                if store_compressed:
-                    compressed_blocks += 1
-                out.write(selected_chunk)
-                offsets.append(offsets[-1] + len(selected_chunk))
-                if progress_callback is not None:
-                    progress_callback(len(raw_chunk))
+            pending: deque[AsyncResult[tuple[bytes, bytes]]] = deque()
+            for worker_args in worker_args_iter:
+                if len(pending) >= max_in_flight:
+                    _write_block_result(pending.popleft().get())
+                pending.append(pool.apply_async(_compress_pfsc_block_payload_worker, (worker_args,)))
+            while pending:
+                _write_block_result(pending.popleft().get())
 
     encoded_payload_size: int = offsets[-1]
     hypothetical_all_compressed_size: int = header_size + all_compressed_size
