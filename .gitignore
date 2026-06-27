@@ -218,3 +218,7 @@ target/
 *.ffpfs
 *.exfat
 *.ffpkg
+
+# Research files
+research/
+scripts/

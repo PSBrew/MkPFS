@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from mkpfs import exfat
+from mkpfs.pfs import ImageFormat, detect_image_format, extract_exfat_image, verify_exfat_image
 
 # A minimal real exFAT image (produced by newfs_exfat) holding:
 #   hello.txt          -> b"hello exfat"
@@ -96,6 +97,60 @@ class TestExfatRealImage(unittest.TestCase):
                 self.assertEqual(read, f.length, f.rel_path)
                 count += 1
             self.assertGreater(count, 0)
+
+
+class TestRawExfatHelpers(unittest.TestCase):
+    """Helpers for working with raw exFAT images behave as expected."""
+
+    def _fixture_exfat_path(self, tmp: Path) -> Path:
+        exfat_path = tmp / "inner.exfat"
+        exfat_path.write_bytes(gzip.decompress(_FIXTURE.read_bytes()))
+        return exfat_path
+
+    def _make_tmp(self) -> Path:
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        return Path(d.name)
+
+    def test_detect_image_format_prefers_exfat_for_extension_and_signature(self) -> None:
+        tmp = self._make_tmp()
+        exfat_path = self._fixture_exfat_path(tmp)
+        fmt: ImageFormat = detect_image_format(exfat_path)
+        self.assertEqual(fmt, ImageFormat.EXFAT)
+
+    def test_verify_exfat_image_structure_only_succeeds(self) -> None:
+        tmp = self._make_tmp()
+        exfat_path = self._fixture_exfat_path(tmp)
+        errors, warnings = verify_exfat_image(exfat_path)
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+
+    def test_verify_exfat_image_against_source_dir(self) -> None:
+        # Build a small source tree, write it as exFAT, and verify round-trip.
+        from mkpfs.exfat_writer import write_exfat_image
+
+        tmp = self._make_tmp()
+        source = tmp / "src"
+        (source / "dir").mkdir(parents=True)
+        (source / "hello.txt").write_text("hello", encoding="utf-8")
+        (source / "dir" / "inner.bin").write_bytes(b"data here")
+        image = tmp / "out.exfat"
+        write_exfat_image(source, image)
+
+        errors, warnings = verify_exfat_image(image, source=source, compare_contents=True)
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+
+    def test_extract_exfat_image_round_trips_contents(self) -> None:
+        # Reuse the tiny fixture and ensure extraction reproduces files.
+        tmp = self._make_tmp()
+        exfat_path = self._fixture_exfat_path(tmp)
+        out = tmp / "out"
+        result = extract_exfat_image(image=exfat_path, output_path=out)
+        self.assertEqual(result.errors, [])
+        self.assertEqual((out / "hello.txt").read_bytes(), b"hello exfat")
+        self.assertEqual((out / "sub" / "inner.bin").read_bytes(), b"nested data here")
+        self.assertEqual((out / "big.bin").read_bytes(), b"AB" * 5000)
 
 
 class TestDeepUnpack(unittest.TestCase):

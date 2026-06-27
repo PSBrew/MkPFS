@@ -2749,6 +2749,74 @@ class TestCliPackExfat(CliTestCase):
             cli_mkpfs_main(["pack", "exfat", str(src), str(out), "--cluster-size", "777"])
 
 
+class TestCliVerifyUnpackExfat(CliTestCase):
+    """`verify` and `unpack` support raw .exfat images via helpers."""
+
+    def _fixture_exfat_path(self, tmp: Path) -> Path:
+        import gzip
+
+        fixture: Path = Path(__file__).parent / "fixtures" / "tiny.exfat.gz"
+        exfat_path = tmp / "tiny.exfat"
+        exfat_path.write_bytes(gzip.decompress(fixture.read_bytes()))
+        return exfat_path
+
+    def test_verify_with_format_exfat_uses_exfat_helper(self) -> None:
+        tmp = self.make_temp_path()
+        image = self._fixture_exfat_path(tmp)
+        source = tmp / "src"
+        source.mkdir()
+        with (
+            patch.object(cli, "verify_exfat_image", return_value=([], [])) as mocked_verify,
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc = cli_mkpfs_main(
+                [
+                    "verify",
+                    str(image),
+                    "--source-dir",
+                    str(source),
+                    "--format",
+                    "exfat",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        mocked_verify.assert_called_once()
+
+    def test_unpack_with_format_exfat_uses_exfat_helper(self) -> None:
+        from mkpfs.pfs import PFSExtractionResult
+
+        tmp = self.make_temp_path()
+        image = self._fixture_exfat_path(tmp)
+        dest = tmp / "out"
+        result = PFSExtractionResult(image=image, output_path=dest, bytes_written=0)
+        with (
+            patch.object(cli, "extract_exfat_image", return_value=result) as mocked_extract,
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc = cli_mkpfs_main(
+                [
+                    "unpack",
+                    str(image),
+                    str(dest),
+                    "--format",
+                    "exfat",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        mocked_extract.assert_called_once()
+
+    def test_tree_with_format_exfat_uses_exfat_tree(self) -> None:
+        tmp = self.make_temp_path()
+        image = self._fixture_exfat_path(tmp)
+        buffer = StringIO()
+        with redirect_stdout(buffer), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["tree", str(image), "--format", "exfat"])
+        self.assertEqual(rc, 0)
+        self.assertIn("hello.txt", buffer.getvalue())
+
+
 class TestCliPackFolderExfat(CliTestCase):
     """`pack folder` defaults to fusing folder -> exFAT -> .ffpfsc with no temp image."""
 
