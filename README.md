@@ -557,6 +557,7 @@ Special thanks to the people and communities helping shape MkPFS:
 - **Darkmor @ ShadowMountPlus**: creator of [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus), whose work helped inspire practical PFS mounting workflows
 - **The PlayStation and reverse-engineering community**: for tools, research threads, testing feedback, technical notes, and historical knowledge
 - **Community-maintained references and wiki pages**: especially the projects and archives that preserve PFS, PKG, and FPKG implementation details
+- **Special Code Contributors**: @Abdo-ka, @rdmrocha, @RenanGBarreto.
 
 ## ⚠️ Disclaimer
 
