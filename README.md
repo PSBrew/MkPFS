@@ -8,7 +8,8 @@
 [![Profiles](https://img.shields.io/badge/profiles-PS4%20%2F%20PS5-3b82f6?style=flat-square)](#command-reference)
 [![GitHub Sponsors](https://img.shields.io/badge/Fund%20Development-GitHub%20Sponsors-e11d48?style=flat-square&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/RenanGBarreto)
 
-MkPFS is a command-line tool and Python library for building, verifying, inspecting, browsing, and extracting PlayStation FileSystem (PFS) disk images. It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, and `.bin`, and fits both direct image workflows and PKG or FPKG inner-PFS generation.
+MkPFS is a command-line tool and Python library for building, verifying, inspecting, browsing, and extracting PlayStation FileSystem (PFS) disk images. 
+It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, `.exfat`, and `.bin`, and fits both direct image workflows and PKG or FPKG inner-PFS generation.
 
 [Quick Start](#-quick-start) · [Compression Statistics](#-compression-statistics) · [Installation](#-installation) · [Command reference](#command-reference) · [Development](#-development) · [Related projects](#related-projects) · [Sponsor](https://github.com/sponsors/RenanGBarreto)
 
@@ -19,7 +20,7 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 - Create and manage PFS disk images for PlayStation-oriented workflows
 - Verify structure, payload hashes, layout consistency, and source-tree matches
 - Inspect image contents quickly with a tree view instead of digging through raw structures
-- Work with common image extensions such as `.ffpfs`, `.ffpfsc`.
+- Work with common image extensions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, `.exfat`, and `.bin`.
 - Use the generated images with tools like [MicroMount](https://github.com/drakmor/ShadowMountPlus) and [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)
 - Build the inner PFS filesystem used inside PKG or FPKG workflows
 - Use the same core workflow from both the CLI and the Python library
@@ -564,7 +565,7 @@ Special thanks to the people and communities helping shape MkPFS:
   <img src="https://contrib.rocks/image?repo=PSBrew/MkPFS" />
 </a>
 
-## ⚠️ Disclaimer
+## 📘 Disclaimer
 
 This software is intended for archival, backup, preservation, and homebrew purposes only.
 
