@@ -47,6 +47,7 @@ from .utils import (
     resolve_temp_root,
 )
 
+DEFAULT_MKPFS_PFSC_WINDOW_FACTOR: int = 8
 PFSC_PROGRESS_REPORT_BYTES: int = consts.PFSC_LOGICAL_BLOCK_SIZE * 16
 PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE: int = 256 * 1024 * 1024
 AUTO_FIT_BLOCK_SIZE_CANDIDATES: tuple[int, ...] = (0x1000, 0x2000, 0x4000, 0x8000, 0x10000)
@@ -1635,7 +1636,14 @@ def _encode_pfsc_into_handle(
         # submit order. An unbounded ``imap`` lets a fast compressor pool outrun
         # the single writer and buffer finished blocks without limit, which OOMs
         # on large, highly-compressible inputs; this window keeps memory flat.
-        max_in_flight: int = effective_block_workers * 4
+        factor: int = DEFAULT_MKPFS_PFSC_WINDOW_FACTOR
+        with suppress(ValueError):
+            env_val = os.environ.get("MKPFS_PFSC_WINDOW_FACTOR")
+            if env_val is not None:
+                parsed = int(env_val)
+                if parsed > 0:
+                    factor = parsed
+        max_in_flight: int = max(1, effective_block_workers * factor)
         with mp.Pool(
             processes=effective_block_workers,
             initializer=_init_pfsc_block_worker_for_pool,

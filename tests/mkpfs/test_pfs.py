@@ -3502,6 +3502,6 @@ class TestEncodePfscIntoHandleBounded(unittest.TestCase):
 
             self.assertTrue(is_compressed)
             self.assertGreater(peak_in_flight[0], 0)
-            self.assertLessEqual(peak_in_flight[0], workers * 4)
+            self.assertLessEqual(peak_in_flight[0], workers * pfs_mod.DEFAULT_MKPFS_PFSC_WINDOW_FACTOR)
             self.assertLess(peak_in_flight[0], block_count)
             self.assertEqual(pfs_mod.decode_pfsc_payload(out_path.read_bytes()), original)
