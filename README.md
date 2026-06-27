@@ -137,6 +137,17 @@ uv build
 uv run --frozen twine check dist/*
 ```
 
+## Progress output
+
+By default MkPFS shows interactive progress bars for long-running phases (scan, compress, write, verify, extract).
+When you prefer concise logs (for CI or simple terminals), pass --no-progress on supported commands to replace the
+bars with short, one-line status messages like:
+
+  Discovering files...
+  Compressing files...
+
+Supported commands: pack (folder/file/exfat), verify, and unpack.
+
 ## Command Reference
 
 MkPFS keeps the command surface focused on the image lifecycle. 
@@ -363,6 +374,7 @@ mkpfs verify ./BREW1234.exfat --source-dir ./BREW1234-app --format exfat
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 | `--format {auto,pfs,exfat}` | Image format hint. `auto` (default) detects exFAT by extension/signature and treats everything else as PFS; `pfs` forces PFS handling; `exfat` forces exFAT handling. |
+| `--no-progress` | Replace interactive progress bars with simple one-line status messages. |
 
 ### `inspect`
 
@@ -436,6 +448,7 @@ mkpfs unpack ./BREW1234.exfat ./BREW1234-extracted/ --format exfat
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 | `--format {auto,pfs,exfat}` | Image format hint. `auto` (default) detects exFAT by extension/signature and treats everything else as PFS; `pfs` forces PFS handling; `exfat` forces exFAT handling. |
+| `--no-progress` | Replace interactive progress bars with simple one-line status messages. |
 
 
 ## 💻 Example Output

@@ -176,6 +176,7 @@ class TestCliSmokeIntegration(CliTestCase):
         self.assertIn("--verify-structure", result.stdout)
         self.assertIn("--no-verify-structure", result.stdout)
         self.assertIn("--skip-verification", result.stdout)
+        self.assertIn("--no-progress", result.stdout)
 
         result = subprocess.run(
             [sys.executable, "-m", "mkpfs", "pack", "file", "--help"],
@@ -190,7 +191,38 @@ class TestCliSmokeIntegration(CliTestCase):
         self.assertIn("--verify-structure", result.stdout)
         self.assertIn("--no-verify-structure", result.stdout)
         self.assertIn("--skip-verification", result.stdout)
+        self.assertIn("--no-progress", result.stdout)
         self.assertNotIn("--require-game-files", result.stdout)
+
+    def test_no_progress_replaces_bars_with_simple_messages_for_stream_pack(self) -> None:
+        """--no-progress should replace dynamic bars with concise 'Please wait...' messages."""
+        tmp_path: Path = self.make_temp_path()
+        src: Path = tmp_path / "PPSA.exfat"
+        # Small but non-trivial input to exercise the streaming path
+        src.write_bytes(b"GAMEDATA" * 5000 + b"\x00" * 80000)
+        out: Path = tmp_path / "PPSA.ffpfsc"
+        stdout_buffer: StringIO = StringIO()
+        stderr_buffer: StringIO = StringIO()
+        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            rc: int = cli_mkpfs_main(
+                [
+                    "pack",
+                    "file",
+                    str(src),
+                    str(out),
+                    "--version",
+                    "PS5",
+                    "--inode-bits",
+                    "32",
+                    "--temp-folder",
+                    str(tmp_path / "temp"),
+                    "--no-progress",
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        combined: str = stdout_buffer.getvalue() + stderr_buffer.getvalue()
+        self.assertIn("Compressing files...", combined)
 
     def test_pack_file_defaults_to_32_bit_inodes_and_verify_source_file_succeeds(self) -> None:
         """Single-file packing should keep 32-bit inode defaults and verify against the source file."""

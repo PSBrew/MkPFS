@@ -49,3 +49,18 @@ class TestProgressBarHelpers(unittest.TestCase):
             progress.step("scan", 2, 2, bytes_processed=200)
 
         self.assertIn("%", stderr_buffer.getvalue())
+
+    def test_simple_style_prints_concise_status_once_per_phase(self) -> None:
+        """Simple style should write a one-line status per phase and avoid duplicate lines."""
+        progress: Progress = Progress(enabled=True, style="simple")
+        stderr_buffer: StringIO = StringIO()
+        with redirect_stderr(stderr_buffer):
+            # Multiple updates for the same phase should produce only one line.
+            progress.step("compress", 1, 100, bytes_processed=1024)
+            progress.step("compress", 50, 100, bytes_processed=1024 * 1024)
+            # A new phase should produce a new concise line.
+            progress.step("verify", 1, 10, bytes_processed=0)
+        text: str = stderr_buffer.getvalue()
+        # Only one line for compress
+        self.assertEqual(text.count("Compressing files..."), 1)
+        self.assertIn("Verifying files...", text)

@@ -7,8 +7,43 @@ from __future__ import annotations
 
 import sys
 import time
+from typing import Final
 
 from .utils import human_readable_size
+
+# Global default style for new Progress instances: "bar" or "simple".
+# "bar": dynamic progress bar with percentage, speed, and ETA.
+# "simple": print a one-line status per phase (suitable for logs/CI).
+_DEFAULT_PROGRESS_STYLE: str = "bar"
+
+
+def set_progress_style(style: str) -> None:
+    """Set the default style for subsequently created Progress instances.
+
+    Args:
+        style: Either "bar" (default) or "simple".
+    """
+    global _DEFAULT_PROGRESS_STYLE
+    normalized: str = style.strip().lower()
+    if normalized not in {"bar", "simple"}:
+        normalized = "bar"
+    _DEFAULT_PROGRESS_STYLE = normalized
+
+
+def get_progress_style() -> str:
+    """Return the current default progress style ("bar" or "simple")."""
+    return _DEFAULT_PROGRESS_STYLE
+
+
+_SIMPLE_PHASE_MESSAGES: Final[dict[str, str]] = {
+    "scan": "Discovering files...",
+    "compress": "Compressing files...",
+    "write": "Writing image...",
+    "verify": "Verifying files...",
+    "compare": "Comparing files...",
+    "extract": "Extracting files...",
+    "exfat": "Building exFAT image...",
+}
 
 
 class Progress:
@@ -20,15 +55,23 @@ class Progress:
     Attributes:
         enabled: Whether progress output is active.
         width: Width of the visual progress bar in characters.
+        style: Rendering style, "bar" or "simple".
     """
 
-    def __init__(self, enabled: bool = True, width: int = 32) -> None:
+    def __init__(self, enabled: bool = True, width: int = 32, *, style: str | None = None) -> None:
         self.enabled: bool = enabled
         self.width: int = width
+        self.style: str = (style or _DEFAULT_PROGRESS_STYLE).strip().lower()
+        if self.style not in {"bar", "simple"}:
+            self.style = "bar"
         self.last_phase: str | None = None
         self.phase_start_time: dict[str, float] = {}
         self.phase_bytes: dict[str, int] = {}  # Track bytes processed per phase
         self.phase_last_len: dict[str, int] = {}  # Track last written line length per phase
+        self._printed_simple: set[str] = set()
+
+    def _simple_status_for_phase(self, phase: str) -> str:
+        return _SIMPLE_PHASE_MESSAGES.get(phase.lower(), f"{phase.capitalize()}. Please wait...")
 
     def step(self, phase: str, done: int, total: int, bytes_processed: int = 0) -> None:
         """Update progress for a named phase.
@@ -42,6 +85,16 @@ class Progress:
                 the progress will display byte-based throughput and ETA.
         """
         if not self.enabled:
+            return
+
+        # Simple mode: print a concise one-line status the first time we see the phase.
+        if self.style == "simple":
+            key: str = phase.lower()
+            if key not in self._printed_simple:
+                sys.stderr.write(self._simple_status_for_phase(key) + "\n")
+                sys.stderr.flush()
+                self._printed_simple.add(key)
+            self.last_phase = phase
             return
 
         # Initialize phase tracking if needed

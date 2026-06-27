@@ -20,7 +20,7 @@ from .ampr import ensure_ampr_index
 from .exfat import EXFAT_SIGNATURE, ExfatReader, render_exfat_tree
 from .exfat_writer import iter_exfat_image, write_exfat_image
 from .logging import error, info, warning
-from .pbar import Progress
+from .pbar import Progress, set_progress_style
 from .pfs import (
     BuildError,
     BuildStats,
@@ -733,6 +733,12 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(source_arg_name, help=source_help)
     parser.add_argument("image_file", help="Output image file path")
 
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Replace interactive progress bars with simple one-line status messages",
+    )
+
     adjust_group = parser.add_mutually_exclusive_group()
     adjust_group.add_argument(
         "--adjust-output-file-extension",
@@ -1341,41 +1347,53 @@ def cli_mkpfs_pack_exfat_run(args: argparse.Namespace) -> int:
     Returns:
         Process exit code for the exFAT packing workflow.
     """
-    source: Path = Path(args.source_dir).expanduser().resolve()
-    if not source.is_dir():
-        raise BuildError(f"source must be an existing directory: {source}")
+    reset_needed: bool = bool(getattr(args, "no_progress", False))
+    if reset_needed:
+        from .pbar import get_progress_style
 
-    cluster_arg: str = str(args.cluster_size).strip().lower()
-    cluster_size: int | None
-    if cluster_arg in {"auto", ""}:
-        cluster_size = None
+        prev_style: str = get_progress_style()
+        set_progress_style("simple")
     else:
-        try:
-            cluster_size = int(args.cluster_size)
-        except (TypeError, ValueError) as exc:
-            raise BuildError("--cluster-size must be an integer or 'auto'") from exc
-        if not is_power_of_two(cluster_size) or cluster_size < 512 or cluster_size > 32 * 1024 * 1024:
-            raise BuildError("--cluster-size must be a power of two between 512 and 33554432")
+        prev_style = "bar"
+    try:
+        source: Path = Path(args.source_dir).expanduser().resolve()
+        if not source.is_dir():
+            raise BuildError(f"source must be an existing directory: {source}")
 
-    # Resolve the final output path so we can pre-check overwrite and report it.
-    basename: str = f"{default_image_basename(source)}.exfat"
-    if args.output is None:
-        target: Path = source.parent / basename
-    else:
-        requested: Path = Path(args.output).expanduser().resolve()
-        target = requested / basename if requested.is_dir() else requested
+        cluster_arg: str = str(args.cluster_size).strip().lower()
+        cluster_size: int | None
+        if cluster_arg in {"auto", ""}:
+            cluster_size = None
+        else:
+            try:
+                cluster_size = int(args.cluster_size)
+            except (TypeError, ValueError) as exc:
+                raise BuildError("--cluster-size must be an integer or 'auto'") from exc
+            if not is_power_of_two(cluster_size) or cluster_size < 512 or cluster_size > 32 * 1024 * 1024:
+                raise BuildError("--cluster-size must be a power of two between 512 and 33554432")
 
-    if target.exists() and not args.overwrite:
-        error(f"output already exists (use --overwrite): {target}")
-        return 1
-    target.parent.mkdir(parents=True, exist_ok=True)
+        # Resolve the final output path so we can pre-check overwrite and report it.
+        basename: str = f"{default_image_basename(source)}.exfat"
+        if args.output is None:
+            target: Path = source.parent / basename
+        else:
+            requested: Path = Path(args.output).expanduser().resolve()
+            target = requested / basename if requested.is_dir() else requested
 
-    print_version_header()
-    info(f"Building exFAT image from {source}")
-    info(f"  Output: {target}")
-    written: Path = write_exfat_image(source, target, cluster_size=cluster_size, progress=Progress(enabled=True))
-    info(f"Successfully wrote {human_readable_size(written.stat().st_size)} exFAT image: {written}")
-    return 0
+        if target.exists() and not args.overwrite:
+            error(f"output already exists (use --overwrite): {target}")
+            return 1
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        print_version_header()
+        info(f"Building exFAT image from {source}")
+        info(f"  Output: {target}")
+        written: Path = write_exfat_image(source, target, cluster_size=cluster_size, progress=Progress(enabled=True))
+        info(f"Successfully wrote {human_readable_size(written.stat().st_size)} exFAT image: {written}")
+        return 0
+    finally:
+        if reset_needed:
+            set_progress_style(prev_style)
 
 
 def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
@@ -1388,72 +1406,84 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
     Returns:
         Process exit code.
     """
-    output_path, output_changed = normalize_output_path(
-        args.image_file, ".ffpfsc", adjust=bool(getattr(args, "adjust_output_file_extension", True))
-    )
-    output_path = output_path.expanduser().resolve()
-    if output_changed:
-        info("exFAT wrapping mode enabled, adjusting output file extension to .ffpfsc")
+    reset_needed: bool = bool(getattr(args, "no_progress", False))
+    if reset_needed:
+        from .pbar import get_progress_style
 
-    if args.signed:
-        raise BuildError("--exfat wrapping does not support --signed images")
-
-    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=65536)
-    temp_folder: Path = _resolve_pack_temp_folder(args)
-    _print_pack_parameters(
-        config=config,
-        display_source_path=source_path,
-        output_path=output_path,
-        temp_folder=temp_folder,
-        signed=False,
-        require_game_files=False,
-        dry_run=args.dry_run,
-    )
-
-    if args.dry_run:
-        size_box: list[int] = []
-        blocks = iter_exfat_image(source_path, on_layout=size_box.append)
-        try:
-            next(blocks)  # trigger the scan + layout to learn the inner exFAT size
-        finally:
-            blocks.close()
-        info(
-            f"Dry run: would wrap {source_path} into a {human_readable_size(size_box[0])} "
-            f"exFAT and compress it to {output_path}; nothing written."
+        prev_style: str = get_progress_style()
+        set_progress_style("simple")
+    else:
+        prev_style = "bar"
+    try:
+        output_path, output_changed = normalize_output_path(
+            args.image_file, ".ffpfsc", adjust=bool(getattr(args, "adjust_output_file_extension", True))
         )
-        return 0
-    if not prompt_overwrite(output_path):
-        info("Operation cancelled.")
-        return 0
+        output_path = output_path.expanduser().resolve()
+        if output_changed:
+            info("exFAT wrapping mode enabled, adjusting output file extension to .ffpfsc")
 
-    stats: BuildStats = build_pfs_stream_from_exfat(
-        source_root=source_path,
-        output_path=output_path,
-        block_size=config.block_size,
-        pfs_version=config.pfs_version,
-        case_insensitive=config.case_insensitive,
-        zlib_level=config.zlib_level,
-        threshold_gain=config.threshold_gain,
-        cpu_count=config.cpu_count,
-        encrypted=config.encrypted,
-        new_crypt=config.new_crypt,
-        ekpfs=config.ekpfs_key,
-        verbose=args.verbose,
-    )
-    stats.input_path = source_path
-    print_summary(stats)
-    if not args.verify:
-        return 0
+        if args.signed:
+            raise BuildError("--exfat wrapping does not support --signed images")
 
-    info("Running post-create check...")
-    errors, warnings, _tree, _uroot = run_image_check(
-        output_path, None, print_tree=False, ekpfs=config.ekpfs_key, new_crypt=config.new_crypt
-    )
-    for w in warnings:
-        warning(w)
-    for e in errors:
-        error(e)
-    return 1 if errors else 0
+        config: PackBuildConfig = _resolve_pack_build_config(args, block_size=65536)
+        temp_folder: Path = _resolve_pack_temp_folder(args)
+        _print_pack_parameters(
+            config=config,
+            display_source_path=source_path,
+            output_path=output_path,
+            temp_folder=temp_folder,
+            signed=False,
+            require_game_files=False,
+            dry_run=args.dry_run,
+        )
+
+        if args.dry_run:
+            size_box: list[int] = []
+            blocks = iter_exfat_image(source_path, on_layout=size_box.append)
+            try:
+                next(blocks)  # trigger the scan + layout to learn the inner exFAT size
+            finally:
+                blocks.close()
+            info(
+                f"Dry run: would wrap {source_path} into a {human_readable_size(size_box[0])} "
+                f"exFAT and compress it to {output_path}; nothing written."
+            )
+            return 0
+        if not prompt_overwrite(output_path):
+            info("Operation cancelled.")
+            return 0
+
+        stats: BuildStats = build_pfs_stream_from_exfat(
+            source_root=source_path,
+            output_path=output_path,
+            block_size=config.block_size,
+            pfs_version=config.pfs_version,
+            case_insensitive=config.case_insensitive,
+            zlib_level=config.zlib_level,
+            threshold_gain=config.threshold_gain,
+            cpu_count=config.cpu_count,
+            encrypted=config.encrypted,
+            new_crypt=config.new_crypt,
+            ekpfs=config.ekpfs_key,
+            verbose=args.verbose,
+        )
+        stats.input_path = source_path
+        print_summary(stats)
+        if not args.verify:
+            return 0
+
+        info("Running post-create check...")
+        errors, warnings, _tree, _uroot = run_image_check(
+            output_path, None, print_tree=False, ekpfs=config.ekpfs_key, new_crypt=config.new_crypt
+        )
+        for w in warnings:
+            warning(w)
+        for e in errors:
+            error(e)
+        return 1 if errors else 0
+    finally:
+        if reset_needed:
+            set_progress_style(prev_style)
 
 
 def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
@@ -1465,40 +1495,52 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     Returns:
         Process exit code for the folder packing workflow.
     """
-    source_path: Path = Path(args.source_dir).expanduser().resolve()
-    temp_folder: Path = _resolve_pack_temp_folder(args)
-    # Generate the AMPR emulation index into the source tree before packing so it
-    # is included in the image (only when an emulation build marker is present).
-    if not args.dry_run:
-        ensure_ampr_index(source_path, enabled=bool(getattr(args, "ampr_index", True)))
+    reset_needed: bool = bool(getattr(args, "no_progress", False))
+    if reset_needed:
+        from .pbar import get_progress_style
 
-    # Default: wrap the folder in an exFAT and compress it into the .ffpfsc in one
-    # pass, with no temporary .exfat. Use --raw to pack the folder directly as PFS.
-    if not bool(getattr(args, "raw", False)):
-        return _run_exfat_pack(args=args, source_path=source_path)
-
-    title_id: str | None = _detect_title_id_from_source(source_path)
-    desired_output_suffix: str = ".ffpfs" if title_id is not None else ".ffpfsc"
-    output_adjustment_message: str
-    if title_id is not None:
-        output_adjustment_message = (
-            "Raw game files detected inside the source folder, adjusting output file extension to .ffpfs"
-        )
+        prev_style: str = get_progress_style()
+        set_progress_style("simple")
     else:
-        output_adjustment_message = (
-            "The folder does not seem to contain any direct game information, "
-            "adjusting output file extension to .ffpfsc"
+        prev_style = "bar"
+    try:
+        source_path: Path = Path(args.source_dir).expanduser().resolve()
+        temp_folder: Path = _resolve_pack_temp_folder(args)
+        # Generate the AMPR emulation index into the source tree before packing so it
+        # is included in the image (only when an emulation build marker is present).
+        if not args.dry_run:
+            ensure_ampr_index(source_path, enabled=bool(getattr(args, "ampr_index", True)))
+
+        # Default: wrap the folder in an exFAT and compress it into the .ffpfsc in one
+        # pass, with no temporary .exfat. Use --raw to pack the folder directly as PFS.
+        if not bool(getattr(args, "raw", False)):
+            return _run_exfat_pack(args=args, source_path=source_path)
+
+        title_id: str | None = _detect_title_id_from_source(source_path)
+        desired_output_suffix: str = ".ffpfs" if title_id is not None else ".ffpfsc"
+        output_adjustment_message: str
+        if title_id is not None:
+            output_adjustment_message = (
+                "Raw game files detected inside the source folder, adjusting output file extension to .ffpfs"
+            )
+        else:
+            output_adjustment_message = (
+                "The folder does not seem to contain any direct game information, "
+                "adjusting output file extension to .ffpfsc"
+            )
+        return _run_pack_build(
+            args=args,
+            build_source_root=source_path,
+            compare_source_root=source_path,
+            display_source_path=source_path,
+            temp_folder=temp_folder,
+            require_game_files=bool(getattr(args, "require_game_files", False)),
+            desired_output_suffix=desired_output_suffix,
+            output_adjustment_message=output_adjustment_message,
         )
-    return _run_pack_build(
-        args=args,
-        build_source_root=source_path,
-        compare_source_root=source_path,
-        display_source_path=source_path,
-        temp_folder=temp_folder,
-        require_game_files=bool(getattr(args, "require_game_files", False)),
-        desired_output_suffix=desired_output_suffix,
-        output_adjustment_message=output_adjustment_message,
-    )
+    finally:
+        if reset_needed:
+            set_progress_style(prev_style)
 
 
 def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int:
@@ -1514,110 +1556,122 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
     Raises:
         BuildError: If CLI parameters are invalid.
     """
-    output_path: Path
-    output_changed: bool
-    output_path, output_changed = normalize_output_path(
-        args.image_file,
-        ".ffpfsc",
-        adjust=bool(getattr(args, "adjust_output_file_extension", True)),
-    )
-    output_path = output_path.expanduser().resolve()
-    if output_changed:
-        info("Single file streaming mode enabled, adjusting output file extension to .ffpfsc")
+    reset_needed: bool = bool(getattr(args, "no_progress", False))
+    if reset_needed:
+        from .pbar import get_progress_style
 
-    # Resolve block size (single-file path: auto or explicit; auto-fit routes to the spool path).
-    block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
-    if block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}:
-        raise BuildError(
-            "--block-size auto-fit is not supported for single-file packing; use 'auto' or an explicit size"
-        )
-    if block_size_arg in {"auto", ""}:
-        block_size: int = 65536
+        prev_style: str = get_progress_style()
+        set_progress_style("simple")
     else:
-        try:
-            block_size = int(args.block_size)
-        except (TypeError, ValueError) as exc:
+        prev_style = "bar"
+    try:
+        output_path: Path
+        output_changed: bool
+        output_path, output_changed = normalize_output_path(
+            args.image_file,
+            ".ffpfsc",
+            adjust=bool(getattr(args, "adjust_output_file_extension", True)),
+        )
+        output_path = output_path.expanduser().resolve()
+        if output_changed:
+            info("Single file streaming mode enabled, adjusting output file extension to .ffpfsc")
+
+        # Resolve block size (single-file path: auto or explicit; auto-fit routes to the spool path).
+        block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
+        if block_size_arg in {"auto-fit", "auto_small_files", "auto-small-files"}:
             raise BuildError(
-                "--block-size must be an integer value or 'auto' for streaming single-file packing"
-            ) from exc
+                "--block-size auto-fit is not supported for single-file packing; use 'auto' or an explicit size"
+            )
+        if block_size_arg in {"auto", ""}:
+            block_size: int = 65536
+        else:
+            try:
+                block_size = int(args.block_size)
+            except (TypeError, ValueError) as exc:
+                raise BuildError(
+                    "--block-size must be an integer value or 'auto' for streaming single-file packing"
+                ) from exc
 
-    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
-    temp_folder: Path = _resolve_pack_temp_folder(args)
-    rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
-    internal_file_name: str = _resolve_single_file_internal_name(
-        source_file=source_file,
-        rename_inner_image=rename_inner_image,
-    )
-    if rename_inner_image and internal_file_name != source_file.name:
-        _emit_single_file_rename_warning(original_name=source_file.name, renamed_name=internal_file_name)
-
-    _print_pack_parameters(
-        config=config,
-        display_source_path=source_file,
-        output_path=output_path,
-        temp_folder=temp_folder,
-        signed=False,
-        require_game_files=False,
-        dry_run=args.dry_run,
-    )
-
-    if not args.dry_run:
-        destination_space_error: str | None = get_destination_space_error_message(
-            source_root=source_file,
-            output_path=output_path,
+        config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
+        temp_folder: Path = _resolve_pack_temp_folder(args)
+        rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
+        internal_file_name: str = _resolve_single_file_internal_name(
+            source_file=source_file,
+            rename_inner_image=rename_inner_image,
         )
-        if destination_space_error is not None:
-            error(destination_space_error, icon_name="error")
-            return 1
+        if rename_inner_image and internal_file_name != source_file.name:
+            _emit_single_file_rename_warning(original_name=source_file.name, renamed_name=internal_file_name)
 
-    if not args.dry_run and not prompt_overwrite(output_path):
-        info("Operation cancelled.")
-        return 0
-
-    stats: BuildStats = build_pfs_stream_single_file(
-        source_file=source_file,
-        output_path=output_path,
-        block_size=config.block_size,
-        pfs_version=config.pfs_version,
-        case_insensitive=config.case_insensitive,
-        zlib_level=config.zlib_level,
-        threshold_gain=config.threshold_gain,
-        min_file_gain=config.min_file_gain,
-        min_compress_size=config.min_compress_size,
-        cpu_count=config.cpu_count,
-        compress=config.compress,
-        encrypted=config.encrypted,
-        new_crypt=config.new_crypt,
-        ekpfs=config.ekpfs_key,
-        verbose=args.verbose,
-        skip_executable_compression=config.skip_executable_compression,
-        dry_run=args.dry_run,
-        inner_file_name=internal_file_name,
-    )
-    stats.input_path = source_file
-    print_summary(stats)
-    verification_mode: PackVerificationMode = _resolve_pack_verification_mode(args)
-    if args.dry_run or verification_mode == PackVerificationMode.SKIP:
-        return 0
-
-    # Stage the single file into a temp directory (hardlink, no data copy) so the
-    # check compares against a directory tree, mirroring the verify command.
-    with _stage_single_file_source_root(
-        source_file=source_file,
-        temp_folder=temp_folder,
-        staged_file_name=internal_file_name,
-    ) as staging_root:
-        rc: int = _run_post_pack_verify(
+        _print_pack_parameters(
+            config=config,
+            display_source_path=source_file,
             output_path=output_path,
-            source=staging_root,
-            ekpfs_key=config.ekpfs_key,
+            temp_folder=temp_folder,
+            signed=False,
+            require_game_files=False,
+            dry_run=args.dry_run,
+        )
+
+        if not args.dry_run:
+            destination_space_error: str | None = get_destination_space_error_message(
+                source_root=source_file,
+                output_path=output_path,
+            )
+            if destination_space_error is not None:
+                error(destination_space_error, icon_name="error")
+                return 1
+
+        if not args.dry_run and not prompt_overwrite(output_path):
+            info("Operation cancelled.")
+            return 0
+
+        stats: BuildStats = build_pfs_stream_single_file(
+            source_file=source_file,
+            output_path=output_path,
+            block_size=config.block_size,
+            pfs_version=config.pfs_version,
+            case_insensitive=config.case_insensitive,
+            zlib_level=config.zlib_level,
+            threshold_gain=config.threshold_gain,
+            min_file_gain=config.min_file_gain,
+            min_compress_size=config.min_compress_size,
+            cpu_count=config.cpu_count,
+            compress=config.compress,
+            encrypted=config.encrypted,
             new_crypt=config.new_crypt,
-            verification_mode=verification_mode,
-            hide_headers=True,
+            ekpfs=config.ekpfs_key,
+            verbose=args.verbose,
+            skip_executable_compression=config.skip_executable_compression,
+            dry_run=args.dry_run,
+            inner_file_name=internal_file_name,
         )
-        if rc == 0:
-            info("🎉 Image created successfully!")
-        return rc
+        stats.input_path = source_file
+        print_summary(stats)
+        verification_mode: PackVerificationMode = _resolve_pack_verification_mode(args)
+        if args.dry_run or verification_mode == PackVerificationMode.SKIP:
+            return 0
+
+        # Stage the single file into a temp directory (hardlink, no data copy) so the
+        # check compares against a directory tree, mirroring the verify command.
+        with _stage_single_file_source_root(
+            source_file=source_file,
+            temp_folder=temp_folder,
+            staged_file_name=internal_file_name,
+        ) as staging_root:
+            rc: int = _run_post_pack_verify(
+                output_path=output_path,
+                source=staging_root,
+                ekpfs_key=config.ekpfs_key,
+                new_crypt=config.new_crypt,
+                verification_mode=verification_mode,
+                hide_headers=True,
+            )
+            if rc == 0:
+                info("🎉 Image created successfully!")
+            return rc
+    finally:
+        if reset_needed:
+            set_progress_style(prev_style)
 
 
 def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
@@ -1629,108 +1683,134 @@ def cli_mkpfs_pack_file_run(args: argparse.Namespace) -> int:
     Returns:
         Process exit code for the file packing workflow.
     """
-    source_file: Path = Path(args.source_file).expanduser().resolve()
-    temp_folder: Path = _resolve_pack_temp_folder(args)
-    rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
-    if not source_file.exists() or not source_file.is_file():
-        raise BuildError(f"--source-file must be an existing file: {source_file}")
-    internal_file_name: str = _resolve_single_file_internal_name(
-        source_file=source_file,
-        rename_inner_image=rename_inner_image,
-    )
-    if (
-        rename_inner_image
-        and internal_file_name != source_file.name
-        and _stream_fallback_reason(args=args) is not None
-    ):
-        _emit_single_file_rename_warning(original_name=source_file.name, renamed_name=internal_file_name)
+    reset_needed: bool = bool(getattr(args, "no_progress", False))
+    if reset_needed:
+        from .pbar import get_progress_style
 
-    # Prefer direct-to-image streaming for the common single-file path; fall back to
-    # the legacy staged/spool builder only when forced or when options require it.
-    reason: str | None = _stream_fallback_reason(args=args)
-    if not getattr(args, "use_spool", False) and reason is None:
-        return _run_stream_pack_file(args=args, source_file=source_file)
-    if not getattr(args, "use_spool", False) and reason is not None:
-        info(f"Direct-to-image streaming unavailable ({reason}); using the spool builder.")
-
-    with _stage_single_file_source_root(
-        source_file=source_file,
-        temp_folder=temp_folder,
-        staged_file_name=internal_file_name,
-    ) as staging_root:
-        return _run_pack_build(
-            args=args,
-            build_source_root=staging_root,
-            compare_source_root=staging_root,
-            display_source_path=source_file,
-            temp_folder=temp_folder,
-            require_game_files=False,
-            desired_output_suffix=".ffpfsc",
-            output_adjustment_message=(
-                "Single file compression mode enabled, adjusting output file extension "
-                "to match the container mode .ffpfsc"
-            ),
+        prev_style: str = get_progress_style()
+        set_progress_style("simple")
+    else:
+        prev_style = "bar"
+    try:
+        source_file: Path = Path(args.source_file).expanduser().resolve()
+        temp_folder: Path = _resolve_pack_temp_folder(args)
+        rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
+        if not source_file.exists() or not source_file.is_file():
+            raise BuildError(f"--source-file must be an existing file: {source_file}")
+        internal_file_name: str = _resolve_single_file_internal_name(
+            source_file=source_file,
+            rename_inner_image=rename_inner_image,
         )
+        if (
+            rename_inner_image
+            and internal_file_name != source_file.name
+            and _stream_fallback_reason(args=args) is not None
+        ):
+            _emit_single_file_rename_warning(original_name=source_file.name, renamed_name=internal_file_name)
+
+        # Prefer direct-to-image streaming for the common single-file path; fall back to
+        # the legacy staged/spool builder only when forced or when options require it.
+        reason: str | None = _stream_fallback_reason(args=args)
+        if not getattr(args, "use_spool", False) and reason is None:
+            return _run_stream_pack_file(args=args, source_file=source_file)
+        if not getattr(args, "use_spool", False) and reason is not None:
+            info(f"Direct-to-image streaming unavailable ({reason}); using the spool builder.")
+
+        with _stage_single_file_source_root(
+            source_file=source_file,
+            temp_folder=temp_folder,
+            staged_file_name=internal_file_name,
+        ) as staging_root:
+            return _run_pack_build(
+                args=args,
+                build_source_root=staging_root,
+                compare_source_root=staging_root,
+                display_source_path=source_file,
+                temp_folder=temp_folder,
+                require_game_files=False,
+                desired_output_suffix=".ffpfsc",
+                output_adjustment_message=(
+                    "Single file compression mode enabled, adjusting output file extension "
+                    "to match the container mode .ffpfsc"
+                ),
+            )
+    finally:
+        if reset_needed:
+            set_progress_style(prev_style)
 
 
 def cli_mkpfs_check_run(args: argparse.Namespace) -> int:
-    image: Path = Path(args.image_file).expanduser().resolve()
-    source_dir_arg: str | None = getattr(args, "source_dir", None)
-    source_file_arg: str | None = getattr(args, "source_file", None)
-    if source_dir_arg and source_file_arg:
-        info("--source-dir and --source-file cannot be used together")
-        return 2
+    reset_needed: bool = bool(getattr(args, "no_progress", False))
+    if reset_needed:
+        from .pbar import get_progress_style
 
-    fmt_text: str = getattr(args, "format", "auto")
-    fmt: ImageFormat = ImageFormat(fmt_text)
-    detected: ImageFormat = detect_image_format(image=image, hint=fmt)
-
-    # Raw exFAT verify path.
-    if detected == ImageFormat.EXFAT:
-        if source_file_arg:
-            info("--source-file is not supported for exFAT verify; use --source-dir")
+        prev_style: str = get_progress_style()
+        set_progress_style("simple")
+    else:
+        prev_style = "bar"
+    try:
+        image: Path = Path(args.image_file).expanduser().resolve()
+        source_dir_arg: str | None = getattr(args, "source_dir", None)
+        source_file_arg: str | None = getattr(args, "source_file", None)
+        if source_dir_arg and source_file_arg:
+            info("--source-dir and --source-file cannot be used together")
             return 2
-        source: Path | None = Path(source_dir_arg).expanduser().resolve() if source_dir_arg else None
-        errors, warnings = verify_exfat_image(image=image, source=source, compare_contents=source is not None)
-        for w in warnings:
-            warning(w, icon_name="warning")
-        for e in errors:
-            error(e, icon_name="error")
-        return 1 if errors else 0
 
-    # Default PFS verify path (existing behaviour).
-    source: Path | None = None
-    if source_dir_arg:
-        source = Path(source_dir_arg).expanduser().resolve()
-    elif source_file_arg:
-        source_file: Path = Path(source_file_arg).expanduser().resolve()
-        if not source_file.exists() or not source_file.is_file():
-            info(f"--source-file must be an existing file: {source_file}")
-            return 2
-        internal_file_name: str = _resolve_single_file_internal_name(source_file=source_file, rename_inner_image=True)
-        if internal_file_name != source_file.name:
-            _emit_single_file_verify_name_mismatch_warning(
-                external_name=source_file.name,
-                internal_name=internal_file_name,
-            )
-        with _stage_single_file_source_root(
-            source_file=source_file,
-            staged_file_name=internal_file_name,
-        ) as staging_root:
-            source = staging_root
-            return _run_verify_check(
-                image=image,
-                source=source,
-                args=args,
-                require_game_files=bool(getattr(args, "require_game_files", False)),
-            )
+        fmt_text: str = getattr(args, "format", "auto")
+        fmt: ImageFormat = ImageFormat(fmt_text)
+        detected: ImageFormat = detect_image_format(image=image, hint=fmt)
 
-    return _run_verify_check(
-        image=image,
-        source=source,
-        args=args,
-        require_game_files=bool(getattr(args, "require_game_files", False)),
-    )
+        # Raw exFAT verify path.
+        if detected == ImageFormat.EXFAT:
+            if source_file_arg:
+                info("--source-file is not supported for exFAT verify; use --source-dir")
+                return 2
+            source: Path | None = Path(source_dir_arg).expanduser().resolve() if source_dir_arg else None
+            errors, warnings = verify_exfat_image(image=image, source=source, compare_contents=source is not None)
+            for w in warnings:
+                warning(w, icon_name="warning")
+            for e in errors:
+                error(e, icon_name="error")
+            return 1 if errors else 0
+
+        # Default PFS verify path (existing behaviour).
+        source: Path | None = None
+        if source_dir_arg:
+            source = Path(source_dir_arg).expanduser().resolve()
+        elif source_file_arg:
+            source_file: Path = Path(source_file_arg).expanduser().resolve()
+            if not source_file.exists() or not source_file.is_file():
+                info(f"--source-file must be an existing file: {source_file}")
+                return 2
+            internal_file_name: str = _resolve_single_file_internal_name(
+                source_file=source_file, rename_inner_image=True
+            )
+            if internal_file_name != source_file.name:
+                _emit_single_file_verify_name_mismatch_warning(
+                    external_name=source_file.name,
+                    internal_name=internal_file_name,
+                )
+            with _stage_single_file_source_root(
+                source_file=source_file,
+                staged_file_name=internal_file_name,
+            ) as staging_root:
+                source = staging_root
+                return _run_verify_check(
+                    image=image,
+                    source=source,
+                    args=args,
+                    require_game_files=bool(getattr(args, "require_game_files", False)),
+                )
+
+        return _run_verify_check(
+            image=image,
+            source=source,
+            args=args,
+            require_game_files=bool(getattr(args, "require_game_files", False)),
+        )
+    finally:
+        if reset_needed:
+            set_progress_style(prev_style)
 
 
 def _run_verify_check(
@@ -1948,34 +2028,70 @@ def cli_mkpfs_analyze_run(args: argparse.Namespace) -> int:
 
 def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
     """Extract all files from an image into a directory."""
-    image: Path = Path(args.image_file).expanduser().resolve()
-    output_path: Path = Path(args.output_dir).expanduser().resolve()
-    deep: bool = bool(getattr(args, "deep", False))
-    selectors: list[str] | None = getattr(args, "only", None)
+    reset_needed: bool = bool(getattr(args, "no_progress", False))
+    if reset_needed:
+        from .pbar import get_progress_style
 
-    if selectors and not deep:
-        info("--only requires --deep (it selects entries inside the wrapped exFAT)")
-        return 2
+        prev_style: str = get_progress_style()
+        set_progress_style("simple")
+    else:
+        prev_style = "bar"
+    try:
+        image: Path = Path(args.image_file).expanduser().resolve()
+        output_path: Path = Path(args.output_dir).expanduser().resolve()
+        deep: bool = bool(getattr(args, "deep", False))
+        selectors: list[str] | None = getattr(args, "only", None)
 
-    if output_path.exists() and not args.overwrite:
-        info(f"output path {output_path} exists (use --overwrite to force)")
-        return 2
+        if selectors and not deep:
+            info("--only requires --deep (it selects entries inside the wrapped exFAT)")
+            return 2
 
-    fmt_text: str = getattr(args, "format", "auto")
-    fmt: ImageFormat = ImageFormat(fmt_text)
-    detected: ImageFormat = detect_image_format(image=image, hint=fmt)
+        if output_path.exists() and not args.overwrite:
+            info(f"output path {output_path} exists (use --overwrite to force)")
+            return 2
 
-    # Raw exFAT unpack path.
-    if detected == ImageFormat.EXFAT:
-        if deep:
-            info("--deep has no effect for raw exFAT images; extracting image contents")
-        if selectors:
-            info("--only is not supported for raw exFAT images; extracting everything")
-        result: PFSExtractionResult = extract_exfat_image(
+        fmt_text: str = getattr(args, "format", "auto")
+        fmt: ImageFormat = ImageFormat(fmt_text)
+        detected: ImageFormat = detect_image_format(image=image, hint=fmt)
+
+        # Raw exFAT unpack path.
+        if detected == ImageFormat.EXFAT:
+            if deep:
+                info("--deep has no effect for raw exFAT images; extracting image contents")
+            if selectors:
+                info("--only is not supported for raw exFAT images; extracting everything")
+            result: PFSExtractionResult = extract_exfat_image(
+                image=image,
+                output_path=output_path,
+                progress=Progress(enabled=True),
+            )
+            for w in result.warnings:
+                info(w)
+            for e in result.errors:
+                info(e)
+
+            if result.errors:
+                return 1
+
+            print_version_header()
+            info("Extraction complete:")
+            info(f"  Output:       {result.output_path}")
+            info(f"  Files written: {result.files_written}")
+            info(f"  Dirs created:  {result.directories_created}")
+            info(f"  Bytes written: {result.bytes_written}")
+            return 0
+
+        # Default PFS unpack path (existing behaviour).
+        result: PFSExtractionResult = extract_pfs_image(
             image=image,
             output_path=output_path,
             progress=Progress(enabled=True),
+            ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
+            new_crypt=bool(getattr(args, "new_crypt", False)),
+            deep=deep,
+            selectors=selectors,
         )
+
         for w in result.warnings:
             info(w)
         for e in result.errors:
@@ -1991,33 +2107,9 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
         info(f"  Dirs created:  {result.directories_created}")
         info(f"  Bytes written: {result.bytes_written}")
         return 0
-
-    # Default PFS unpack path (existing behaviour).
-    result: PFSExtractionResult = extract_pfs_image(
-        image=image,
-        output_path=output_path,
-        progress=Progress(enabled=True),
-        ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
-        new_crypt=bool(getattr(args, "new_crypt", False)),
-        deep=deep,
-        selectors=selectors,
-    )
-
-    for w in result.warnings:
-        info(w)
-    for e in result.errors:
-        info(e)
-
-    if result.errors:
-        return 1
-
-    print_version_header()
-    info("Extraction complete:")
-    info(f"  Output:       {result.output_path}")
-    info(f"  Files written: {result.files_written}")
-    info(f"  Dirs created:  {result.directories_created}")
-    info(f"  Bytes written: {result.bytes_written}")
-    return 0
+    finally:
+        if reset_needed:
+            set_progress_style(prev_style)
 
 
 def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
@@ -2054,6 +2146,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     exfat_parser = pack_sub.add_parser("exfat", help="Build a raw exFAT image from a source directory")
     exfat_parser.epilog = "Examples:\r\n   mkpfs pack exfat './BREW1234-app' './BREW1234.exfat'\r\n"
     exfat_parser.add_argument("source_dir", help="Source app or homebrew folder")
+    exfat_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Replace interactive progress bars with simple one-line status messages",
+    )
     exfat_parser.add_argument(
         "output",
         nargs="?",
@@ -2105,6 +2202,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
 
     check_parser = sub.add_parser("verify", help="Validate image structure and payload checksums")
     check_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
+    check_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Replace interactive progress bars with simple one-line status messages",
+    )
     check_source_group = check_parser.add_mutually_exclusive_group()
     check_source_group.add_argument("--source-dir", help="Optional source folder for hierarchy and payload comparison")
     check_source_group.add_argument(
@@ -2172,6 +2274,11 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     extract_parser = sub.add_parser("unpack", help="Extract files from image to destination directory")
     extract_parser.epilog = "Examples:\r\n   mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'\r\n"
     extract_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
+    extract_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Replace interactive progress bars with simple one-line status messages",
+    )
     extract_parser.add_argument("output_dir", help="Destination directory for extraction")
     extract_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output path")
     extract_parser.add_argument(
