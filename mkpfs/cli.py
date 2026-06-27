@@ -24,6 +24,7 @@ from .pbar import Progress
 from .pfs import (
     BuildError,
     BuildStats,
+    ImageFormat,
     ParsedDirent,
     PFSExtractionResult,
     PFSImageInfo,
@@ -35,8 +36,10 @@ from .pfs import (
     build_tree_from_uroot,
     choose_auto_fit_block_size,
     compose_pfs_mode_with_sign,
+    detect_image_format,
     estimate_file_data_footprint,
     estimate_pfsc_spool_size,
+    extract_exfat_image,
     extract_pfs_image,
     human_readable_size,
     inspect_pfs_image,
@@ -55,6 +58,7 @@ from .pfs import (
     validate_ps5_checklist,
     validate_source_match,
     validate_source_paths,
+    verify_exfat_image,
     verify_file_payload_hashes,
     verify_signed_image_signatures,
 )
@@ -1677,6 +1681,24 @@ def cli_mkpfs_check_run(args: argparse.Namespace) -> int:
         info("--source-dir and --source-file cannot be used together")
         return 2
 
+    fmt_text: str = getattr(args, "format", "auto")
+    fmt: ImageFormat = ImageFormat(fmt_text)
+    detected: ImageFormat = detect_image_format(image=image, hint=fmt)
+
+    # Raw exFAT verify path.
+    if detected == ImageFormat.EXFAT:
+        if source_file_arg:
+            info("--source-file is not supported for exFAT verify; use --source-dir")
+            return 2
+        source: Path | None = Path(source_dir_arg).expanduser().resolve() if source_dir_arg else None
+        errors, warnings = verify_exfat_image(image=image, source=source, compare_contents=source is not None)
+        for w in warnings:
+            warning(w, icon_name="warning")
+        for e in errors:
+            error(e, icon_name="error")
+        return 1 if errors else 0
+
+    # Default PFS verify path (existing behaviour).
     source: Path | None = None
     if source_dir_arg:
         source = Path(source_dir_arg).expanduser().resolve()
@@ -1774,6 +1796,17 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
     image: Path = Path(args.image_file).expanduser().resolve()
     ekpfs: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
     new_crypt: bool = bool(getattr(args, "new_crypt", False))
+    fmt: ImageFormat = ImageFormat(getattr(args, "format", ImageFormat.AUTO.value))
+    detected: ImageFormat = detect_image_format(image=image, hint=fmt)
+
+    if detected == ImageFormat.EXFAT:
+        print_version_header()
+        info("/")
+        with image.open("rb") as fh:
+            reader: ExfatReader = ExfatReader(fh)
+            for line in render_exfat_tree(reader.root_entries()):
+                info(line)
+        return 0
 
     # Deep mode: if the image wraps a single exFAT, list the files inside it.
     if bool(getattr(args, "deep", False)):
@@ -1914,11 +1947,7 @@ def cli_mkpfs_analyze_run(args: argparse.Namespace) -> int:
 
 
 def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
-    """Extract all files from a PFS image into a directory.
-
-    Args:
-        args: Parsed CLI arguments with `image`, `output`, and optional `overwrite`.
-    """
+    """Extract all files from an image into a directory."""
     image: Path = Path(args.image_file).expanduser().resolve()
     output_path: Path = Path(args.output_dir).expanduser().resolve()
     deep: bool = bool(getattr(args, "deep", False))
@@ -1932,7 +1961,38 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
         info(f"output path {output_path} exists (use --overwrite to force)")
         return 2
 
-    # Perform extraction via library API
+    fmt_text: str = getattr(args, "format", "auto")
+    fmt: ImageFormat = ImageFormat(fmt_text)
+    detected: ImageFormat = detect_image_format(image=image, hint=fmt)
+
+    # Raw exFAT unpack path.
+    if detected == ImageFormat.EXFAT:
+        if deep:
+            info("--deep has no effect for raw exFAT images; extracting image contents")
+        if selectors:
+            info("--only is not supported for raw exFAT images; extracting everything")
+        result: PFSExtractionResult = extract_exfat_image(
+            image=image,
+            output_path=output_path,
+            progress=Progress(enabled=True),
+        )
+        for w in result.warnings:
+            info(w)
+        for e in result.errors:
+            info(e)
+
+        if result.errors:
+            return 1
+
+        print_version_header()
+        info("Extraction complete:")
+        info(f"  Output:       {result.output_path}")
+        info(f"  Files written: {result.files_written}")
+        info(f"  Dirs created:  {result.directories_created}")
+        info(f"  Bytes written: {result.bytes_written}")
+        return 0
+
+    # Default PFS unpack path (existing behaviour).
     result: PFSExtractionResult = extract_pfs_image(
         image=image,
         output_path=output_path,
@@ -2044,7 +2104,7 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     )
 
     check_parser = sub.add_parser("verify", help="Validate image structure and payload checksums")
-    check_parser.add_argument("image_file", help="Path to input .ffpfs image")
+    check_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
     check_source_group = check_parser.add_mutually_exclusive_group()
     check_source_group.add_argument("--source-dir", help="Optional source folder for hierarchy and payload comparison")
     check_source_group.add_argument(
@@ -2061,6 +2121,15 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     )
     check_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     check_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
+    check_parser.add_argument(
+        "--format",
+        choices=[ImageFormat.AUTO.value, ImageFormat.PFS.value, ImageFormat.EXFAT.value],
+        default=ImageFormat.AUTO.value,
+        help=(
+            "Image format hint (auto: detect exFAT by extension/signature, "
+            "pfs: force PFS handling, exfat: force exFAT handling)"
+        ),
+    )
     check_parser.add_argument(
         "--require-game-files",
         action="store_true",
@@ -2081,11 +2150,20 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     inspect_parser.set_defaults(func=cli_mkpfs_inspect_run)
 
     ls_parser = sub.add_parser("tree", help="Print image tree representation")
-    ls_parser.add_argument("image_file", help="Path to input .ffpfs image")
+    ls_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
     ls_parser.add_argument(
         "--deep",
         action="store_true",
         help="If the image wraps a single exFAT, list the files inside it",
+    )
+    ls_parser.add_argument(
+        "--format",
+        choices=[ImageFormat.AUTO.value, ImageFormat.PFS.value, ImageFormat.EXFAT.value],
+        default=ImageFormat.AUTO.value,
+        help=(
+            "Image format hint (auto: detect exFAT by extension/signature, "
+            "pfs: force PFS handling, exfat: force exFAT handling)"
+        ),
     )
     ls_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     ls_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
@@ -2093,13 +2171,13 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
 
     extract_parser = sub.add_parser("unpack", help="Extract files from image to destination directory")
     extract_parser.epilog = "Examples:\r\n   mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'\r\n"
-    extract_parser.add_argument("image_file", help="Path to input .ffpfs image")
+    extract_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
     extract_parser.add_argument("output_dir", help="Destination directory for extraction")
     extract_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output path")
     extract_parser.add_argument(
         "--deep",
         action="store_true",
-        help="If the image wraps a single exFAT, extract the files inside it instead of the inner .exfat",
+        help="If the image wraps a single exFAT inside a PFS, extract the files inside it instead of the inner .exfat",
     )
     extract_parser.add_argument(
         "--only",
@@ -2109,6 +2187,15 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     )
     extract_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     extract_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
+    extract_parser.add_argument(
+        "--format",
+        choices=[ImageFormat.AUTO.value, ImageFormat.PFS.value, ImageFormat.EXFAT.value],
+        default=ImageFormat.AUTO.value,
+        help=(
+            "Image format hint (auto: detect exFAT by extension/signature, "
+            "pfs: force PFS handling, exfat: force exFAT handling)"
+        ),
+    )
     extract_parser.set_defaults(func=cli_mkpfs_extract_run)
 
     return parser

@@ -24,6 +24,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
@@ -31,7 +32,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from zlib_ng import zlib_ng as zlib
 
 from . import consts
-from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatReader
+from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
 from .exfat_writer import iter_exfat_image
 from .logging import info, warning
 from .pbar import Progress
@@ -604,6 +605,14 @@ class SignatureTarget:
 
 class BuildError(RuntimeError):
     pass
+
+
+class ImageFormat(StrEnum):
+    """Supported on-disk image formats for verify and unpack workflows."""
+
+    AUTO = "auto"
+    PFS = "pfs"
+    EXFAT = "exfat"
 
 
 @dataclass
@@ -3171,11 +3180,112 @@ def build_pfs(
             progress.step("compress", 0, progress_total_units, bytes_processed=0)
             total_bytes_processed: int = 0
             displayed_progress_units: int = 0
-            with mp.Manager() as manager:
-                progress_queue: SupportsIntQueue = manager.Queue()
-                worker_args: list[
-                    tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None, Path | None]
-                ] = [
+
+            # Adaptive Manager: try Manager-backed intra-file progress (stderr suppressed),
+            # else fallback to per-file updates
+            def _start_manager_quietly() -> object | None:
+                try:
+                    save2 = os.dup(2)
+                    dn = os.open(os.devnull, os.O_WRONLY)
+                    try:
+                        os.dup2(dn, 2)
+                        return mp.Manager()
+                    finally:
+                        with suppress(OSError):
+                            os.dup2(save2, 2)
+                        with suppress(OSError):
+                            os.close(save2)
+                        with suppress(OSError):
+                            os.close(dn)
+                except Exception:
+                    return None
+
+            manager_obj = _start_manager_quietly()
+            if manager_obj is not None:
+                try:
+                    progress_queue: SupportsIntQueue = manager_obj.Queue()
+                    worker_args: list[
+                        tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None, Path | None]
+                    ] = [
+                        (
+                            f.abs_path,
+                            threshold_gain,
+                            min_file_gain,
+                            min_compress_size,
+                            True,
+                            consts.PFSC_LOGICAL_BLOCK_SIZE,
+                            zlib_level,
+                            dry_run,
+                            progress_queue,
+                            temp_root,
+                        )
+                        for f in compression_file_nodes
+                    ]
+                    with mp.Pool(processes=worker_count) as pool:
+                        results = pool.imap_unordered(_compute_file_storage_worker, worker_args, chunksize=1)
+                        remaining_results: int = len(worker_args)
+                        while remaining_results > 0:
+                            queued_bytes: int = _drain_compression_progress_queue(progress_queue=progress_queue)
+                            if queued_bytes > 0:
+                                displayed_progress_units = min(
+                                    total_bytes_to_process,
+                                    displayed_progress_units + queued_bytes,
+                                )
+                                progress.step(
+                                    "compress",
+                                    displayed_progress_units,
+                                    progress_total_units,
+                                    bytes_processed=displayed_progress_units if total_bytes_to_process > 0 else 0,
+                                )
+                            try:
+                                result = results.next(timeout=0.1)
+                            except mp.TimeoutError:
+                                continue
+                            except OSError:
+                                cleanup_temporary_file_node_payloads(file_nodes=compression_file_nodes)
+                                raise
+
+                            remaining_results -= 1
+                            (
+                                abs_path,
+                                stored_source_path,
+                                stored_source_is_temp,
+                                stored_size,
+                                is_compressed,
+                                gain_pct,
+                                hyp_comp_size,
+                            ) = result
+                            file_node = file_nodes_by_path[abs_path]
+                            file_node.stored_source_path = stored_source_path
+                            file_node.stored_source_is_temp = stored_source_is_temp
+                            file_node.stored_size = stored_size
+                            file_node.compressed = is_compressed
+                            file_node.gain_pct = gain_pct
+                            file_node.hypothetical_compressed_size = hyp_comp_size
+                            total_bytes_processed += file_node.raw_size
+                            completed_files: int = len(worker_args) - remaining_results
+                            target_progress_units: int = (
+                                total_bytes_processed if total_bytes_to_process > 0 else completed_files
+                            )
+                            if displayed_progress_units < target_progress_units:
+                                displayed_progress_units = target_progress_units
+                                progress.step(
+                                    "compress",
+                                    displayed_progress_units,
+                                    progress_total_units,
+                                    bytes_processed=displayed_progress_units if total_bytes_to_process > 0 else 0,
+                                )
+                finally:
+                    with suppress(Exception):
+                        manager_obj.shutdown()
+            else:
+                warning("")
+                warning(
+                    "The progress bar might take a while to update. Please wait...",
+                    icon_name="warning",
+                )
+                progress_queue_none: SupportsIntQueue | None = None
+                worker_args = [
                     (
                         f.abs_path,
                         threshold_gain,
@@ -3185,27 +3295,15 @@ def build_pfs(
                         consts.PFSC_LOGICAL_BLOCK_SIZE,
                         zlib_level,
                         dry_run,
-                        progress_queue,
+                        progress_queue_none,
                         temp_root,
                     )
                     for f in compression_file_nodes
                 ]
                 with mp.Pool(processes=worker_count) as pool:
                     results = pool.imap_unordered(_compute_file_storage_worker, worker_args, chunksize=1)
-                    remaining_results: int = len(worker_args)
+                    remaining_results = len(worker_args)
                     while remaining_results > 0:
-                        queued_bytes: int = _drain_compression_progress_queue(progress_queue=progress_queue)
-                        if queued_bytes > 0:
-                            displayed_progress_units = min(
-                                total_bytes_to_process,
-                                displayed_progress_units + queued_bytes,
-                            )
-                            progress.step(
-                                "compress",
-                                displayed_progress_units,
-                                progress_total_units,
-                                bytes_processed=displayed_progress_units if total_bytes_to_process > 0 else 0,
-                            )
                         try:
                             result = results.next(timeout=0.1)
                         except mp.TimeoutError:
@@ -3213,7 +3311,6 @@ def build_pfs(
                         except OSError:
                             cleanup_temporary_file_node_payloads(file_nodes=compression_file_nodes)
                             raise
-
                         remaining_results -= 1
                         (
                             abs_path,
@@ -3232,8 +3329,8 @@ def build_pfs(
                         file_node.gain_pct = gain_pct
                         file_node.hypothetical_compressed_size = hyp_comp_size
                         total_bytes_processed += file_node.raw_size
-                        completed_files: int = len(worker_args) - remaining_results
-                        target_progress_units: int = (
+                        completed_files = len(worker_args) - remaining_results
+                        target_progress_units = (
                             total_bytes_processed if total_bytes_to_process > 0 else completed_files
                         )
                         if displayed_progress_units < target_progress_units:
@@ -5832,6 +5929,40 @@ def read_pfs_info(image: Path) -> PFSImageInfo:
     return info
 
 
+def detect_image_format(image: Path, *, hint: ImageFormat = ImageFormat.AUTO) -> ImageFormat:
+    """Return the effective image format for verify/unpack workflows.
+
+    The helper keeps detection intentionally simple to preserve existing
+    behaviour for PFS images: we only special-case exFAT and treat
+    everything else as PFS.
+
+    Detection rules when ``hint`` is ``AUTO``:
+
+    * ``.exfat`` extension → :class:`ImageFormat.EXFAT`.
+    * exFAT boot signature at bytes 3..11 → ``EXFAT``.
+    * Otherwise → :class:`ImageFormat.PFS`.
+
+    When ``hint`` is ``PFS`` or ``EXFAT``, it is returned as-is.
+    """
+    if hint in (ImageFormat.PFS, ImageFormat.EXFAT):
+        return hint
+
+    suffix: str = image.suffix.lower()
+    if suffix == ".exfat":
+        return ImageFormat.EXFAT
+
+    try:
+        with image.open("rb") as fh:
+            vbr: bytes = fh.read(512)
+    except OSError:
+        return ImageFormat.PFS
+
+    if len(vbr) >= 11 and vbr[3:11] == EXFAT_SIGNATURE:
+        return ImageFormat.EXFAT
+
+    return ImageFormat.PFS
+
+
 def inspect_pfs_image(
     image: Path,
     source: Path | None = None,
@@ -6178,6 +6309,98 @@ def _flatten_exfat_entries(entries: list[ExfatEntry]) -> tuple[list[ExfatEntry],
     return dirs, files
 
 
+def verify_exfat_image(
+    image: Path, source: Path | None = None, *, compare_contents: bool = True
+) -> tuple[list[str], list[str]]:
+    """Verify a raw exFAT image optionally against a source directory.
+
+    When ``source`` is provided and ``compare_contents`` is True, the
+    verification performs a file-for-file SHA-256 comparison between the
+    source tree and the exFAT contents. Otherwise it performs a
+    lightweight structural sanity check by walking the directory tree.
+
+    Returns:
+        Tuple of ``(errors, warnings)``.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    fh: BinaryIO | None = None
+    try:
+        fh = image.open("rb")
+        reader = ExfatReader(fh)
+
+        # No source: require that we can walk the directory tree.
+        if source is None or not compare_contents:
+            try:
+                _ = reader.root_entries()
+            except ExfatError as exc:
+                errors.append(f"failed to walk exFAT directory tree: {exc}")
+            return errors, warnings
+
+        source = source.expanduser().resolve()
+        if not source.exists() or not source.is_dir():
+            errors.append(f"source directory does not exist: {source}")
+            return errors, warnings
+
+        def _hash_file(path: Path) -> str:
+            hasher = hashlib.sha256()
+            with path.open("rb") as src_fh:
+                for chunk in iter(lambda: src_fh.read(4 * 1024 * 1024), b""):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+
+        def _is_metadata_path(rel_path: str) -> bool:
+            base_name: str = Path(rel_path).name
+            base_lower: str = base_name.lower()
+            return base_name.startswith(".") or base_lower in {"thumbs.db", "desktop.ini"}
+
+        # Build source map (case-insensitive keying to match exFAT behaviour).
+        src_hashes: dict[str, str] = {}
+        for candidate in sorted(source.rglob("*")):
+            if not candidate.is_file():
+                continue
+            rel: str = candidate.relative_to(source).as_posix()
+            if _is_metadata_path(rel):
+                continue
+            src_hashes[rel.lower()] = _hash_file(candidate)
+
+        # Build exFAT map.
+        extr_hashes: dict[str, str] = {}
+        for entry in reader.iter_files():
+            rel_path: str = entry.rel_path.replace("\\", "/").lstrip("/")
+            if _is_metadata_path(rel_path):
+                continue
+            key: str = rel_path.lower()
+            hasher = hashlib.sha256()
+            for chunk in reader.read_file(entry):
+                hasher.update(chunk)
+            extr_hashes[key] = hasher.hexdigest()
+
+        # Compare key sets.
+        missing: list[str] = sorted(k for k in src_hashes if k not in extr_hashes)
+        extra: list[str] = sorted(k for k in extr_hashes if k not in src_hashes)
+        if missing:
+            errors.append(
+                "missing files in exFAT image: " + ", ".join(missing[:20]) + (" ..." if len(missing) > 20 else "")
+            )
+        if extra:
+            errors.append("extra files in exFAT image: " + ", ".join(extra[:20]) + (" ..." if len(extra) > 20 else ""))
+
+        # Compare contents for common keys.
+        for key in sorted(set(src_hashes.keys()) & set(extr_hashes.keys())):
+            if src_hashes[key] != extr_hashes[key]:
+                errors.append(f"content mismatch for {key}")
+
+        return errors, warnings
+    except (OSError, ExfatError) as exc:
+        errors.append(f"failed to parse exFAT image: {exc}")
+        return errors, warnings
+    finally:
+        if fh is not None:
+            fh.close()
+
+
 def _normalize_extract_selectors(selectors: list[str] | None) -> list[str] | None:
     """Normalize selector paths to POSIX-relative form, or None when unfiltered.
 
@@ -6196,6 +6419,108 @@ def _normalize_extract_selectors(selectors: list[str] | None) -> list[str] | Non
         if norm:
             cleaned.append(norm)
     return cleaned or None
+
+
+def extract_exfat_image(
+    image: Path,
+    output_path: Path,
+    *,
+    progress: Progress | None = None,
+    selectors: list[str] | None = None,
+) -> PFSExtractionResult:
+    """Extract all files from a raw exFAT image into a directory.
+
+    Args:
+        image: exFAT image path.
+        output_path: Destination directory.
+        progress: Optional progress reporter.
+        selectors: Optional list of inner paths (files or directory prefixes)
+            to extract. When ``None``, everything is extracted.
+
+    Returns:
+        A structured extraction result.
+    """
+    result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
+
+    fh: BinaryIO | None = None
+    try:
+        fh = image.open("rb")
+        reader = ExfatReader(fh)
+        dirs, files = _flatten_exfat_entries(reader.root_entries())
+    except (OSError, ExfatError) as exc:
+        result.errors.append(f"failed to parse exFAT image: {exc}")
+        if fh is not None:
+            fh.close()
+        return result
+
+    if output_path.exists() and not output_path.is_dir():
+        result.errors.append(f"output path exists and is not a directory: {output_path}")
+        return result
+
+    selectors_norm: list[str] | None = _normalize_extract_selectors(selectors)
+    matched: set[str] = set()
+
+    def _selected(rel_path: str) -> bool:
+        if selectors_norm is None:
+            return True
+        hit: bool = False
+        for sel in selectors_norm:
+            if rel_path == sel or rel_path.startswith(sel + "/"):
+                matched.add(sel)
+                hit = True
+        return hit
+
+    dirs = [d for d in dirs if _selected(d.rel_path)]
+    files = [f for f in files if _selected(f.rel_path)]
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    for directory in dirs:
+        (output_path / directory.rel_path).mkdir(parents=True, exist_ok=True)
+        result.directories_created += 1
+
+    if selectors_norm is not None:
+        for sel in selectors_norm:
+            if sel not in matched:
+                result.warnings.append(f"--only: no exFAT entry matched '{sel}'")
+
+    total_bytes: int = sum(max(0, f.length) for f in files)
+    progress_total: int = max(total_bytes, 1)
+    last_reported: int = 0
+    update_interval: int = 8 * 1024 * 1024
+    if progress is not None:
+        progress.status(f"\nExtracting {len(files)} files from exFAT image to {output_path}...")
+
+    for file_entry in files:
+        target: Path = output_path / file_entry.rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with target.open("wb") as out_fh:
+                for chunk in reader.read_file(file_entry):
+                    out_fh.write(chunk)
+                    result.bytes_written += len(chunk)
+                    if progress is not None and result.bytes_written - last_reported >= update_interval:
+                        last_reported = result.bytes_written
+                        progress.step(
+                            "extract",
+                            min(result.bytes_written, total_bytes),
+                            progress_total,
+                            bytes_processed=result.bytes_written,
+                        )
+        except (OSError, ValueError, ExfatError) as exc:
+            result.errors.append(f"failed to extract '{file_entry.rel_path}': {exc}")
+            if fh is not None:
+                fh.close()
+            return result
+        result.files_written += 1
+
+    if progress is not None:
+        progress.step("extract", progress_total, progress_total, bytes_processed=result.bytes_written)
+
+    if fh is not None:
+        fh.close()
+
+    return result
 
 
 def _extract_inner_exfat(

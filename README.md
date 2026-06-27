@@ -44,7 +44,7 @@ python -m mkpfs pack folder './BREW1234-app' './BREW1234.ffpfsc'
 python -m mkpfs pack folder --raw './BREW1234-app/' './BREW1234.ffpfs'
 
 # Extracting Existing Images (Reverse operation; --deep lists/extracts inside a wrapped exFAT)
-python -m mkpfs unpack './BREW1234.ffpfsc' './BREW1234-extracted/' --deep
+python -m mkpfs unpack  --deep './BREW1234.ffpfsc' './BREW1234-extracted/'
 ```
 
 ## ⚠️ Limitations and Known Issues
@@ -338,7 +338,9 @@ Notes:
 mkpfs verify [-h] [--source-dir SOURCE_DIR | --source-file SOURCE_FILE]
              [--expect-crc32 EXPECT_CRC32]
              [--expect-manifest-sha256 EXPECT_MANIFEST_SHA256]
-             [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
+             [--ekpfs-key EKPFS_KEY] [--new-crypt]
+             [--format {auto,pfs,exfat}]
+             image_file
 ```
 
 Examples:
@@ -347,18 +349,20 @@ Examples:
 mkpfs verify ./game.ffpfs
 mkpfs verify ./single.ffpfsc --source-file ./payload.exfat
 mkpfs verify ./game.ffpfs --source-dir ./input --expect-crc32 0x7F528D1F
+mkpfs verify ./BREW1234.exfat --source-dir ./BREW1234-app --format exfat
 ```
 
 | Parameter | Description |
 | --- | --- |
-| `image_file` | Path to the input `.ffpfs` image. |
+| `image_file` | Path to the input image (`.ffpfs`, `.ffpfsc`, or `.exfat`). |
 | `-h`, `--help` | Show help and exit. |
-| `--source-dir SOURCE_DIR` | Optional source folder for hierarchy and payload comparison. |
-| `--source-file SOURCE_FILE` | Optional source file for single-file image comparison. Mutually exclusive with `--source-dir`. |
+| `--source-dir SOURCE_DIR` | Optional source folder for hierarchy and payload comparison. For exFAT images, this enables full file-by-file SHA-256 verification. |
+| `--source-file SOURCE_FILE` | Optional source file for single-file image comparison. Mutually exclusive with `--source-dir`. Not supported for raw exFAT images. |
 | `--expect-crc32 EXPECT_CRC32` | Expected cumulative data CRC32 in hex. Verification fails if the computed value differs. |
 | `--expect-manifest-sha256 EXPECT_MANIFEST_SHA256` | Expected manifest SHA256 as 64 hex characters. Verification fails if it differs. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
+| `--format {auto,pfs,exfat}` | Image format hint. `auto` (default) detects exFAT by extension/signature and treats everything else as PFS; `pfs` forces PFS handling; `exfat` forces exFAT handling. |
 
 ### `inspect`
 
@@ -405,7 +409,10 @@ mkpfs tree ./game.ffpfsc --deep
 ### `unpack`
 
 ```text
-mkpfs unpack [-h] [--overwrite] [--deep] [--only PATH] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file output_dir
+mkpfs unpack [-h] [--overwrite] [--deep] [--only PATH]
+             [--ekpfs-key EKPFS_KEY] [--new-crypt]
+             [--format {auto,pfs,exfat}]
+             image_file output_dir
 ```
 
 Examples:
@@ -415,18 +422,20 @@ mkpfs unpack ./game.ffpfs ./extracted/
 mkpfs unpack ./game.ffpfs ./extracted/ --overwrite
 mkpfs unpack ./game.ffpfsc ./extracted/ --deep
 mkpfs unpack ./game.ffpfsc ./extracted/ --deep --only sce_sys --only eboot.bin
+mkpfs unpack ./BREW1234.exfat ./BREW1234-extracted/ --format exfat
 ```
 
 | Parameter | Description |
 | --- | --- |
-| `image_file` | Path to the input `.ffpfs` image. |
+| `image_file` | Path to the input image (`.ffpfs`, `.ffpfsc`, or `.exfat`). |
 | `output_dir` | Destination directory for extraction. |
 | `-h`, `--help` | Show help and exit. |
 | `--overwrite` | Overwrite an existing output path. |
-| `--deep` | When the image wraps a single exFAT, extract the files inside it instead of the inner `.exfat`. |
+| `--deep` | When a PFS image wraps a single exFAT, extract the files inside it instead of the inner `.exfat`. Has no effect for raw `.exfat` images. |
 | `--only PATH` | With `--deep`, extract only this inner exFAT path (a file, or a folder and everything under it). Repeatable. Only the matching entries are read, so cherry-picking a few files from a large image is cheap. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
+| `--format {auto,pfs,exfat}` | Image format hint. `auto` (default) detects exFAT by extension/signature and treats everything else as PFS; `pfs` forces PFS handling; `exfat` forces exFAT handling. |
 
 
 ## 💻 Example Output
