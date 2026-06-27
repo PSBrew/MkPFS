@@ -327,7 +327,6 @@ mkpfs pack exfat ./BREW1234-app          # auto-name <titleId>.exfat alongside t
 | `--overwrite` | Overwrite an existing output file. |
 | `--verbose` | Print verbose output. |
 | `--no-progress` | Disable the packing progress bar on stderr. |
-| `--no-progress` | Disable the packing progress bar on stderr. |
 
 Notes:
 
