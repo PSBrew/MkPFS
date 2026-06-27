@@ -41,8 +41,13 @@ python -m mkpfs pack file './BREW1234.ffpkg' './BREW1234.ffpfsc'
 # Creating Images: Option 3: Game folder -> .ffpfsc in one pass (default: exFAT-wrapped, no temp file)
 python -m mkpfs pack folder './BREW1234-app' './BREW1234.ffpfsc'
 
-# Creating Images: Option 4: Game folder packed directly as PFS (advanced)
+# Creating Images: Option 4: Game folder packed directly as PFS (advanced single-pass)
 python -m mkpfs pack folder --raw './BREW1234-app/' './BREW1234.ffpfs'
+
+# Creating Images: Option 5: Game folder wrapped twice into PFS (advanced two-pass)
+python -m mkpfs pack folder --raw --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
+python -m mkpfs pack file './pfs_image.dat' './BREW1234.ffpfsc'
+rm './pfs_image.dat'
 
 # Extracting Existing Images (Reverse operation; --deep lists/extracts inside a wrapped exFAT)
 python -m mkpfs unpack  --deep './BREW1234.ffpfsc' './BREW1234-extracted/'

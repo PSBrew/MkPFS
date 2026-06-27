@@ -19,24 +19,30 @@ template: |
   # Creating Images: Option 2: .ffpkg -> .ffpfsc (Works with ShadowMountPlus) 
   python -m mkpfs pack file './BREW1234.ffpkg' './BREW1234.ffpfsc'
   
-  # Creating Images: Option 3: Game folder wrapped twice into .ffpfsc (two-pass) (Works with ShadowMountPlus) 
-  python -m mkpfs pack folder --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
+  # Creating Images: Option 3: Game folder -> .ffpfsc in one pass (default: exFAT-wrapped, no temp file)
+  python -m mkpfs pack folder './BREW1234-app' './BREW1234.ffpfsc'
+  
+  # Creating Images: Option 4: Game folder packed directly as PFS (advanced single-pass)
+  python -m mkpfs pack folder --raw './BREW1234-app/' './BREW1234.ffpfs'
+  
+  # Creating Images: Option 5: Game folder wrapped twice into PFS (advanced two-pass)
+  python -m mkpfs pack folder --raw --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
   python -m mkpfs pack file './pfs_image.dat' './BREW1234.ffpfsc'
   rm './pfs_image.dat'
   
-  # Creating Images: Option 4: Game folder without a wrapper (single-pass) (--no-compress) (Avoid; See Notes!)
-  python -m mkpfs pack folder --no-compress './BREW1234-app/' './BREW1234.ffpfs'
-  
-  # Extracting Existing Images (Reverse operation)
-  python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
+  # Extracting Existing Images (Reverse operation; --deep lists/extracts inside a wrapped exFAT)
+  python -m mkpfs unpack  --deep './BREW1234.ffpfsc' './BREW1234-extracted/'
   ```
   
   ## ⚠️ Limitations and Known Issues
   
-  - `exfat->ffpfsc` is currently the most stable format for compressed game backups.
-  - Packing an application folder directly into an image without a wrapper (single-pass) does not work when 
-    file compression is enabled. Although the image is created and verification passes, the console reads the files 
-    incorrectly due to technical limitations, so this option provides no practical benefit.
+  - `exfat->ffpfsc` is the most stable format for compressed game backups. `pack folder` produces this layout by
+    default: it wraps the folder in an exFAT image and compresses that into the `.ffpfsc` in a single pass, with no
+    temporary `.exfat` on disk.
+  - `pack folder --raw` packs the folder directly into a PFS image without the exFAT wrapper. When file compression is
+    enabled, the image is created and verification passes, but the console reads the files incorrectly due to technical
+    limitations, so this advanced option provides no practical benefit for game backups. Prefer the default wrapped
+    layout.
   - With the default `--block-size 65536`, very small files can cause significant block-alignment waste, which may make
     the resulting image larger than the source in corner cases.
       - For small-file-heavy folders, prefer the two-pass strategy (`raw-folder -> .dat -> .ffpfsc`) or try a smaller
