@@ -421,7 +421,6 @@ jobs:
       - attach-to-release
     runs-on: ubuntu-latest
     permissions:
-      # required to append analysis links to the GitHub Release body
       contents: write
     steps:
       - name: VirusTotal Scan
