@@ -40,6 +40,15 @@ jobs:
           echo "ART_VERSION=$ART_VERSION" >> "$GITHUB_ENV"
       - name: Run tests
         run: SKIP_VENV=1 ./run-tests.sh
+
+      - name: Upload coverage report
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-code-coverage@v1
+        with:
+          file: coverage.xml
+          language: Python
+          label: code-coverage/pytest
+
       - name: Format
         run: uvx ruff format . --check --diff
       - name: Lint
