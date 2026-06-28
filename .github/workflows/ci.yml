@@ -192,16 +192,13 @@ jobs:
           cp "dist/mkpfs-${ART_VERSION}-linux-${ARCH}" "$APPDIR/usr/bin/mkpfs"
           chmod +x "$APPDIR/usr/bin/mkpfs"
           # create a simple desktop file
-          cat > "$APPDIR/usr/share/applications/mkpfs.desktop" <<EOF
-[Desktop Entry]
-Name=MkPFS
-Exec=mkpfs
-Icon=mkpfs
-Type=Application
-Categories=Utility;
-EOF
+          printf '%s\n' '[Desktop Entry]' 'Name=MkPFS' 'Exec=mkpfs' 'Icon=mkpfs' 'Type=Application' 'Categories=Utility;' > "$APPDIR/usr/share/applications/mkpfs.desktop"
           # copy icon (convert to png 256x256)
           if [ -f assets/images/icon.png ]; then
+            # ensure imagemagick is available to convert the icon
+            if ! command -v convert >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y imagemagick || true
+            fi
             convert assets/images/icon.png -resize 256x256 "$APPDIR/usr/share/icons/hicolor/256x256/apps/mkpfs.png" || true
           fi
           # download appimagetool and make AppImage
