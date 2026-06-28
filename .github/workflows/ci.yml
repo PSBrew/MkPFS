@@ -81,7 +81,7 @@ jobs:
         run: |
           mkdir -p dist
           # strip YAML indentation then run Python to generate icon
-          sed 's/^[[:space:]]*//' <<'PY' | python -
+          sed 's/^[[:space:]]*//' <<'PY' | .venv/bin/python -
             from PIL import Image
             from pathlib import Path
             src = Path('assets/images/icon.png')
