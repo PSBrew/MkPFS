@@ -379,3 +379,30 @@ jobs:
               exit 1
             fi
           done < <(find "$ASSETS_DIR" -type f -print0)
+
+  virustotal-scan:
+    name: 🔒 VirusTotal scan release assets
+    if: github.event_name == 'release' && (github.event.action == 'created' || github.event.action == 'prereleased')
+    needs:
+      - attach-to-release
+    runs-on: ubuntu-latest
+    permissions:
+      # required to append analysis links to the GitHub Release body
+      contents: write
+    steps:
+      - name: VirusTotal Scan
+        uses: crazy-max/ghaction-virustotal@v5
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_release_body: true
+          request_rate: 4
+          files: |
+            \.whl$
+            \.exe$
+            \.pkg$
+            \.tar\.gz$
+            \.AppImage$
+            \.appimage$
+            \.zip$
+
