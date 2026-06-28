@@ -63,12 +63,14 @@ linked internal reference file or go to the upstream repository/wiki.
 - Internal reference: references/kstuff-lite.md
 
 ## PSDevWiki — PFS page
-- What it is: Community-maintained PFS structure page (headers, inode/dirent, flat_path_table).
+- What it is: Community-maintained PFS structure page (headers, inode/dirent, flat_path_table; unsigned baseline spec).
+- Relevance: Field offsets and packing rules MkPFS must honor for mountability; clarifies mode bits (signed/64b/encrypted/case-insensitive) and block size ranges.
 - Upstream: https://www.psdevwiki.com/ps4/PFS
 - Internal reference: references/psdevwiki-pfs.md
 
 ## PSDevWiki — PKG files page
-- What it is: Orientation page for PKG format and tooling.
+- What it is: Orientation + structure notes for PKG outer container and embedded PFS (header, entries, digests, PFS offsets/digests, delivery metadata).
+- Relevance: Exposes where/what to validate when a PKG wraps a PFS from MkPFS; captures EKPFS→XTS key derivation narrative for production images.
 - Upstream: https://www.psdevwiki.com/ps4/PKG_files
 - Internal reference: references/psdevwiki-pkg-files.md
 
@@ -78,7 +80,8 @@ linked internal reference file or go to the upstream repository/wiki.
 - Internal reference: references/shadpkg-howworks.md
 
 ## Wololo — flatz FPKG writeup
-- What it is: Historical/context article; useful background for fake PKG.
+- What it is: Authoritative deep-dive on FSELF/FPKG enablement (kernel hooks, toolchain key swap, ShellCore patches, kernel crypto shims).
+- Relevance: Defines EKPFS vs EEKPFS and PFS final key derivation; clarifies why unsigned/PFSC developer flows exist versus retail.
 - Upstream: https://wololo.net/ps4-fpkg-writeup-by-flatz/
 - Internal reference: references/wololo-fpkg-flatz.md
 
