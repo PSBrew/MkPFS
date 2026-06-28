@@ -32,11 +32,11 @@ jobs:
         run: uv run twine check dist/*
       - name: Smoke install wheel
         run: python -m venv /tmp/mkpfs-release-check && /tmp/mkpfs-release-check/bin/python -m pip install dist/*.whl && /tmp/mkpfs-release-check/bin/python -c "import mkpfs; print('mkpfs imported successfully')"
-      - name: Store the distribution packages
+      - name: Store the distribution packages (wheel)
         uses: actions/upload-artifact@v6
         with:
-          name: python-package-distributions
-          path: dist/
+          name: mkpfs-${{ env.ART_VERSION }}-wheel
+          path: dist/*.whl
 
   build-binaries:
     name: 🖥️ Build desktop binaries (${{ matrix.os }})
@@ -157,6 +157,8 @@ jobs:
             --icon dist/icon.ico \
             mkpfs/gui.py
           mv "dist/MkPFS" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}"
+          # create a tar.gz for linux artifact for easy distribution
+          (cd dist && tar -czf "mkpfs-${ART_VERSION}-linux-${ARCH}.tar.gz" "mkpfs-${ART_VERSION}-linux-${ARCH}")
 
       - name: Upload desktop binaries (artifacts)
         uses: actions/upload-artifact@v6
