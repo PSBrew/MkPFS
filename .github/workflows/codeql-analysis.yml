@@ -1,17 +1,16 @@
 name: "CodeQL"
-
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: '0 0 * * 0' # weekly (UTC)
-
+    - cron: '0 0 * * 0'
 permissions:
   actions: read
+  contents: read
+  packages: read
   security-events: write
-
 jobs:
   analyze:
     name: Analyze
@@ -24,19 +23,15 @@ jobs:
             build-mode: none
           - language: actions
             build-mode: none
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup uv (project tooling)
         uses: astral-sh/setup-uv@v7
-
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install Python dependencies for analysis
         if: matrix.language == 'python'
         run: |
@@ -50,15 +45,15 @@ jobs:
           if [ -f requirements.txt ]; then
             python -m pip install -r requirements.txt || true
           fi
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-
+          build-mode: ${{ matrix.build-mode }}
       - name: Autobuild (skip for Actions workflows)
         if: matrix.language != 'actions'
         uses: github/codeql-action/autobuild@v4
-
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{matrix.language}}"
