@@ -226,3 +226,4 @@ target/
 # Research files
 research/
 scripts/
+/config.json
