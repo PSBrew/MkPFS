@@ -64,6 +64,8 @@ jobs:
         run: |
           # Read project version from pyproject.toml in a YAML-safe one-liner
           VERSION=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          # Short version (strip off pre-release/build metadata)
+          VERSION_SHORT=${VERSION%%-*}
           ARCH=$(uname -m)
           case "$ARCH" in
             x86_64) ARCH_NORM=x64 ;;
@@ -72,8 +74,19 @@ jobs:
             aarch64) ARCH_NORM=arm64 ;;
             *) ARCH_NORM=$ARCH ;;
           esac
+          # Short commit id (7 chars)
+          COMMIT_SHORT=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          # Artifact version: use full version for tag builds, otherwise use version_short-commit
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            ART_VERSION="$VERSION"
+          else
+            ART_VERSION="${VERSION_SHORT}-${COMMIT_SHORT}"
+          fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION_SHORT=$VERSION_SHORT" >> "$GITHUB_ENV"
           echo "ARCH=$ARCH_NORM" >> "$GITHUB_ENV"
+          echo "COMMIT_SHORT=$COMMIT_SHORT" >> "$GITHUB_ENV"
+          echo "ART_VERSION=$ART_VERSION" >> "$GITHUB_ENV"
 
       - name: Prepare icons (Windows/Linux)
         if: startsWith(matrix.os, 'windows') || startsWith(matrix.os, 'ubuntu')
@@ -110,7 +123,7 @@ jobs:
             --name MkPFS \
             --icon dist/icon.ico \
             mkpfs/gui.py
-          mv "dist/MkPFS.exe" "dist/MkPFS-${VERSION}-windows-${ARCH}.exe"
+          mv "dist/MkPFS.exe" "dist/mkpfs-${ART_VERSION}-windows-${ARCH}.exe"
 
       - name: Build macOS app and pkg
         if: startsWith(matrix.os, 'macos')
@@ -127,7 +140,7 @@ jobs:
           pkgbuild \
             --install-location /Applications \
             --component "dist/MkPFS.app" \
-            "dist/MkPFS-${VERSION}-macos-${ARCH}.pkg"
+            "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg"
 
       - name: Build Linux onefile GUI
         if: startsWith(matrix.os, 'ubuntu')
@@ -143,14 +156,14 @@ jobs:
             --name MkPFS \
             --icon dist/icon.ico \
             mkpfs/gui.py
-          mv "dist/MkPFS" "dist/MkPFS-${VERSION}-linux-${ARCH}"
+          mv "dist/MkPFS" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}"
 
       - name: Upload desktop binaries (artifacts)
         uses: actions/upload-artifact@v6
         with:
-          name: desktop-binaries-${{ matrix.os }}
+          name: mkpfs-${{ env.ART_VERSION }}-${{ matrix.os }}
           path: |
-            dist/MkPFS-*
+            dist/mkpfs-*
           if-no-files-found: error
 
   publish-to-pypi:
