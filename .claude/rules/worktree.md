@@ -1,3 +1,9 @@
+---
+name: worktree
+description: 2-level repository map for fast agent navigation
+type: reference
+---
+
 # Worktree map (2 levels)
 
 Quick navigation map for agents. Two levels deep with short descriptions.
