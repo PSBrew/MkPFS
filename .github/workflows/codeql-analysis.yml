@@ -49,7 +49,6 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
       - name: Autobuild (skip for Actions workflows)
         if: matrix.language != 'actions'
         uses: github/codeql-action/autobuild@v4
