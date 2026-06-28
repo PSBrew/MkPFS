@@ -59,21 +59,21 @@ jobs:
         run: uv sync --group dev --frozen
 
       - name: Compute VERSION and ARCH
-      id: meta
-      shell: bash
-      run: |
-        # Read project version from pyproject.toml in a YAML-safe one-liner
-        VERSION=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-        ARCH=$(uname -m)
-        case "$ARCH" in
-          x86_64) ARCH_NORM=x64 ;;
-          amd64)  ARCH_NORM=x64 ;;
-          arm64)  ARCH_NORM=arm64 ;;
-          aarch64) ARCH_NORM=arm64 ;;
-          *) ARCH_NORM=$ARCH ;;
-        esac
-        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-        echo "ARCH=$ARCH_NORM" >> "$GITHUB_ENV"
+        id: meta
+        shell: bash
+        run: |
+          # Read project version from pyproject.toml in a YAML-safe one-liner
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64) ARCH_NORM=x64 ;;
+            amd64)  ARCH_NORM=x64 ;;
+            arm64)  ARCH_NORM=arm64 ;;
+            aarch64) ARCH_NORM=arm64 ;;
+            *) ARCH_NORM=$ARCH ;;
+          esac
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "ARCH=$ARCH_NORM" >> "$GITHUB_ENV"
 
       - name: Prepare icons (Windows/Linux)
         if: startsWith(matrix.os, 'windows') || startsWith(matrix.os, 'ubuntu')
@@ -81,15 +81,15 @@ jobs:
         run: |
           mkdir -p dist
           python - <<'PY'
-from PIL import Image
-from pathlib import Path
-src = Path('assets/images/icon.png')
-img = Image.open(src).convert('RGBA')
-sizes = [(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)]
-out = Path('dist/icon.ico')
-img.save(out, sizes=sizes)
-print('Wrote', out)
-PY
+            from PIL import Image
+            from pathlib import Path
+            src = Path('assets/images/icon.png')
+            img = Image.open(src).convert('RGBA')
+            sizes = [(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)]
+            out = Path('dist/icon.ico')
+            img.save(out, sizes=sizes)
+            print('Wrote', out)
+          PY
 
       - name: Prepare icons (macOS)
         if: startsWith(matrix.os, 'macos')
