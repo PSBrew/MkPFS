@@ -250,13 +250,16 @@ jobs:
           printf '%s\n' '[Desktop Entry]' 'Name=MkPFS' 'Exec=mkpfs' 'Icon=mkpfs' 'Type=Application' 'Categories=Utility;' > "$APPDIR/usr/share/applications/mkpfs.desktop"
           # copy desktop file to AppDir root as some appimagetool versions expect it there
           cp "$APPDIR/usr/share/applications/mkpfs.desktop" "$APPDIR/mkpfs.desktop" || true
-          # copy icon (convert to png 256x256)
+          # copy icon (convert to png 256x256) and place a root icon (required by appimagetool)
           if [ -f assets/images/icon.png ]; then
             # ensure imagemagick is available to convert the icon
             if ! command -v convert >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y imagemagick || true
+              sudo apt-get update && sudo apt-get install -y imagemagick
             fi
-            convert assets/images/icon.png -resize 256x256 "$APPDIR/usr/share/icons/hicolor/256x256/apps/mkpfs.png" || true
+            # create icon in hicolor path (fallback to copying original if convert fails)
+            convert assets/images/icon.png -resize 256x256 "$APPDIR/usr/share/icons/hicolor/256x256/apps/mkpfs.png" || cp assets/images/icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/mkpfs.png"
+            # appimagetool prefers a top-level icon file named after the desktop Icon key
+            cp -f "$APPDIR/usr/share/icons/hicolor/256x256/apps/mkpfs.png" "$APPDIR/mkpfs.png" || true
           fi
           # download appimagetool and make AppImage
           APPIMAGETOOL=/tmp/appimagetool.AppImage
