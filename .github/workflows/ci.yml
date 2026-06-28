@@ -59,25 +59,21 @@ jobs:
         run: uv sync --group dev --frozen
 
       - name: Compute VERSION and ARCH
-        id: meta
-        shell: bash
-        run: |
-          VERSION=$(python - <<'PY'
-import tomllib
-with open('pyproject.toml','rb') as f:
-    print(tomllib.load(f)['project']['version'])
-PY
-          )
-          ARCH=$(uname -m)
-          case "$ARCH" in
-            x86_64) ARCH_NORM=x64 ;;
-            amd64)  ARCH_NORM=x64 ;;
-            arm64)  ARCH_NORM=arm64 ;;
-            aarch64) ARCH_NORM=arm64 ;;
-            *) ARCH_NORM=$ARCH ;;
-          esac
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "ARCH=$ARCH_NORM" >> "$GITHUB_ENV"
+      id: meta
+      shell: bash
+      run: |
+        # Read project version from pyproject.toml in a YAML-safe one-liner
+        VERSION=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+        ARCH=$(uname -m)
+        case "$ARCH" in
+          x86_64) ARCH_NORM=x64 ;;
+          amd64)  ARCH_NORM=x64 ;;
+          arm64)  ARCH_NORM=arm64 ;;
+          aarch64) ARCH_NORM=arm64 ;;
+          *) ARCH_NORM=$ARCH ;;
+        esac
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+        echo "ARCH=$ARCH_NORM" >> "$GITHUB_ENV"
 
       - name: Prepare icons (Windows/Linux)
         if: startsWith(matrix.os, 'windows') || startsWith(matrix.os, 'ubuntu')
