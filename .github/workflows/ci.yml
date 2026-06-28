@@ -83,7 +83,7 @@ jobs:
           # ensure Pillow present for the Python interpreter used below
           python -m pip install --upgrade Pillow
           # run repository script to generate the icon (avoids heredoc indentation problems)
-          python .github/scripts/gen_icon.py
+          python tools/gen_icon.py
 
       - name: Prepare icons (macOS)
         if: startsWith(matrix.os, 'macos')
