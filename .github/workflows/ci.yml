@@ -254,8 +254,26 @@ jobs:
             else
               URL="https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
             fi
-            # download and fail the job if the download fails
-            curl -fSL -o "$APPIMAGETOOL" "$URL"
+            # Try a small set of candidate URLs (latest release, then continuous) and stop on first success
+            CANDIDATES=(
+              "$URL"
+              "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+              "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+            )
+            success=0
+            for u in "${CANDIDATES[@]}"; do
+              echo "Trying $u"
+              if curl -fSL -o "$APPIMAGETOOL" "$u"; then
+                success=1
+                break
+              else
+                echo "Download failed for $u"
+              fi
+            done
+            if [ "$success" -ne 1 ]; then
+              echo "Failed to download appimagetool from known locations" >&2
+              exit 1
+            fi
             chmod +x "$APPIMAGETOOL"
           fi
           # create an AppRun wrapper
