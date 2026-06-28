@@ -17,9 +17,9 @@ jobs:
     name: 📦 Builds the Python package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
       - name: Run tests
         run: SKIP_VENV=1 ./run-tests.sh
       - name: Format
@@ -32,9 +32,9 @@ jobs:
         run: uv run twine check dist/*
       - name: Smoke install wheel
         run: python -m venv /tmp/mkpfs-release-check && /tmp/mkpfs-release-check/bin/python -m pip install dist/*.whl && /tmp/mkpfs-release-check/bin/python -c "import mkpfs; print('mkpfs imported successfully')"
-      - name: Store the distribution packages
-        uses: actions/upload-artifact@v5
-        with:
+        - name: Store the distribution packages
+          uses: actions/upload-artifact@v6
+          with:
           name: python-package-distributions
           path: dist/
 
@@ -43,14 +43,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+    matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
 
       - name: Install Python 3.11
         run: uv python install 3.11
@@ -146,7 +146,7 @@ jobs:
           mv "dist/MkPFS" "dist/MkPFS-${VERSION}-linux-${ARCH}"
 
       - name: Upload desktop binaries (artifacts)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: desktop-binaries-${{ matrix.os }}
           path: |
