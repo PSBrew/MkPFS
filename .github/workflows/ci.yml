@@ -248,14 +248,15 @@ jobs:
           APPIMAGETOOL=/tmp/appimagetool.AppImage
           if [ ! -f "$APPIMAGETOOL" ]; then
             if [ "${ARCH}" = "x64" ]; then
-              URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+              URL="https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
             elif [ "${ARCH}" = "arm64" ]; then
-              URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+              URL="https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-aarch64.AppImage"
             else
-              URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+              URL="https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
             fi
-            curl -fsSL -o "$APPIMAGETOOL" "$URL" || true
-            chmod +x "$APPIMAGETOOL" || true
+            # download and fail the job if the download fails
+            curl -fSL -o "$APPIMAGETOOL" "$URL"
+            chmod +x "$APPIMAGETOOL"
           fi
           # create an AppRun wrapper
           cat > "$APPDIR/AppRun" <<'AR'
@@ -268,11 +269,20 @@ jobs:
 
           if [ -x "$APPIMAGETOOL" ]; then
             # create AppImage; output will be created in dist/
-            "$APPIMAGETOOL" "$APPDIR" dist/ || true
-            # find appimage and rename
-            find dist -maxdepth 1 -type f -name "*AppImage" -print0 | while IFS= read -r -d '' f; do mv "$f" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}.AppImage"; done || true
+            "$APPIMAGETOOL" "$APPDIR" dist/
+            # find appimage and rename (fail if none produced)
+            found=0
+            find dist -maxdepth 1 -type f -name "*AppImage" -print0 | while IFS= read -r -d '' f; do
+              mv "$f" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}.AppImage"
+              found=1
+            done
+            if [ "$found" -ne 1 ]; then
+              echo "AppImage not produced by appimagetool" >&2
+              exit 1
+            fi
           else
-            echo "appimagetool not available, skipping AppImage creation" >&2
+            echo "appimagetool not available (not executable)" >&2
+            exit 1
           fi
 
       - name: Upload Windows executable artifact
@@ -306,10 +316,10 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         uses: actions/upload-artifact@v6
         with:
-          name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.appimage
+          name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.AppImage
           path: |
-            dist/mkpfs-${{ env.ART_VERSION }}-ubuntu.appimage
-          if-no-files-found: warn
+            dist/mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.AppImage
+          if-no-files-found: error
 
   publish-to-pypi:
     name: 🐍 Publish Python distribution to PyPI
