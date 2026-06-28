@@ -31,7 +31,8 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 
 </td>
 <td width="40%" align="right">
-<img src="assets/images/gui-screenshot.png" alt="MkPFS GUI screenshot" style="width:100%;max-width:100%;border:1px solid #ddd;border-radius:6px" />
+<img src="assets/images/mkpfs-ui-pack-file.png" alt="MkPFS GUI - Pack file" style="width:100%;max-width:100%;border:1px solid #ddd;border-radius:6px;margin-bottom:8px;display:block" />
+<img src="assets/images/mkpfs-ui-pack-verify.png" alt="MkPFS GUI - Verify" style="width:100%;max-width:100%;border:1px solid #ddd;border-radius:6px;display:block" />
 </td>
 </tr></table>
 
