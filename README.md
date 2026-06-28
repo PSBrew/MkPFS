@@ -15,8 +15,8 @@ It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs
 
 ## 🎯 Why MkPFS
 
-<div style="overflow:hidden; margin-bottom:12px;">
-  <div style="float:left; width:60%; padding-right:12px; box-sizing:border-box;">
+<img src="assets/images/mkpfs-ui-pack-folder.png" alt="MkPFS GUI - Pack folder" style="float:right;width:40%;max-width:40%;border-radius:6px;margin-left:12px;margin-bottom:8px;" />
+<img src="assets/images/mkpfs-ui-pack-verify.png" alt="MkPFS GUI - Verify" style="float:right;width:40%;max-width:40%;border-radius:6px;margin-left:12px;margin-bottom:0;" />
 
 MkPFS is designed to be a clean and practical entry point for PlayStation PFS image workflows:
 
@@ -29,12 +29,6 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 - Use the same core workflow from both the CLI and the Python library
 - Explore a bundled, source-backed knowledge base for PFS and PKG research
 
-  </div>
-  <div style="float:right; width:38%; text-align:right; box-sizing:border-box;">
-    <img src="assets/images/mkpfs-ui-pack-folder.png" alt="MkPFS GUI - Pack folder" style="width:100%; border-radius:6px; margin-bottom:8px; display:block" />
-    <img src="assets/images/mkpfs-ui-pack-verify.png" alt="MkPFS GUI - Verify" style="width:100%; border-radius:6px; display:block" />
-  </div>
-</div>
 <div style="clear:both"></div>
 
 ## 🚀 Quick Start
