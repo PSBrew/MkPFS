@@ -80,16 +80,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          python - <<'PY'
-from PIL import Image
-from pathlib import Path
-src = Path('assets/images/icon.png')
-img = Image.open(src).convert('RGBA')
-sizes = [(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)]
-out = Path('dist/icon.ico')
-img.save(out, sizes=sizes)
-print('Wrote', out)
-PY
+          # strip YAML indentation then run Python to generate icon
+          sed 's/^[[:space:]]*//' <<'PY' | python -
+            from PIL import Image
+            from pathlib import Path
+            src = Path('assets/images/icon.png')
+            img = Image.open(src).convert('RGBA')
+            sizes = [(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)]
+            out = Path('dist/icon.ico')
+            img.save(out, sizes=sizes)
+            print('Wrote', out)
+          PY
 
       - name: Prepare icons (macOS)
         if: startsWith(matrix.os, 'macos')
