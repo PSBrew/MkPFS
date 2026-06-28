@@ -85,6 +85,34 @@ linked internal reference file or go to the upstream repository/wiki.
 - Upstream: https://wololo.net/ps4-fpkg-writeup-by-flatz/
 - Internal reference: references/wololo-fpkg-flatz.md
 
+## goodle
+- What it is: Thin Go cgo wrapper for OodleLZ decompression; drop-in replacement for the `gooz` package.
+- Relevance: Validates Oodle per-block decompression paths used in adjacent tooling; helpful for cross-checking outputs independent of Python.
+- Gotchas: Requires proprietary Oodle shared library (`oo2core_N_win64.dll`/`liboo2core.so/.dylib`).
+- Upstream: https://github.com/oriath-net/goodle
+- Internal reference: references/goodle.md
+
+## TLOU PSARC Tool
+- What it is: Windows GUI utility to read/extract and partially reimport Naughty Dog `.psarc` archives (big-endian headers, MD5 name table, per-block Oodle/zlib).
+- Relevance: Demonstrates block size tables, MD5-based name resolution, and Oodle/zlib per-block decompression used in adjacent game assets.
+- Gotchas: Windows-only, GUI-only; import path writes uncompressed, injects author signature, and does not update the name table.
+- Upstream: https://github.com/amrshaheen61/TLOU_PSARC_Tool
+- Internal reference: references/tlou-psarc-tool.md
+
+## PKG Passcode Finder
+- What it is: VB.NET WPF app that randomly brute-forces 31-char alphanumeric passcodes for PS5 PKG extraction by invoking `prospero-pub-cmd.exe`.
+- Relevance: Confirms passcode length/charset and SDK-driven extraction flow; context for why open tooling matters.
+- Gotchas: Astronomical keyspace (62^31) makes naive random brute force impractical; Windows-only GUI; requires proprietary SDK tool.
+- Upstream: https://github.com/bobg-github/PS5PKGPasscodeFinder
+- Internal reference: references/pkg-passcode-finder.md
+
+## Oodle/Kraken Decompression Tools
+- What it is: Collection of open decoders and shims for Oodle codecs (Kraken/Mermaid/Selkie/Leviathan), including a Rust decompressor and Go Oodle wrapper.
+- Relevance: Enables verifying Oodle-compressed block behavior across ecosystems that feed into or out of PFS.
+- Gotchas: Official Oodle libraries are proprietary; prebuilt .so/.dll distribution may have licensing constraints.
+- Upstream: https://github.com/lvlvllvlvllvlvl/oozextract
+- Internal reference: references/oodle-kraken-tools.md
+
 ---
 
 ## Notes
