@@ -160,11 +160,31 @@ jobs:
             --onedir \
             --name MkPFS \
             --icon dist/MkPFS.icns \
+            --collect-all customtkinter \
+            --collect-all PIL \
+            --add-data "assets:assets" \
+            --hidden-import cryptography \
             mkpfs/gui.py
+          # Post-process app bundle Info.plist to set user-friendly display name and version
+          PLIST="dist/MkPFS.app/Contents/Info.plist"
+          if [ -f "$PLIST" ]; then
+            # human readable display name
+            if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+              DISPLAY_NAME="MkPFS ${VERSION}"
+            else
+              DISPLAY_NAME="MkPFS ${VERSION_SHORT} (${COMMIT_SHORT})"
+            fi
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName \"${DISPLAY_NAME}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string \"${DISPLAY_NAME}\"" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString \"${VERSION_SHORT}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string \"${VERSION_SHORT}\"" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion \"${ART_VERSION}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string \"${ART_VERSION}\"" "$PLIST" || true
+          fi
+          # create component package then product package so installer shows proper title/version
           pkgbuild \
             --install-location /Applications \
             --component "dist/MkPFS.app" \
-            "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg"
+            dist/mkpfs-component.pkg
+          productbuild --identifier com.psbrew.mkpfs --version "${VERSION_SHORT}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg"
+          rm -f dist/mkpfs-component.pkg || true
 
       - name: Build Linux onefile GUI
         if: startsWith(matrix.os, 'ubuntu')
@@ -207,8 +227,17 @@ jobs:
             curl -sL -o "$APPIMAGETOOL" "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" || true
             chmod +x "$APPIMAGETOOL" || true
           fi
+          # create an AppRun wrapper
+          cat > "$APPDIR/AppRun" <<'AR'
+#!/bin/bash
+HERE="$(dirname "$(readlink -f "$0")")"
+export PATH="$HERE/usr/bin:$PATH"
+exec "$HERE/usr/bin/mkpfs" "$@"
+AR
+          chmod +x "$APPDIR/AppRun"
+
           if [ -x "$APPIMAGETOOL" ]; then
-            # create AppImage; output will be MkPFS-x86_64.AppImage, rename
+            # create AppImage; output will be created in dist/
             "$APPIMAGETOOL" "$APPDIR" dist/ || true
             # find appimage and rename
             find dist -maxdepth 1 -type f -name "*AppImage" -print0 | while IFS= read -r -d '' f; do mv "$f" "dist/mkpfs-${ART_VERSION}-ubuntu.appimage"; done || true
