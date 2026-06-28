@@ -29,8 +29,8 @@ linked internal reference file or go to the upstream repository/wiki.
 
 ## PS5 Game Compressor
 - What it is: Standalone PS5 payload + web UI to compress, validate/repair, uncompress, and move ShadowMountPlus-mounted games.
-- Relevance: On-console FF-PFSC build/validation/repair path; exercises APR Emu flows and ShadowMountPlus settings; complements MkPFS PC workflows.
-- Gotchas: Requires ShadowMountPlus and kstuff-lite; default nested exFAT recommended; nested PFS is experimental.
+- Relevance: Real-console PFSC builder with zlib windowed pipeline (64 KiB blocks) and .vhash per-block SHA‑256; validates MkPFS images under SMP with APR Emu support.
+- Gotchas: Requires ShadowMountPlus and kstuff-lite; default nested exFAT recommended; nested PFS is experimental; destructive mode is risky and constrained.
 - Upstream: https://github.com/juma-sayeh/PS5-Game-Compressor
 - Internal reference: references/ps5-game-compressor.md
 

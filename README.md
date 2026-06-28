@@ -579,7 +579,6 @@ Users are responsible for complying with all applicable laws and regulations in 
 ## 🔗 Related projects
 
 - [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus): Practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility
-- [PS5 Game Compressor](https://github.com/juma-sayeh/PS5-Game-Compressor): Standalone PS5 payload and web UI to compress, unpack, validate, repair, and move ShadowMountPlus-mounted games
 - [PSDevWiki PFS](https://www.psdevwiki.com/ps4/PFS): Community reference for PFS on-disk structures
 - [PSDevWiki PKG files](https://www.psdevwiki.com/ps4/PKG_files): PKG format reference and tooling pointers
 - [ShadPKG HOWWORKS](https://github.com/seregonwar/ShadPKG/blob/main/docs/HOWWORKS.md): Implementation-focused PKG/PFS decryption walkthrough
