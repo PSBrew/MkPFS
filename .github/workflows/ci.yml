@@ -189,14 +189,24 @@ jobs:
             echo "--- otool -L $exe ---";
             otool -L "$exe" || true;
           done
+          # Ensure CFBundleExecutable matches actual executable and make it executable
+          if [ -d dist/MkPFS.app/Contents/MacOS ]; then
+            exe_name=$(basename "$(ls dist/MkPFS.app/Contents/MacOS | head -n1)" ) || true
+            if [ -n "$exe_name" ]; then
+              /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable \"$exe_name\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string \"$exe_name\"" "$PLIST" || true
+              chmod +x "dist/MkPFS.app/Contents/MacOS/$exe_name" || true
+            fi
+          fi
           # create component package then product package so installer shows proper title/version
+          # sanitize ART_VERSION for filename use
+          ART_FILE_SAFE=$(echo "$ART_VERSION" | tr ' ' '_' | tr -d '()')
           pkgbuild \
             --install-location /Applications \
             --component "dist/MkPFS.app" \
             --version "${ART_VERSION}" \
             --identifier "com.psbrew.mkpfs" \
             dist/mkpfs-component.pkg
-          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg"
+          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
           rm -f dist/mkpfs-component.pkg || true
 
       - name: Build Linux onefile GUI
@@ -237,23 +247,30 @@ jobs:
           # download appimagetool and make AppImage
           APPIMAGETOOL=/tmp/appimagetool.AppImage
           if [ ! -f "$APPIMAGETOOL" ]; then
-            curl -sL -o "$APPIMAGETOOL" "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" || true
+            if [ "${ARCH}" = "x64" ]; then
+              URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+            elif [ "${ARCH}" = "arm64" ]; then
+              URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+            else
+              URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+            fi
+            curl -fsSL -o "$APPIMAGETOOL" "$URL" || true
             chmod +x "$APPIMAGETOOL" || true
           fi
           # create an AppRun wrapper
           cat > "$APPDIR/AppRun" <<'AR'
-#!/bin/bash
-HERE="$(dirname "$(readlink -f "$0")")"
-export PATH="$HERE/usr/bin:$PATH"
-exec "$HERE/usr/bin/mkpfs" "$@"
-AR
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export PATH="$HERE/usr/bin:$PATH"
+          exec "$HERE/usr/bin/mkpfs" "$@"
+          AR
           chmod +x "$APPDIR/AppRun"
 
           if [ -x "$APPIMAGETOOL" ]; then
             # create AppImage; output will be created in dist/
             "$APPIMAGETOOL" "$APPDIR" dist/ || true
             # find appimage and rename
-            find dist -maxdepth 1 -type f -name "*AppImage" -print0 | while IFS= read -r -d '' f; do mv "$f" "dist/mkpfs-${ART_VERSION}-ubuntu.appimage"; done || true
+            find dist -maxdepth 1 -type f -name "*AppImage" -print0 | while IFS= read -r -d '' f; do mv "$f" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}.AppImage"; done || true
           else
             echo "appimagetool not available, skipping AppImage creation" >&2
           fi
