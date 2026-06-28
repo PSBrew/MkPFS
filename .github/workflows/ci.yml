@@ -236,6 +236,8 @@ jobs:
           chmod +x "$APPDIR/usr/bin/mkpfs"
           # create a simple desktop file
           printf '%s\n' '[Desktop Entry]' 'Name=MkPFS' 'Exec=mkpfs' 'Icon=mkpfs' 'Type=Application' 'Categories=Utility;' > "$APPDIR/usr/share/applications/mkpfs.desktop"
+          # copy desktop file to AppDir root as some appimagetool versions expect it there
+          cp "$APPDIR/usr/share/applications/mkpfs.desktop" "$APPDIR/mkpfs.desktop" || true
           # copy icon (convert to png 256x256)
           if [ -f assets/images/icon.png ]; then
             # ensure imagemagick is available to convert the icon
