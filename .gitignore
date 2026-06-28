@@ -2,10 +2,6 @@
 # Custom ignore rules
 ###############################################################################
 
-# Allow checked-in scripts under .github/scripts/ (some environments globally ignore .github/)
-!.github/scripts/
-!.github/scripts/**
-
 # Claude settings
 .claude/*
 !.claude/skills/
@@ -225,5 +221,4 @@ target/
 
 # Research files
 research/
-scripts/
 /config.json
