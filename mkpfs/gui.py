@@ -345,7 +345,6 @@ _BG_DEEP = "#05080F"
 _BG_PANEL = "#0A0F1C"
 _BG_CARD = "#0E1828"
 _BG_INPUT = "#07101E"
-_BORDER = "#152035"
 _BORDER_BRIGHT = "#1E3A5F"
 
 # Text
@@ -883,31 +882,6 @@ class BasePanel(ctk.CTkFrame):
         except queue.Empty:
             pass
         self.after(80, self._poll_log_queue)
-
-    def _on_export_log(self) -> None:
-        """Open a save dialog and write the current log content to a file."""
-        import json as _json
-
-        content: str = self._log.get_text().strip()
-        if not content:
-            return
-        path: str | None = filedialog.asksaveasfilename(
-            title="Export Log",
-            defaultextension=".txt",
-            filetypes=[("Text file", "*.txt"), ("JSON file", "*.json"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            if path.endswith(".json"):
-                lines: list[str] = content.splitlines()
-                with open(path, "w", encoding="utf-8") as fh:
-                    _json.dump({"log": lines}, fh, indent=2, ensure_ascii=False)
-            else:
-                with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(content + "\n")
-        except OSError as exc:
-            self._emit(f"Export failed: {exc}", "error")
 
     def _on_export_log(self) -> None:
         """Open a save dialog and write the current log content to a file."""
@@ -1711,8 +1685,9 @@ class MkPFSApp(ctk.CTk):
             self.wm_iconphoto(True, photo)
             # Keep a reference so the image is not garbage-collected by Python
             self._icon_ref: ImageTk.PhotoImage = photo
-        except Exception:
-            pass
+        except (OSError, ValueError, RuntimeError):
+            # Icon setup is optional; ignore expected failures (file missing or unreadable).
+            return
 
     def _build_sidebar(self) -> None:
         """Build the left navigation sidebar with language selector."""
