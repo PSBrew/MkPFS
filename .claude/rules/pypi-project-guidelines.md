@@ -29,9 +29,3 @@ Make the content renderer-safe for PyPI and validate builds before publishing.
 - Package name: `mkpfs`; CLI entrypoint defined in pyproject.
 - Keep README command reference aligned with CLI surface: `pack`, `verify`, `inspect`, `tree`, `unpack`.
 - Validate release artifacts with `uv build` and `uv run --frozen twine check dist/*` before publishing.
-
-## References
-
-- https://packaging.python.org/en/latest/overview/
-- https://packaging.python.org/en/latest/specifications/
-- https://packaging.python.org/en/latest/guides/making-a-pypi-friendly-readme/

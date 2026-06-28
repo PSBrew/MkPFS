@@ -12,14 +12,6 @@ Keep docs practical, concise, and easy to scan. Prefer bullets over long prose.
 - Active voice, present tense. Short paragraphs, short sentences.
 - Factual, no hype. Explain what it does and how to use it.
 
-## Structure (README defaults)
-1) Overview (why it exists, one paragraph)
-2) Main features (short bullets)
-3) Installation
-4) Command overview (one‑line per subcommand + one example)
-5) Related projects (curated, short)
-6) Contributing + Thanks + Sponsor (brief pointers)
-
 ## Examples
 - Show one example per command; avoid exhaustive flag lists in README.
 - Use fenced code blocks with language hints for CLI/code.

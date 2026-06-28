@@ -1,5 +1,5 @@
 ---
-name: add-related-project
+name: related-project-add
 description: >
   Add a new related project or reference source to the Related Projects index. Investigate the upstream repo/website,
   write an executive-summary reference file under references/, and update the index SKILL.md with a concise entry.

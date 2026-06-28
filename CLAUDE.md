@@ -35,4 +35,4 @@ uv run mkpfs --help
 - Related projects index: .claude/skills/related-projects-index/SKILL.md (curated external sources; see references/*.md)
 - Commits/PRs: .claude/skills/pr-and-commit-writing/SKILL.md (use when generating public commit/PR text)
 - HTML reporting: .claude/skills/html-report-builder/SKILL.md (use for producing HTML summaries under ./tmp/)
-- tmp usage: .claude/rules/tmp-usage.md (use ./tmp/ for transient artifacts only)
+- TEMP folder usage: .claude/rules/tmp-usage.md (use ./tmp/ for transient artifacts only)
