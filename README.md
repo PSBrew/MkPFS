@@ -15,9 +15,8 @@ It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs
 
 ## 🎯 Why MkPFS
 
-<table style="border:none;border-collapse:collapse;border-spacing:0;">
-<tr>
-<td width="60%" style="vertical-align:top;border:none;padding:0 12px 0 0;">
+<div style="overflow:hidden; margin-bottom:12px;">
+  <div style="float:left; width:60%; padding-right:12px; box-sizing:border-box;">
 
 MkPFS is designed to be a clean and practical entry point for PlayStation PFS image workflows:
 
@@ -30,13 +29,13 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 - Use the same core workflow from both the CLI and the Python library
 - Explore a bundled, source-backed knowledge base for PFS and PKG research
 
-</td>
-<td width="40%" style="vertical-align:top; text-align:right;border:none;padding:0;">
-<img src="assets/images/mkpfs-ui-pack-folder.png" alt="MkPFS GUI - Pack folder" style="width:100%;max-width:100%;border-radius:6px;margin-bottom:8px;display:block" />
-<img src="assets/images/mkpfs-ui-pack-verify.png" alt="MkPFS GUI - Verify" style="width:100%;max-width:100%;border-radius:6px;display:block" />
-</td>
-</tr>
-</table>
+  </div>
+  <div style="float:right; width:38%; text-align:right; box-sizing:border-box;">
+    <img src="assets/images/mkpfs-ui-pack-folder.png" alt="MkPFS GUI - Pack folder" style="width:100%; border-radius:6px; margin-bottom:8px; display:block" />
+    <img src="assets/images/mkpfs-ui-pack-verify.png" alt="MkPFS GUI - Verify" style="width:100%; border-radius:6px; display:block" />
+  </div>
+</div>
+<div style="clear:both"></div>
 
 ## 🚀 Quick Start
 
