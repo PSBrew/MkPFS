@@ -34,4 +34,8 @@ Keep docs practical, concise, and easy to scan. Prefer bullets over long prose.
 - Link to CONTRIBUTING.md instead of duplicating policy.
 - Don’t commit ./tmp/.
 
+## Skills to use for public text and reports
+- Commits/PRs: load .claude/skills/pr-and-commit-writing/SKILL.md when generating commit messages or PR titles/descriptions (public text must follow that skill’s rules).
+- HTML reporting: load .claude/skills/html-report-builder/SKILL.md when producing HTML summaries/reports (keeps format consistent and saved under ./tmp/).
+
 That’s it — keep it simple and useful.
