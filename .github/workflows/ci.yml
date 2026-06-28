@@ -303,16 +303,20 @@ jobs:
           chmod +x "$APPDIR/AppRun"
 
           if [ -x "$APPIMAGETOOL" ]; then
-            # create AppImage; output will be created in dist/
-            "$APPIMAGETOOL" "$APPDIR" dist/
-            # find appimage and rename (fail if none produced)
-            found=0
-            find dist -maxdepth 1 -type f -name "*AppImage" -print0 | while IFS= read -r -d '' f; do
-              mv "$f" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}.AppImage"
-              found=1
-            done
-            if [ "$found" -ne 1 ]; then
+            # create AppImage; produce a named output file to avoid appimagetool treating a directory as destination
+            OUT_FILE="dist/mkpfs-${ART_VERSION}-linux-${ARCH}.AppImage"
+            echo "Running: $APPIMAGETOOL $APPDIR $OUT_FILE"
+            "$APPIMAGETOOL" "$APPDIR" "$OUT_FILE"
+            # verify AppImage was produced
+            if [ -f "$OUT_FILE" ]; then
+              echo "AppImage created: $OUT_FILE"
+            else
               echo "AppImage not produced by appimagetool" >&2
+              # dump AppDir contents for debugging
+              echo "--- AppDir listing ---"
+              ls -la "$APPDIR" || true
+              echo "--- dist listing ---"
+              ls -la dist || true
               exit 1
             fi
           else
