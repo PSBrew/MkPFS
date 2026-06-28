@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [linux, windows, macos]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -125,7 +125,7 @@ jobs:
           echo "ART_VERSION=$ART_VERSION" >> "$GITHUB_ENV"
 
       - name: Prepare icons (Windows/Linux)
-        if: startsWith(matrix.os, 'windows') || startsWith(matrix.os, 'linux')
+        if: startsWith(matrix.os, 'windows') || startsWith(matrix.os, 'ubuntu')
         shell: bash
         run: |
           mkdir -p dist
@@ -336,7 +336,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Linux tar.gz artifact
-        if: startsWith(matrix.os, 'linux')
+        if: startsWith(matrix.os, 'ubuntu')
         uses: actions/upload-artifact@v6
         with:
           name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.tar.gz
@@ -345,7 +345,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Linux AppImage artifact
-        if: startsWith(matrix.os, 'linux')
+        if: startsWith(matrix.os, 'ubuntu')
         uses: actions/upload-artifact@v6
         with:
           name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.AppImage
