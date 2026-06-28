@@ -78,7 +78,7 @@ version-resolver:
     labels:
       - 'bug'
       - 'maintenance'
-      - 'docs'
+      - 'documentation'
       - 'dependencies'
       - 'security'
   default: patch
@@ -101,7 +101,7 @@ categories:
       - 'maintenance'
   - title: 'Documentation'
     labels:
-      - 'docs'
+      - 'documentation'
   - title: 'Dependency Updates'
     labels:
       - 'dependencies'
