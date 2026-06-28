@@ -29,7 +29,9 @@ def make_icon(src: Path, out: Path, sizes: Sequence[tuple[int, int]]) -> None:
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parents[1]
+    # Path(__file__).parents[2] resolves to the repository root when this
+    # script lives at .github/scripts/gen_icon.py
+    repo_root = Path(__file__).resolve().parents[2]
     src = repo_root / "assets" / "images" / "icon.png"
     out = repo_root / "dist" / "icon.ico"
     sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
