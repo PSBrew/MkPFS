@@ -28,7 +28,6 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 
 ## 🚀 Quick Start
 
-
 ### Using the command line
 
 ```bash
