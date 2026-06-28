@@ -1,6 +1,6 @@
 [project]
 name = "mkpfs"
-version = "0.0.9"
+version = "0.1.0"
 description = "Create and Manage Unsigned PFS (Playstation File System) image files with file compression and checksum support."
 readme = "README.md"
 authors = [{ name = "PSBrew", email = "contact@psbrew.com" }]
@@ -21,8 +21,15 @@ dependencies = [
     "zlib-ng>=0.5.1",
 ]
 
+[project.optional-dependencies]
+gui = [
+    "customtkinter>=5.2.0",
+    "Pillow>=9.0.0",
+]
+
 [project.scripts]
 mkpfs = "mkpfs.cli:main"
+mkpfs-gui = "mkpfs.gui:main"
 
 [build-system]
 requires = ["hatchling<1.30"]
@@ -44,6 +51,8 @@ dev = [
     "pytest-cov>=5.0.0",
     "ruff>=0.11.12",
     "twine>=6.1.0",
+    "customtkinter>=5.2.0",
+    "Pillow>=9.0.0",
 ]
 
 [tool.pytest.ini_options]

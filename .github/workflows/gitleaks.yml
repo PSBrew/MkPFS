@@ -1,7 +1,13 @@
 name: GitLeaks
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 on:
   pull_request:
   push:
+    branches:
+      - main
+      - master
   workflow_dispatch:
   schedule:
     - cron: "0 4 * * *" # run once a day at 4 AM

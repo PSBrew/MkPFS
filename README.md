@@ -11,7 +11,7 @@
 MkPFS is a command-line tool and Python library for building, verifying, inspecting, browsing, and extracting PlayStation FileSystem (PFS) disk images. 
 It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, `.exfat`, and `.bin`, and fits both direct image workflows and PKG or FPKG inner-PFS generation.
 
-[Quick Start](#-quick-start) · [Compression Statistics](#-compression-statistics) · [Installation](#-installation) · [Command reference](#command-reference) · [Development](#-development) · [Related projects](#related-projects) · [Sponsor](https://github.com/sponsors/RenanGBarreto)
+[Quick Start](#-quick-start) · [Compression Statistics](#-compression-statistics) · [Installation](#-installation) · [GUI](#-gui) · [Command reference](#command-reference) · [Development](#-development) · [Related projects](#related-projects) · [Sponsor](https://github.com/sponsors/RenanGBarreto)
 
 ## 🎯 Why MkPFS
 
@@ -28,9 +28,11 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 
 ## 🚀 Quick Start
 
+### Using the command line
+
 ```bash
 # Install/Update using pip
-python -m pip install -U "mkpfs"
+python -m pip install -U "mkpfs[gui]"
 
 # Creating Images: Option 1: .exfat -> .ffpfsc (Works with ShadowMountPlus)  (Maximum compatibility)
 python -m mkpfs pack file './BREW1234.exfat' './BREW1234.ffpfsc'
@@ -51,6 +53,13 @@ rm './pfs_image.dat'
 
 # Extracting Existing Images (Reverse operation; --deep lists/extracts inside a wrapped exFAT)
 python -m mkpfs unpack  --deep './BREW1234.ffpfsc' './BREW1234-extracted/'
+```
+
+### Using the UI
+
+```bash
+python -m pip install -U "mkpfs[gui]"
+python -m mkpfs.gui
 ```
 
 ## ⚠️ Limitations and Known Issues
@@ -95,6 +104,55 @@ Or donate directly using:
  - **USDT (TRC-20):**  **`TQb7bUYSYRmdWgALHCejH33dNij9XyTAnU`**
  - **USDT (ERC-20):**  **`0x63c0b4b21133c4068375ae7566dafcf1398cf6fb`**
 
+## 📦 Installation
+
+### Run from a local checkout
+
+### Install from PyPI
+
+```bash
+python -m pip install -U "mkpfs[gui]"
+python -m mkpfs -h
+```
+
+### Install from source
+
+```bash
+uv sync --group dev
+uv run mkpfs -h
+```
+
+#### Install as a local tool
+
+```bash
+uv tool install .
+mkpfs -h
+```
+
+#### Build distributables
+
+```bash
+uv build
+uv run --frozen twine check dist/*
+```
+
+## 🖥️ GUI
+
+MkPFS includes an optional simple graphical interface built with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter). 
+It covers all five operations (pack folder, pack file, verify, inspect, tree, unpack) and supports multiple languages.
+
+
+### Running the GUI
+
+```bash
+python -m mkpfs.gui
+```
+
+Or, if installed via pip:
+
+```bash
+mkpfs-gui
+```
 
 ## 📊 Compression Statistics
 
@@ -113,35 +171,34 @@ The numbers below are measured from a real homebrew title that previously had 6.
 
 Both single-file wrapping (`pack file`) and folder-based packing (`pack folder`) produce compressed images of equivalent size, giving you flexibility without sacrificing efficiency.
 
-## 📦 Installation
+### Compiling to a standalone .exe (Windows)
 
-### Run from a local checkout
-
-### Install from PyPI
+Install PyInstaller and build a single-file executable:
 
 ```bash
-pip install mkpfs
-mkpfs -h
+pip install pyinstaller
 ```
 
-```bash
-uv sync --group dev
-uv run mkpfs -h
+```powershell
+pyinstaller --onefile --windowed `
+  --name MkPFS `
+  --icon assets\images\icon.png `
+  --collect-all customtkinter `
+  --collect-all PIL `
+  --add-data "assets;assets" `
+  --hidden-import cryptography `
+  mkpfs\gui.py
 ```
 
-### Install as a local tool
+The resulting `MkPFS.exe` is placed in the `dist\` folder. No Python installation is required to run it.
 
-```bash
-uv tool install .
-mkpfs -h
-```
+Notes:
 
-### Build distributables
+- `--onefile` bundles everything into a single executable. Use `--onedir` instead for faster startup at the cost of a folder output.
+- `--windowed` suppresses the console window. Remove it to keep a terminal for debugging.
+- `--collect-all customtkinter` and `--collect-all PIL` ensure theme files and image codecs are included.
+- `--add-data "assets;assets"` bundles the `assets/images/icon.png` used for the window icon.
 
-```bash
-uv build
-uv run --frozen twine check dist/*
-```
 
 ## Command Reference
 

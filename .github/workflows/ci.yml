@@ -1,25 +1,43 @@
 name: CI
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 on:
   push:
     branches:
-      - '**'
+      - main
+      - master
     tags:
       - '**'
   pull_request:
     branches:
       - '**'
   release:
-      types: [published]
+    types: [published, prereleased, created, edited]
 jobs:
   build:
-    name: 📦 Builds the package
+    name: 📦 Builds the Python package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
+      - name: Compute VERSION and ART_VERSION
+        id: meta_build
+        shell: bash
+        run: |
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          VERSION_SHORT=${VERSION%%-*}
+          COMMIT_SHORT=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            ART_VERSION="$VERSION"
+          else
+            ART_VERSION="${VERSION_SHORT}-${COMMIT_SHORT}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "ART_VERSION=$ART_VERSION" >> "$GITHUB_ENV"
       - name: Run tests
         run: SKIP_VENV=1 ./run-tests.sh
       - name: Format
@@ -32,11 +50,301 @@ jobs:
         run: uv run twine check dist/*
       - name: Smoke install wheel
         run: python -m venv /tmp/mkpfs-release-check && /tmp/mkpfs-release-check/bin/python -m pip install dist/*.whl && /tmp/mkpfs-release-check/bin/python -c "import mkpfs; print('mkpfs imported successfully')"
-      - name: Store the distribution packages
-        uses: actions/upload-artifact@v5
+      - name: Prepare wheel artifact name
+        shell: bash
+        run: |
+          mkdir -p dist
+          src=$(ls dist/*.whl | head -n1)
+          if [ -z "$src" ]; then echo "No wheel found"; exit 1; fi
+          base="mkpfs-${ART_VERSION}-py3-none-any.whl"
+          cp "$src" "dist/$base"
+          echo "WHEEL_NAME=$base" >> "$GITHUB_ENV"
+
+      - name: Store the distribution packages (wheel)
+        uses: actions/upload-artifact@v6
         with:
-          name: python-package-distributions
-          path: dist/
+          name: ${{ env.WHEEL_NAME }}
+          path: dist/${{ env.WHEEL_NAME }}
+
+  build-binaries:
+    name: 🖥️ Build desktop binaries (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, windows, macos]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install Python 3.11
+        run: uv python install 3.11
+
+      - name: Sync deps (GUI included in dev group)
+        run: uv sync --group dev --frozen
+
+      - name: Compute VERSION and ARCH
+        id: meta
+        shell: bash
+        run: |
+          # Read project version from pyproject.toml in a YAML-safe one-liner
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          # Short version (strip off pre-release/build metadata)
+          VERSION_SHORT=${VERSION%%-*}
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64) ARCH_NORM=x64 ;;
+            amd64)  ARCH_NORM=x64 ;;
+            arm64)  ARCH_NORM=arm64 ;;
+            aarch64) ARCH_NORM=arm64 ;;
+            *) ARCH_NORM=$ARCH ;;
+          esac
+          # Short commit id (7 chars)
+          COMMIT_SHORT=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          # Artifact version: use full version for tag builds, otherwise use version_short-commit
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            ART_VERSION="$VERSION"
+          else
+            ART_VERSION="${VERSION_SHORT}-${COMMIT_SHORT}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION_SHORT=$VERSION_SHORT" >> "$GITHUB_ENV"
+          echo "ARCH=$ARCH_NORM" >> "$GITHUB_ENV"
+          echo "COMMIT_SHORT=$COMMIT_SHORT" >> "$GITHUB_ENV"
+          echo "ART_VERSION=$ART_VERSION" >> "$GITHUB_ENV"
+
+      - name: Prepare icons (Windows/Linux)
+        if: startsWith(matrix.os, 'windows') || startsWith(matrix.os, 'linux')
+        shell: bash
+        run: |
+          mkdir -p dist
+          # ensure Pillow present for the Python interpreter used below
+          python -m pip install --upgrade Pillow
+          # run repository script to generate the icon (avoids heredoc indentation problems)
+          python scripts/gen_icon.py
+
+      - name: Prepare icons (macOS)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          mkdir -p dist/MkPFS.iconset
+          ICONSRC="assets/images/icon.png"
+          for SZ in 16 32 64 128 256 512; do
+            sips -z "$SZ" "$SZ" "$ICONSRC" --out "dist/MkPFS.iconset/icon_${SZ}x${SZ}.png" >/dev/null
+            DBL=$((SZ*2))
+            sips -z "$DBL" "$DBL" "$ICONSRC" --out "dist/MkPFS.iconset/icon_${SZ}x${SZ}@2x.png" >/dev/null
+          done
+          iconutil -c icns "dist/MkPFS.iconset" -o "dist/MkPFS.icns"
+
+      - name: Build Windows onefile GUI
+        if: startsWith(matrix.os, 'windows')
+        shell: bash
+        run: |
+          uvx pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --windowed \
+            --name MkPFS \
+            --icon dist/icon.ico \
+            mkpfs/gui.py
+          mv "dist/MkPFS.exe" "dist/mkpfs-${ART_VERSION}-windows-${ARCH}.exe"
+
+      - name: Build macOS app and pkg
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          uvx pyinstaller \
+            --noconfirm \
+            --clean \
+            --windowed \
+            --onedir \
+            --name MkPFS \
+            --icon dist/MkPFS.icns \
+            --collect-all customtkinter \
+            --collect-all PIL \
+            --add-data "assets:assets" \
+            --hidden-import cryptography \
+            mkpfs/gui.py
+          # Post-process app bundle Info.plist to set user-friendly display name and version
+          PLIST="dist/MkPFS.app/Contents/Info.plist"
+          if [ -f "$PLIST" ]; then
+            # human readable display name
+            if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+              DISPLAY_NAME="MkPFS ${VERSION}"
+            else
+              DISPLAY_NAME="MkPFS ${VERSION_SHORT} (${COMMIT_SHORT})"
+            fi
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName \"${DISPLAY_NAME}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string \"${DISPLAY_NAME}\"" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString \"${VERSION_SHORT}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string \"${VERSION_SHORT}\"" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion \"${ART_VERSION}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string \"${ART_VERSION}\"" "$PLIST" || true
+          fi
+          # Diagnostic: list app bundle and check executable linkage
+          echo "--- Info.plist ---"
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST" || true
+          echo "--- App bundle contents ---"
+          ls -la dist/MkPFS.app || true
+          echo "--- MacOS executable contents ---"
+          ls -la dist/MkPFS.app/Contents/MacOS || true
+          for exe in dist/MkPFS.app/Contents/MacOS/*; do
+            echo "--- otool -L $exe ---";
+            otool -L "$exe" || true;
+          done
+          # Ensure CFBundleExecutable matches actual executable and make it executable
+          if [ -d dist/MkPFS.app/Contents/MacOS ]; then
+            exe_name=$(basename "$(ls dist/MkPFS.app/Contents/MacOS | head -n1)" ) || true
+            if [ -n "$exe_name" ]; then
+              /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable \"$exe_name\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string \"$exe_name\"" "$PLIST" || true
+              chmod +x "dist/MkPFS.app/Contents/MacOS/$exe_name" || true
+            fi
+          fi
+          # create component package then product package so installer shows proper title/version
+          # sanitize ART_VERSION for filename use
+          ART_FILE_SAFE=$(echo "$ART_VERSION" | tr ' ' '_' | tr -d '()')
+          pkgbuild \
+            --install-location /Applications \
+            --component "dist/MkPFS.app" \
+            --version "${ART_VERSION}" \
+            --identifier "com.psbrew.mkpfs" \
+            dist/mkpfs-component.pkg
+          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
+          rm -f dist/mkpfs-component.pkg || true
+
+      - name: Build Linux onefile GUI
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tk libfuse2
+          uvx pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --windowed \
+            --name MkPFS \
+            --icon dist/icon.ico \
+            mkpfs/gui.py
+          mv "dist/MkPFS" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}"
+          # create a tar.gz for linux artifact for easy distribution
+          (cd dist && tar -czf "mkpfs-${ART_VERSION}-linux-${ARCH}.tar.gz" "mkpfs-${ART_VERSION}-linux-${ARCH}")
+          # create AppDir for AppImage
+          APPDIR=dist/MkPFS.AppDir
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr/bin"
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+          mkdir -p "$APPDIR/usr/share/applications"
+          cp "dist/mkpfs-${ART_VERSION}-linux-${ARCH}" "$APPDIR/usr/bin/mkpfs"
+          chmod +x "$APPDIR/usr/bin/mkpfs"
+          # create a simple desktop file
+          printf '%s\n' '[Desktop Entry]' 'Name=MkPFS' 'Exec=mkpfs' 'Icon=mkpfs' 'Type=Application' 'Categories=Utility;' > "$APPDIR/usr/share/applications/mkpfs.desktop"
+          # copy desktop file to AppDir root as some appimagetool versions expect it there
+          cp "$APPDIR/usr/share/applications/mkpfs.desktop" "$APPDIR/mkpfs.desktop" || true
+          # copy icon (convert to png 256x256)
+          if [ -f assets/images/icon.png ]; then
+            # ensure imagemagick is available to convert the icon
+            if ! command -v convert >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y imagemagick || true
+            fi
+            convert assets/images/icon.png -resize 256x256 "$APPDIR/usr/share/icons/hicolor/256x256/apps/mkpfs.png" || true
+          fi
+          # download appimagetool and make AppImage
+          APPIMAGETOOL=/tmp/appimagetool.AppImage
+          if [ ! -f "$APPIMAGETOOL" ]; then
+            if [ "${ARCH}" = "x64" ]; then
+              URL="https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
+            elif [ "${ARCH}" = "arm64" ]; then
+              URL="https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-aarch64.AppImage"
+            else
+              URL="https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
+            fi
+            # Try a small set of candidate URLs (latest release, then continuous) and stop on first success
+            CANDIDATES=(
+              "$URL"
+              "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+              "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+            )
+            success=0
+            for u in "${CANDIDATES[@]}"; do
+              echo "Trying $u"
+              if curl -fSL -o "$APPIMAGETOOL" "$u"; then
+                success=1
+                break
+              else
+                echo "Download failed for $u"
+              fi
+            done
+            if [ "$success" -ne 1 ]; then
+              echo "Failed to download appimagetool from known locations" >&2
+              exit 1
+            fi
+            chmod +x "$APPIMAGETOOL"
+          fi
+          # create an AppRun wrapper
+          cat > "$APPDIR/AppRun" <<'AR'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export PATH="$HERE/usr/bin:$PATH"
+          exec "$HERE/usr/bin/mkpfs" "$@"
+          AR
+          chmod +x "$APPDIR/AppRun"
+
+          if [ -x "$APPIMAGETOOL" ]; then
+            # create AppImage; output will be created in dist/
+            "$APPIMAGETOOL" "$APPDIR" dist/
+            # find appimage and rename (fail if none produced)
+            found=0
+            find dist -maxdepth 1 -type f -name "*AppImage" -print0 | while IFS= read -r -d '' f; do
+              mv "$f" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}.AppImage"
+              found=1
+            done
+            if [ "$found" -ne 1 ]; then
+              echo "AppImage not produced by appimagetool" >&2
+              exit 1
+            fi
+          else
+            echo "appimagetool not available (not executable)" >&2
+            exit 1
+          fi
+
+      - name: Upload Windows executable artifact
+        if: startsWith(matrix.os, 'windows')
+        uses: actions/upload-artifact@v6
+        with:
+          name: mkpfs-${{ env.ART_VERSION }}-windows-${{ env.ARCH }}.exe
+          path: |
+            dist/mkpfs-${{ env.ART_VERSION }}-windows-*.exe
+          if-no-files-found: error
+
+      - name: Upload macOS pkg artifact
+        if: startsWith(matrix.os, 'macos')
+        uses: actions/upload-artifact@v6
+        with:
+          name: mkpfs-${{ env.ART_VERSION }}-macos-${{ env.ARCH }}.pkg
+          path: |
+            dist/mkpfs-${{ env.ART_VERSION }}-macos-*.pkg
+          if-no-files-found: error
+
+      - name: Upload Linux tar.gz artifact
+        if: startsWith(matrix.os, 'linux')
+        uses: actions/upload-artifact@v6
+        with:
+          name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.tar.gz
+          path: |
+            dist/mkpfs-${{ env.ART_VERSION }}-linux-*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Linux AppImage artifact
+        if: startsWith(matrix.os, 'linux')
+        uses: actions/upload-artifact@v6
+        with:
+          name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.AppImage
+          path: |
+            dist/mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.AppImage
+          if-no-files-found: error
+
   publish-to-pypi:
     name: 🐍 Publish Python distribution to PyPI
     if: github.event_name == 'release' && github.event.release.prerelease == false
@@ -56,3 +364,79 @@ jobs:
           path: dist/
       - name: Publish distribution 📦 to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  attach-to-release:
+    name: 📎 Attach build artifacts to the GitHub Release
+    if: github.event_name == 'release'
+    needs:
+      - build
+      - build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts from this workflow
+        uses: actions/download-artifact@v6
+        with:
+          path: release_assets
+          merge-multiple: true
+      - name: Show artifacts
+        run: ls -R release_assets || true
+      - name: Upload assets to this Release (by release_id)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLOAD_URL: ${{ github.event.release.upload_url }}
+        run: |
+          set -euo pipefail
+          ASSETS_DIR=release_assets
+          if [ ! -d "$ASSETS_DIR" ] || [ -z "$(find "$ASSETS_DIR" -type f -maxdepth 5 | head -n1)" ]; then
+            echo "No artifact files found to upload"
+            exit 0
+          fi
+          BASE_URL=${UPLOAD_URL%%\{*}
+          echo "Using upload URL: $BASE_URL"
+          while IFS= read -r -d '' f; do
+            name=$(basename "$f")
+            mime=$(file -b --mime-type "$f" 2>/dev/null || echo application/octet-stream)
+            echo "Uploading $name ($mime)"
+            http=$(curl -sS -o /tmp/upload_resp.json -w "%{http_code}" -X POST \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Content-Type: $mime" \
+              --data-binary @"$f" \
+              "$BASE_URL?name=$name")
+            if [ "$http" -ge 200 ] && [ "$http" -lt 300 ]; then
+              echo "Uploaded $name (HTTP $http)"
+            else
+              echo "Upload failed for $name (HTTP $http) for file $f"
+              sed -e 's/\x1b\[[0-9;]*m//g' -e 's/\r//g' /tmp/upload_resp.json || true
+              exit 1
+            fi
+          done < <(find "$ASSETS_DIR" -type f -print0)
+
+  virustotal-scan:
+    name: 🔒 VirusTotal scan release assets
+    if: github.event_name == 'release' && (github.event.action == 'created' || github.event.action == 'prereleased')
+    needs:
+      - attach-to-release
+    runs-on: ubuntu-latest
+    permissions:
+      # required to append analysis links to the GitHub Release body
+      contents: write
+    steps:
+      - name: VirusTotal Scan
+        uses: crazy-max/ghaction-virustotal@v5
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_release_body: true
+          request_rate: 4
+          files: |
+            \.whl$
+            \.exe$
+            \.pkg$
+            \.tar\.gz$
+            \.AppImage$
+            \.appimage$
+            \.zip$
+
