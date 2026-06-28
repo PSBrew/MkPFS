@@ -1,36 +1,34 @@
 # ShadowMountPlus — PFS/FFPFS Compatibility Reference
 
-**Repository:** https://github.com/drakmor/ShadowMountPlus  
-**Submodule path:** `related-projects/shadowmountplus/`  
-**Last indexed commit:** see submodule pointer in `.gitmodules`
+Upstream repository: https://github.com/drakmor/ShadowMountPlus
 
 ShadowMountPlus is a fully automated background "Auto-Mounter" payload for jailbroken PS5 consoles. It automatically detects, mounts, and installs game dumps from internal and external storage with no manual configuration. It is the primary reference implementation for how the PS5 kernel accepts PFS images and what content must live inside them.
 
-> **PFS support is marked experimental.** `.ffpkg` (UFS2) is the recommended default format for normal use.
+> PFS support is marked experimental. `.ffpkg` (UFS2) is the recommended default format for normal use.
 
 ---
 
 ## Table of Contents
 
-1. [Project Structure](#project-structure)
-2. [Supported Image Formats](#supported-image-formats)
-3. [PFS Mount Pipeline (Deep Dive)](#pfs-mount-pipeline-deep-dive)
-4. [LVD Attach Subsystem](#lvd-attach-subsystem)
-5. [nmount Options by Filesystem](#nmount-options-by-filesystem)
-6. [Sector / Cluster Size Rules](#sector--cluster-size-rules)
-7. [Game Content Layout Requirements](#game-content-layout-requirements)
-8. [param.json Parsing](#paramjson-parsing)
-9. [Scan Paths and Directory Layout](#scan-paths-and-directory-layout)
-10. [Install and Registration Flow](#install-and-registration-flow)
-11. [Link Files and nullfs Mounts](#link-files-and-nullfs-mounts)
-12. [Fakelib / Backport Overlay](#fakelib--backport-overlay)
-13. [app.db Integration](#appdb-integration)
-14. [Runtime Configuration](#runtime-configuration)
-15. [Image Creation Scripts](#image-creation-scripts)
-16. [System Paths Reference](#system-paths-reference)
-17. [Key Constants and Limits](#key-constants-and-limits)
-18. [Source File Index](#source-file-index)
-19. [Checklist for .ffpfs Image Generators](#checklist-for-ffpfs-image-generators)
+1. Project Structure
+2. Supported Image Formats
+3. PFS Mount Pipeline (Deep Dive)
+4. LVD Attach Subsystem
+5. nmount Options by Filesystem
+6. Sector / Cluster Size Rules
+7. Game Content Layout Requirements
+8. param.json Parsing
+9. Scan Paths and Directory Layout
+10. Install and Registration Flow
+11. Link Files and nullfs Mounts
+12. Fakelib / Backport Overlay
+13. app.db Integration
+14. Runtime Configuration
+15. Image Creation Scripts
+16. System Paths Reference
+17. Key Constants and Limits
+18. Source File Index
+19. Checklist for .ffpfs Image Generators
 
 ---
 
@@ -88,7 +86,7 @@ shadowmountplus/
 
 ## Supported Image Formats
 
-Source: [include/sm_types.h](shadowmountplus/include/sm_types.h), [src/sm_image.c](shadowmountplus/src/sm_image.c#L149)
+Source: [include/sm_types.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_types.h), [src/sm_image.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_image.c#L149)
 
 | Extension | Filesystem | Mount name | Attach backend | Status |
 |-----------|-----------|------------|----------------|--------|
@@ -131,12 +129,12 @@ The full pipeline for mounting a `.ffpfs` file goes through these stages:
 ### 1. Scanner finds image file
 
 `sm_scan_tree_walk` walks configured scan roots and calls `on_image_file` for every regular file whose name passes `is_supported_image_file_name`.  
-Source: [src/sm_scan_tree.c](shadowmountplus/src/sm_scan_tree.c)
+Source: [src/sm_scan_tree.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_scan_tree.c)
 
 ### 2. Stability check
 
 Before mounting, the source file's `mtime`/`ctime` must be at least `stability_wait_seconds` (default: 10) seconds old.  
-Source: [src/sm_mount_device.c](shadowmountplus/src/sm_mount_device.c) — `is_source_stable_for_mount`
+Source: [src/sm_mount_device.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_mount_device.c) — `is_source_stable_for_mount`
 
 ### 3. Mount-point naming
 
@@ -164,7 +162,7 @@ static attach_backend_t select_image_backend(const runtime_config_t *cfg,
 }
 ```
 
-Source: [src/sm_image.c](shadowmountplus/src/sm_image.c)
+Source: [src/sm_image.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_image.c)
 
 ### 5. LVD attach (`/dev/lvdctl`)
 
@@ -185,7 +183,7 @@ Key fields for PFS:
 
 The kernel creates a block device at `/dev/lvdN` where N is the assigned unit ID.
 
-Source: [src/sm_image.c](shadowmountplus/src/sm_image.c), [include/sm_mount_defs.h](shadowmountplus/include/sm_mount_defs.h)
+Source: [src/sm_image.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_image.c), [include/sm_mount_defs.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_mount_defs.h)
 
 ### 6. nmount (PFS-specific)
 
@@ -211,20 +209,20 @@ struct iovec iov_pfs[] = {
 };
 ```
 
-**Mount flags for PFS:** `MNT_RDONLY` (0) when read-only, `0` for read-write (same as exFAT).  
+Mount flags for PFS: `MNT_RDONLY` (0) when read-only, `0` for read-write (same as exFAT).  
 UFS uses different mount flags (`UFS_NMOUNT_FLAG_RO = 0x10000001u`, `UFS_NMOUNT_FLAG_RW = 0x10000000u`).
 
-Source: [src/sm_image.c](shadowmountplus/src/sm_image.c), [include/sm_mount_defs.h](shadowmountplus/include/sm_mount_defs.h)
+Source: [src/sm_image.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_image.c), [include/sm_mount_defs.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_mount_defs.h)
 
 ### 7. Mount validation
 
 After nmount succeeds:
 1. `statfs(mount_point)` must succeed.
-2. `mounted_sfs.f_bsize` (cluster/block size) must be **≥ device sector size** used at attach time.  
+2. `mounted_sfs.f_bsize` (cluster/block size) must be ≥ device sector size used at attach time.  
    If not, mount is rejected, an autotune rule is written to `autotune.ini`, and user is notified.
 3. `opendir(mount_point)` must succeed.
 
-Source: [src/sm_image.c](shadowmountplus/src/sm_image.c) — `validate_mounted_image`
+Source: [src/sm_image.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_image.c) — `validate_mounted_image`
 
 ### 8. Image cache registration
 
@@ -235,7 +233,7 @@ On failure or shutdown, `unmount_image` calls `unmount(mount_point, ...)` then d
 
 ## LVD Attach Subsystem
 
-Source: [include/sm_mount_defs.h](shadowmountplus/include/sm_mount_defs.h), [include/sm_types.h](shadowmountplus/include/sm_types.h)
+Source: [include/sm_mount_defs.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_mount_defs.h), [include/sm_types.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_types.h)
 
 ### Control paths
 
@@ -292,7 +290,7 @@ typedef struct {
 } lvd_ioctl_layer_v0_t;
 ```
 
-Source: [include/sm_types.h](shadowmountplus/include/sm_types.h)
+Source: [include/sm_types.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_types.h)
 
 ### Attach request
 
@@ -335,7 +333,7 @@ typedef struct {
 
 Mount flags for PFS: `MNT_RDONLY` for read-only, `0` for read-write.
 
-Source: [src/sm_image.c](shadowmountplus/src/sm_image.c) `iov_pfs`, [include/sm_mount_defs.h](shadowmountplus/include/sm_mount_defs.h)
+Source: [src/sm_image.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_image.c) `iov_pfs`, [include/sm_mount_defs.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_mount_defs.h)
 
 ### UFS2 (`.ffpkg`)
 
@@ -370,7 +368,7 @@ Mount flags: `MNT_RDONLY` or `0`. Secondary unit is `0x10000` (fixed).
 
 ## Sector / Cluster Size Rules
 
-Source: [include/sm_mount_defs.h](shadowmountplus/include/sm_mount_defs.h), [src/sm_config_mount.c](shadowmountplus/src/sm_config_mount.c), [config.ini.example](shadowmountplus/config.ini.example)
+Source: [include/sm_mount_defs.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_mount_defs.h), [src/sm_config_mount.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_config_mount.c), [config.ini.example](https://github.com/drakmor/ShadowMountPlus/blob/main/config.ini.example)
 
 ### Compile-time defaults (code initialization)
 
@@ -393,13 +391,13 @@ state->cfg.lvd_sector_pfs = LVD_SECTOR_SIZE_PFS;  // = 4096
 # lvd_pfs_sector_size=32768
 ```
 
-> **Discrepancy:** The compile-time constant `LVD_SECTOR_SIZE_PFS = 4096` is used when no config file is present. However, the README and `config.ini.example` document the default as `32768`. This is the *recommended* value to set, not necessarily the bare code default. Users with a `config.ini` that uncommends `lvd_pfs_sector_size=32768` (or any value ≥ image cluster size) will work as documented.
+> Discrepancy: The compile-time constant `LVD_SECTOR_SIZE_PFS = 4096` is used when no config file is present. However, the README and `config.ini.example` document the default as `32768`. This is the recommended value to set, not necessarily the bare code default. Users with a `config.ini` that uncommends `lvd_pfs_sector_size=32768` (or any value ≥ image cluster size) will work as documented.
 
 The code always reads from `runtime_config()->lvd_sector_pfs` at mount time.
 
 ### Validation rule
 
-After mount, the kernel's reported `f_bsize` (cluster size) must be **≥ device sector_size**:
+After mount, the kernel's reported `f_bsize` (cluster size) must be ≥ device sector_size:
 
 ```c
 if (fs_block_size < (uint64_t)min_device_sector) {
@@ -407,7 +405,7 @@ if (fs_block_size < (uint64_t)min_device_sector) {
 }
 ```
 
-**Practical recommendation:** Build PFS images with a cluster/block size of at least **32768 bytes**. This covers both users who have `lvd_pfs_sector_size=32768` in their config (as documented/recommended) and provides headroom for any custom values. If a user's sector size setting exceeds your cluster size, the mount will be rejected and ShadowMountPlus will write an `image_sector` autotune entry.
+Practical recommendation: Build PFS images with a cluster/block size of at least 32768 bytes. This covers both users who have `lvd_pfs_sector_size=32768` in their config (as documented/recommended) and provides headroom for any custom values. If a user's sector size setting exceeds your cluster size, the mount will be rejected and ShadowMountPlus will write an `image_sector` autotune entry.
 
 ### Per-image override
 
@@ -422,7 +420,7 @@ Match is by filename only (no path). If the mounted FS cluster size is smaller t
 
 ## Game Content Layout Requirements
 
-Source: [src/sm_gameinfo.c](shadowmountplus/src/sm_gameinfo.c), [src/sm_filesystem.c](shadowmountplus/src/sm_filesystem.c), [README.md](shadowmountplus/README.md)
+Source: [src/sm_gameinfo.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_gameinfo.c), [src/sm_filesystem.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_filesystem.c), [README.md](https://github.com/drakmor/ShadowMountPlus/blob/main/README.md)
 
 ### Mandatory files
 
@@ -468,13 +466,13 @@ return !path_exists(eboot_path);
 
 ### Layout constraint: NO extra top-level folder
 
-**Valid:**
+Valid:
 ```
 /sce_sys/param.json         ← directly under image root
 /eboot.bin
 ```
 
-**Invalid:**
+Invalid:
 ```
 /GAME_FOLDER/sce_sys/param.json   ← extra nesting layer
 /GAME_FOLDER/eboot.bin
@@ -486,7 +484,7 @@ The scanner calls `directory_has_param_json(mount_point)` which checks for `sce_
 
 ## param.json Parsing
 
-Source: [src/sm_gameinfo.c](shadowmountplus/src/sm_gameinfo.c)
+Source: [src/sm_gameinfo.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_gameinfo.c)
 
 The parser is a simple string search, not a full JSON parser:
 
@@ -506,23 +504,23 @@ if (out_name[0] == '\0')
     strlcpy(out_name, out_id, MAX_TITLE_NAME);
 ```
 
-**Constraints:**
+Constraints:
 - Max file size: `MAX_PARAM_JSON_SIZE = 1 MiB`
 - Max title ID length: `MAX_TITLE_ID = 32`
 - Max title name length: `MAX_TITLE_NAME = 256`
 
-**Supported title ID formats** (from game lifecycle code):
+Supported title ID formats (from game lifecycle code):
 - `PPSA` prefix (PS5 native)
 - `CUSA` prefix (PS4 BC)
 
-**Minimum valid param.json:**
+Minimum valid param.json:
 ```json
 {
   "titleId": "PPSA12345"
 }
 ```
 
-**Recommended param.json:**
+Recommended param.json:
 ```json
 {
   "titleId": "PPSA12345",
@@ -546,7 +544,7 @@ Or with locale support:
 
 ## Scan Paths and Directory Layout
 
-Source: [include/sm_paths.h](shadowmountplus/include/sm_paths.h), [README.md](shadowmountplus/README.md)
+Source: [include/sm_paths.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_paths.h), [README.md](https://github.com/drakmor/ShadowMountPlus/blob/main/README.md)
 
 ### Default scan roots (compiled in)
 
@@ -573,7 +571,7 @@ Source: [include/sm_paths.h](shadowmountplus/include/sm_paths.h), [README.md](sh
 
 ### Recommended directory structure
 
-**Flat mode (`scan_depth=1`, default):**
+Flat mode (`scan_depth=1`, default):
 ```
 /data/homebrew/<TITLE_ID>/          ← direct folder game (contains sce_sys/param.json)
 /data/homebrew/<TITLE_ID>.ffpkg     ← UFS2 image
@@ -581,7 +579,7 @@ Source: [include/sm_paths.h](shadowmountplus/include/sm_paths.h), [README.md](sh
 /data/homebrew/backports/<TITLE_ID>/ ← backport overlays (excluded from game scan)
 ```
 
-**Nested mode (`scan_depth=2`):**
+Nested mode (`scan_depth=2`):
 ```
 /data/homebrew/PS5/<Collection>/<TITLE_ID>/
 /mnt/ext0/etaHEN/games/<Collection>/<TITLE_ID>.ffpkg
@@ -598,7 +596,7 @@ Source: [include/sm_paths.h](shadowmountplus/include/sm_paths.h), [README.md](sh
 
 ## Install and Registration Flow
 
-Source: [src/sm_install.c](shadowmountplus/src/sm_install.c), [src/sm_scan.c](shadowmountplus/src/sm_scan.c)
+Source: [src/sm_install.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_install.c), [src/sm_scan.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_scan.c)
 
 ### Step 1: Metadata staging
 
@@ -646,7 +644,7 @@ If `sce_sys/snd0.at9` is present, `update_snd0info` updates the app.db `snd0info
 
 ## Link Files and nullfs Mounts
 
-Source: [src/sm_filesystem.c](shadowmountplus/src/sm_filesystem.c), [include/sm_paths.h](shadowmountplus/include/sm_paths.h)
+Source: [src/sm_filesystem.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_filesystem.c), [include/sm_paths.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_paths.h)
 
 ### System path layout
 
@@ -691,7 +689,7 @@ An installed title is cleaned up (unmounted/uninstalled) when:
 
 ## Fakelib / Backport Overlay
 
-Source: [src/sm_fakelib.c](shadowmountplus/src/sm_fakelib.c)
+Source: [src/sm_fakelib.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_fakelib.c)
 
 ShadowMountPlus can mount overlay libraries into a running game's sandbox:
 
@@ -707,18 +705,18 @@ struct iovec overlay_iov[] = {
 };
 ```
 
-**Overlay sources:**
-1. **Per-game fakelib:** `/mnt/sandbox/<TITLE_ID>_XXX/app0/fakelib` → sandbox `common/lib`
-2. **Global fakelib:** `/data/shadowmount/fakelib` → same sandbox `common/lib`
+Overlay sources:
+1. Per-game fakelib: `/mnt/sandbox/<TITLE_ID>_XXX/app0/fakelib` → sandbox `common/lib`
+2. Global fakelib: `/data/shadowmount/fakelib` → same sandbox `common/lib`
 
-**Backport folder:** `<scanpath>/backports/<TITLE_ID>/` — applied to the matched game's mount.  
+Backport folder: `<scanpath>/backports/<TITLE_ID>/` — applied to the matched game's mount.  
 The `backports` directory is explicitly excluded from normal game candidate scanning.
 
 ---
 
 ## app.db Integration
 
-Source: [src/sm_appdb.c](shadowmountplus/src/sm_appdb.c)
+Source: [src/sm_appdb.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_appdb.c)
 
 ```c
 #define APP_DB_PATH "/system_data/priv/mms/app.db"
@@ -738,13 +736,13 @@ Retry behavior: up to 25 retries for `SQLITE_BUSY`/`SQLITE_LOCKED`, with 200ms s
 Config file: `/data/shadowmount/config.ini`  
 Autotune file: `/data/shadowmount/autotune.ini` (auto-written by ShadowMountPlus)
 
-Source: [src/sm_config_mount.c](shadowmountplus/src/sm_config_mount.c), [config.ini.example](shadowmountplus/config.ini.example)
+Source: [src/sm_config_mount.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_config_mount.c), [config.ini.example](https://github.com/drakmor/ShadowMountPlus/blob/main/config.ini.example)
 
 ### Key settings relevant to PFS image generation
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `lvd_pfs_sector_size` | `32768` | **Most important for PFS**: must be ≤ image cluster size |
+| `lvd_pfs_sector_size` | `32768` | Most important for PFS: must be ≤ image cluster size |
 | `mount_read_only` | `1` | 1=ro, 0=rw for all images unless overridden per-image |
 | `image_rw=<filename>` | — | Per-image read-write override |
 | `image_ro=<filename>` | — | Per-image read-only override |
@@ -759,7 +757,7 @@ Source: [src/sm_config_mount.c](shadowmountplus/src/sm_config_mount.c), [config.
 
 ### Firmware-specific behavior
 
-- **FW ≥ 12.00:** `app_install_all_enabled` is forced to `true` regardless of config
+- FW ≥ 12.00: `app_install_all_enabled` is forced to `true` regardless of config
 
 ---
 
@@ -767,7 +765,7 @@ Source: [src/sm_config_mount.c](shadowmountplus/src/sm_config_mount.c), [config.
 
 ### mkexfat.sh — Linux exFAT image creator
 
-Source: [mkexfat.sh](shadowmountplus/mkexfat.sh)
+Source: [mkexfat.sh](https://github.com/drakmor/ShadowMountPlus/blob/main/mkexfat.sh)
 
 ```sh
 ./mkexfat.sh <game_root_dir> [output.exfat]
@@ -775,14 +773,14 @@ Source: [mkexfat.sh](shadowmountplus/mkexfat.sh)
 
 - Requires: `exfatprogs`, `exfat-fuse`, `fuse3`, `rsync`
 - Auto-selects cluster profile:
-  - Large-file average ≥ 1MB → **64K cluster**
-  - Otherwise → **32K cluster**
+  - Large-file average ≥ 1MB → 64K cluster
+  - Otherwise → 32K cluster
 - Calculates image size: `data_bytes (rounded to cluster) + FAT + bitmap + dir entries + 32MB metadata + dynamic headroom (0.5%, min 64MB, max 512MB)`
 - Validates `eboot.bin` presence before proceeding
 
 ### mkufs2.sh — FreeBSD UFS2 image creator
 
-Source: [mkufs2.sh](shadowmountplus/mkufs2.sh)
+Source: [mkufs2.sh](https://github.com/drakmor/ShadowMountPlus/blob/main/mkufs2.sh)
 
 ```sh
 ./mkufs2.sh <game_root_dir> [output.ffpkg]
@@ -798,7 +796,7 @@ Source: [mkufs2.sh](shadowmountplus/mkufs2.sh)
 
 ### make_image.bat + New-OsfExfatImage.ps1 — Windows exFAT
 
-Source: [make_image.bat](shadowmountplus/make_image.bat), [New-OsfExfatImage.ps1](shadowmountplus/New-OsfExfatImage.ps1)
+Source: [make_image.bat](https://github.com/drakmor/ShadowMountPlus/blob/main/make_image.bat), [New-OsfExfatImage.ps1](https://github.com/drakmor/ShadowMountPlus/blob/main/New-OsfExfatImage.ps1)
 
 ```bat
 make_image.bat "C:\images\game.exfat" "C:\payload\GAME_ROOT"
@@ -810,7 +808,7 @@ Requires OSFMount: https://www.osforensics.com/tools/mount-disk-images.html
 
 ## System Paths Reference
 
-Source: [include/sm_paths.h](shadowmountplus/include/sm_paths.h)
+Source: [include/sm_paths.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_paths.h)
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
@@ -826,18 +824,18 @@ Source: [include/sm_paths.h](shadowmountplus/include/sm_paths.h)
 | `NOTIFY_ICON_FILE` | `/user/data/shadowmount/smp_icon.png` | Toast notification icon |
 | `DEFAULT_BACKPORTS_DIR_NAME` | `backports` | Subdirectory excluded from game scan |
 
-**Game sandbox path (while running):**
+Game sandbox path (while running):
 - `/mnt/sandbox/<TITLE_ID>_XXX/app0/` — game's app0 (content)
 - `/mnt/sandbox/<TITLE_ID>_XXX/app0/fakelib` — per-game fakelib source for overlay
 
-**System install target:**
+System install target:
 - `/system_ex/app/<TITLE_ID>/` — nullfs mount of game source
 
 ---
 
 ## Key Constants and Limits
 
-Source: [include/sm_limits.h](shadowmountplus/include/sm_limits.h)
+Source: [include/sm_limits.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_limits.h)
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
@@ -863,30 +861,30 @@ Source: [include/sm_limits.h](shadowmountplus/include/sm_limits.h)
 
 | File | Purpose |
 |------|---------|
-| [src/sm_image.c](shadowmountplus/src/sm_image.c) | Core: detect format, LVD attach, nmount, validate, unmount |
-| [src/sm_mount_device.c](shadowmountplus/src/sm_mount_device.c) | LVD/MD backend ops, device node wait, mount resolution |
-| [include/sm_mount_defs.h](shadowmountplus/include/sm_mount_defs.h) | All LVD/PFS/UFS/exFAT constants and ioctl codes |
-| [include/sm_types.h](shadowmountplus/include/sm_types.h) | Struct types: lvd layer, attach request, runtime config, scan candidate |
-| [include/sm_limits.h](shadowmountplus/include/sm_limits.h) | All capacity limits and timeout values |
-| [include/sm_paths.h](shadowmountplus/include/sm_paths.h) | All filesystem path constants and default scan path list |
-| [include/sm_platform.h](shadowmountplus/include/sm_platform.h) | Platform includes, SCE SDK function declarations, IOVEC macros |
-| [src/sm_gameinfo.c](shadowmountplus/src/sm_gameinfo.c) | param.json parser (titleId/titleName extraction) |
-| [src/sm_scan.c](shadowmountplus/src/sm_scan.c) | Candidate discovery: game dirs + image files |
-| [src/sm_scan_tree.c](shadowmountplus/src/sm_scan_tree.c) | Directory tree walker with depth control |
-| [src/sm_scanner.c](shadowmountplus/src/sm_scanner.c) | Periodic scan loop coordinator |
-| [src/sm_install.c](shadowmountplus/src/sm_install.c) | Mount+metadata stage+nullfs+registration pipeline |
-| [src/sm_filesystem.c](shadowmountplus/src/sm_filesystem.c) | Link file I/O, health checks, cleanup logic |
-| [src/sm_appdb.c](shadowmountplus/src/sm_appdb.c) | SQLite app.db queries and snd0info updates |
-| [src/sm_config_mount.c](shadowmountplus/src/sm_config_mount.c) | config.ini / autotune.ini parser and runtime config state |
-| [src/sm_fakelib.c](shadowmountplus/src/sm_fakelib.c) | unionfs fakelib overlay for sandbox |
-| [src/sm_game_lifecycle.c](shadowmountplus/src/sm_game_lifecycle.c) | kqueue-based game exec/exit event monitoring |
-| [src/sm_shellcore_flags.c](shadowmountplus/src/sm_shellcore_flags.c) | SceShellCore kernel event flags monitoring |
-| [src/sm_kstuff.c](shadowmountplus/src/sm_kstuff.c) | kstuff sysentvec toggle around game launches |
-| [src/sm_stability.c](shadowmountplus/src/sm_stability.c) | Source mtime/ctime age check |
-| [src/main.c](shadowmountplus/src/main.c) | ELF entry point, thread startup |
-| [config.ini.example](shadowmountplus/config.ini.example) | Full annotated config template |
-| [mkexfat.sh](shadowmountplus/mkexfat.sh) | Linux exFAT image creator |
-| [mkufs2.sh](shadowmountplus/mkufs2.sh) | FreeBSD UFS2 image creator |
+| [src/sm_image.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_image.c) | Core: detect format, LVD attach, nmount, validate, unmount |
+| [src/sm_mount_device.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_mount_device.c) | LVD/MD backend ops, device node wait, mount resolution |
+| [include/sm_mount_defs.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_mount_defs.h) | All LVD/PFS/UFS/exFAT constants and ioctl codes |
+| [include/sm_types.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_types.h) | Struct types: lvd layer, attach request, runtime config, scan candidate |
+| [include/sm_limits.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_limits.h) | All capacity limits and timeout values |
+| [include/sm_paths.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_paths.h) | All filesystem path constants and default scan path list |
+| [include/sm_platform.h](https://github.com/drakmor/ShadowMountPlus/blob/main/include/sm_platform.h) | Platform includes, SCE SDK function declarations, IOVEC macros |
+| [src/sm_gameinfo.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_gameinfo.c) | param.json parser (titleId/titleName extraction) |
+| [src/sm_scan.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_scan.c) | Candidate discovery: game dirs + image files |
+| [src/sm_scan_tree.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_scan_tree.c) | Directory tree walker with depth control |
+| [src/sm_scanner.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_scanner.c) | Periodic scan loop coordinator |
+| [src/sm_install.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_install.c) | Mount+metadata stage+nullfs+registration pipeline |
+| [src/sm_filesystem.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_filesystem.c) | Link file I/O, health checks, cleanup logic |
+| [src/sm_appdb.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_appdb.c) | SQLite app.db queries and snd0info updates |
+| [src/sm_config_mount.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_config_mount.c) | config.ini / autotune.ini parser and runtime config state |
+| [src/sm_fakelib.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_fakelib.c) | unionfs fakelib overlay for sandbox |
+| [src/sm_game_lifecycle.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_game_lifecycle.c) | kqueue-based game exec/exit event monitoring |
+| [src/sm_shellcore_flags.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_shellcore_flags.c) | SceShellCore kernel event flags monitoring |
+| [src/sm_kstuff.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_kstuff.c) | kstuff sysentvec toggle around game launches |
+| [src/sm_stability.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/sm_stability.c) | Source mtime/ctime age check |
+| [src/main.c](https://github.com/drakmor/ShadowMountPlus/blob/main/src/main.c) | ELF entry point, thread startup |
+| [config.ini.example](https://github.com/drakmor/ShadowMountPlus/blob/main/config.ini.example) | Full annotated config template |
+| [mkexfat.sh](https://github.com/drakmor/ShadowMountPlus/blob/main/mkexfat.sh) | Linux exFAT image creator |
+| [mkufs2.sh](https://github.com/drakmor/ShadowMountPlus/blob/main/mkufs2.sh) | FreeBSD UFS2 image creator |
 
 ---
 
@@ -894,35 +892,20 @@ Source: [include/sm_limits.h](shadowmountplus/include/sm_limits.h)
 
 Based on full source analysis, the following is the validated checklist for generating PFS images compatible with ShadowMountPlus:
 
-1. **Extension:** Output file must have `.ffpfs` extension (case-insensitive match).
-
-2. **Filesystem type:** The inner filesystem must be mountable as `pfs` via `nmount` with `fstype=pfs`. The kernel PFS module handles this.
-
-3. **LVD attach type:** Image is attached as `LVD_ATTACH_IMAGE_TYPE_PFS_SAVE_DATA` (= 5), single-image family (not DD).
-
-4. **Cluster / block size ≥ 32768 (recommended):** The mounted filesystem's `f_bsize` as reported by `statfs` must be ≥ the LVD sector size used at attach time. The compile-time default `LVD_SECTOR_SIZE_PFS = 4096` but the README and `config.ini.example` document the recommended setting as `32768`. Build images with a cluster size of **32768 or larger** to be safe across all common user configurations. If the cluster size is smaller than the user's sector size, the mount is rejected and an `image_sector` autotune override is written.
-
-5. **Content at image root:** `sce_sys/param.json` must exist directly at the image root. No extra top-level wrapper folder.
-
-6. **param.json:** Must contain `titleId` (or `title_id`) as a JSON string. `titleName` is optional but recommended. Title ID format: `PPSA#####` for PS5, `CUSA#####` for PS4 BC.
-
-7. **eboot.bin at image root:** Required in practice — cleanup logic treats sources without `eboot.bin` as stale and will unmount/uninstall them.
-
-8. **Zero EKPFS key:** ShadowMountPlus mounts with `ekpfs=000...000` (64 zero hex chars) and `sigverify=0`, meaning signature/encryption verification is disabled. Generated images do not need to be signed.
-
-9. **mkeymode=SD, budgetid=game:** These are the only values used by ShadowMountPlus for `.ffpfs`.
-
-10. **No bitmap file:** `LVD_ENTRY_FLAG_NO_BITMAP` (0x1) is always set in the layer descriptor. Images do not need a companion bitmap file.
-
-11. **Source stability:** The image file's `mtime`/`ctime` must be at least `stability_wait_seconds` (default 10s) old before mounting is attempted. This is not an image format requirement but a practical deployment consideration.
-
-12. **Configurable sector override:** For compatibility with users who have custom `lvd_pfs_sector_size` settings, make the cluster size configurable in your generator. A value of `65536` provides extra headroom.
-
-13. **Optional but recommended:**
-    - `sce_sys/icon0.png` — displayed in PS5 UI after install
-    - `sce_sys/snd0.at9` — background music in game card
-    - `sce_sys/param.sfo` — copied to appmeta alongside param.json
+1. Extension: Output file must have `.ffpfs` extension (case-insensitive match).
+2. Filesystem type: Must mount as `pfs` via `nmount` with `fstype=pfs`.
+3. LVD attach type: `LVD_ATTACH_IMAGE_TYPE_PFS_SAVE_DATA` (= 5), single-image family (not DD).
+4. Cluster / block size ≥ 32768 (recommended): `statfs.f_bsize` must be ≥ selected sector size.
+5. Content at image root: `sce_sys/param.json` directly at image root; no extra top-level folder.
+6. param.json: Must contain `titleId` or `title_id`; `titleName` recommended. `PPSA`/`CUSA` formats supported.
+7. eboot.bin at image root: required in practice for health checks.
+8. Zero EKPFS key: `ekpfs=000...000` and `sigverify=0` for unsigned testing/dev flows.
+9. mkeymode/budget: `mkeymode=SD`, `budgetid=game`.
+10. No bitmap file: `LVD_ENTRY_FLAG_NO_BITMAP` always set.
+11. Source stability: `mtime/ctime` ≥ `stability_wait_seconds` (default 10s).
+12. Provide sector-size headroom: consider 65536 block size for broad compatibility.
+13. Optional assets: `icon0.png`, `snd0.at9`, `param.sfo`.
 
 ---
 
-*This document was generated by scanning the full ShadowMountPlus source tree. For definitive answers, always cross-reference with the submodule at `related-projects/shadowmountplus/`.*
+For authoritative details, consult the upstream repository and linked file paths above.

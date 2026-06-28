@@ -121,7 +121,7 @@ Use labels that fit the release drafter config in `.github/release-drafter-confi
 - `feature`
 - `bug`
 - `maintenance`
-- `docs`
+- `documentation`
 - `dependencies`
 - `security`
 - `breaking`
@@ -133,7 +133,7 @@ Use labels that fit the release drafter config in `.github/release-drafter-confi
 ### Mapping guidance
 - User-visible fix: `bug`
 - New user-facing capability: `feature`
-- Docs-only change: `docs`
+- Documentation-only change: `documentation`
 - Cleanup, tooling, refactor, or maintenance work: `maintenance`
 - Dependency update: `dependencies`
 - Security fix: `security`
