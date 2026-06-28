@@ -15,8 +15,8 @@ It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs
 
 ## 🎯 Why MkPFS
 
-<img src="assets/images/mkpfs-ui-pack-folder.png" alt="MkPFS GUI - Pack folder" style="float:right;width:40%;max-width:40%;border-radius:6px;margin-left:12px;margin-bottom:8px;" />
-<img src="assets/images/mkpfs-ui-pack-verify.png" alt="MkPFS GUI - Verify" style="float:right;width:40%;max-width:40%;border-radius:6px;margin-left:12px;margin-bottom:0;" />
+<img src="assets/images/mkpfs-ui-pack-folder.png" alt="MkPFS GUI - Pack folder" align="right" width="40%" />
+<img src="assets/images/mkpfs-ui-pack-verify.png" alt="MkPFS GUI - Verify" align="right" width="40%" />
 
 MkPFS is designed to be a clean and practical entry point for PlayStation PFS image workflows:
 
