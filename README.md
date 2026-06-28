@@ -15,6 +15,9 @@ It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs
 
 ## 🎯 Why MkPFS
 
+<table><tr>
+<td width="60%">
+
 MkPFS is designed to be a clean and practical entry point for PlayStation PFS image workflows:
 
 - Create and manage PFS disk images for PlayStation-oriented workflows
@@ -25,6 +28,12 @@ MkPFS is designed to be a clean and practical entry point for PlayStation PFS im
 - Build the inner PFS filesystem used inside PKG or FPKG workflows
 - Use the same core workflow from both the CLI and the Python library
 - Explore a bundled, source-backed knowledge base for PFS and PKG research
+
+</td>
+<td width="40%" align="right">
+<img src="assets/images/gui-screenshot.png" alt="MkPFS GUI screenshot" style="width:100%;max-width:100%;border:1px solid #ddd;border-radius:6px" />
+</td>
+</tr></table>
 
 ## 🚀 Quick Start
 
