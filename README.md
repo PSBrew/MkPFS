@@ -143,6 +143,63 @@ uv build
 uv run --frozen twine check dist/*
 ```
 
+## 🖥️ GUI
+
+MkPFS includes a graphical interface built with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter). It covers all five operations (pack folder, pack file, verify, inspect, tree, unpack) and supports English, Portuguese (BR), and Spanish.
+
+### GUI dependencies
+
+```bash
+pip install customtkinter pillow
+```
+
+`cryptography` is also required (already listed as a core dependency):
+
+```bash
+pip install cryptography
+```
+
+### Running the GUI
+
+```bash
+python -m mkpfs.gui
+```
+
+Or, if installed via pip:
+
+```bash
+mkpfs-gui
+```
+
+### Compiling to a standalone .exe (Windows)
+
+Install PyInstaller and build a single-file executable:
+
+```bash
+pip install pyinstaller
+```
+
+```powershell
+pyinstaller --onefile --windowed `
+  --name MkPFS `
+  --icon assets\images\icon.png `
+  --collect-all customtkinter `
+  --collect-all PIL `
+  --add-data "assets;assets" `
+  --hidden-import cryptography `
+  mkpfs\gui.py
+```
+
+The resulting `MkPFS.exe` is placed in the `dist\` folder. No Python installation is required to run it.
+
+Notes:
+
+- `--onefile` bundles everything into a single executable. Use `--onedir` instead for faster startup at the cost of a folder output.
+- `--windowed` suppresses the console window. Remove it to keep a terminal for debugging.
+- `--collect-all customtkinter` and `--collect-all PIL` ensure theme files and image codecs are included.
+- `--add-data "assets;assets"` bundles the `assets/images/icon.png` used for the window icon.
+
+
 ## Command Reference
 
 MkPFS keeps the command surface focused on the image lifecycle. 

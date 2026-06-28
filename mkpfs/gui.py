@@ -4,15 +4,13 @@ import builtins
 import contextlib
 import io
 import queue
-import subprocess
-import sys
 import threading
 from pathlib import Path
-from typing import Any, ClassVar, ClassVar, ClassVar
+from tkinter import filedialog
+from typing import Any, ClassVar
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
-from tkinter import filedialog
 
 # ---------------------------------------------------------------------------
 # Internationalisation
@@ -121,7 +119,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "u_err": "✗ Image and output folder are both required.",
         "u_auto_subdir": "→ Output subfolder: {}",
     },
-
     "pt_BR": {
         "app_subtitle": "Sistema de Arquivos PlayStation",
         "lang_label": "Idioma",
@@ -215,7 +212,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "u_err": "✗ Imagem e pasta de destino são obrigatórios.",
         "u_auto_subdir": "→ Subpasta de saída: {}",
     },
-
     "es": {
         "app_subtitle": "Sistema de Archivos PlayStation",
         "lang_label": "Idioma",
@@ -231,7 +227,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "options": "Opciones",
         "encryption": "Cifrado",
         "output_log": "Registro de Salida",
-        "export_log": "Exportar Registro",
         "export_log": "Exportar Registro",
         "run": "Ejecutar",
         "running": "Ejecutando…",
@@ -359,12 +354,12 @@ _TEXT_SECONDARY = "#8BA8C4"
 _TEXT_MUTED = "#344A62"
 
 # Neon accents — each panel / element gets its own hue
-_NEON_BLUE = "#00C8FF"       # primary brand, sidebar logo, Pack Folder
-_NEON_CYAN = "#00FFD4"       # Pack File
-_NEON_GREEN = "#39FF8A"      # Verify, success messages
-_NEON_PURPLE = "#B560FF"     # Inspect
-_NEON_AMBER = "#FFB800"      # Tree, warnings
-_NEON_PINK = "#FF5CAA"       # Unpack
+_NEON_BLUE = "#00C8FF"  # primary brand, sidebar logo, Pack Folder
+_NEON_CYAN = "#00FFD4"  # Pack File
+_NEON_GREEN = "#39FF8A"  # Verify, success messages
+_NEON_PURPLE = "#B560FF"  # Inspect
+_NEON_AMBER = "#FFB800"  # Tree, warnings
+_NEON_PINK = "#FF5CAA"  # Unpack
 
 # Semantic
 _SUCCESS = _NEON_GREEN
@@ -386,11 +381,11 @@ _FONT_SMALL = ("Segoe UI", 10)
 
 _PANEL_ACCENT: dict[str, str] = {
     "pack_folder": _NEON_BLUE,
-    "pack_file":   _NEON_CYAN,
-    "verify":      _NEON_GREEN,
-    "inspect":     _NEON_PURPLE,
-    "tree":        _NEON_AMBER,
-    "unpack":      _NEON_PINK,
+    "pack_file": _NEON_CYAN,
+    "verify": _NEON_GREEN,
+    "inspect": _NEON_PURPLE,
+    "tree": _NEON_AMBER,
+    "unpack": _NEON_PINK,
 }
 
 
@@ -510,9 +505,7 @@ class PathRow(ctk.CTkFrame):
         self._mode: str = mode
         self._filetypes: list[tuple[str, str]] | None = filetypes
 
-        ctk.CTkLabel(self, text=label, font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(
-            anchor="w", pady=(0, 3)
-        )
+        ctk.CTkLabel(self, text=label, font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(anchor="w", pady=(0, 3))
 
         row: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x")
@@ -672,9 +665,7 @@ class OptionRow(ctk.CTkFrame):
             accent: Accent colour for the button.
         """
         super().__init__(parent, fg_color="transparent")
-        ctk.CTkLabel(self, text=label, font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(
-            anchor="w", pady=(0, 3)
-        )
+        ctk.CTkLabel(self, text=label, font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(anchor="w", pady=(0, 3))
         ctk.CTkOptionMenu(
             self,
             variable=variable,
@@ -847,7 +838,7 @@ class BasePanel(ctk.CTkFrame):
         self._card.pack(fill="x", padx=24, pady=14, before=self._progress)
         self._build_controls(self._card)
 
-    def _build_controls(self, card: GlassCard) -> None:  # noqa: B027
+    def _build_controls(self, card: GlassCard) -> None:
         """Populate operation-specific controls inside the given card.
 
         Args:
@@ -872,7 +863,7 @@ class BasePanel(ctk.CTkFrame):
         """Wrap _run_command and signal completion back to the UI thread."""
         try:
             self._run_command()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._log_queue.put(("error", tr("err_unexpected").format(exc)))
         finally:
             self._log_queue.put(("__done__", ""))
@@ -968,7 +959,7 @@ class BasePanel(ctk.CTkFrame):
         # Late import -- if mkpfs or its dependencies are missing the
         # ImportError is caught below and shown as a readable error message.
         try:
-            from mkpfs.cli import cli_mkpfs_main  # noqa: PLC0415
+            from mkpfs.cli import cli_mkpfs_main
         except ImportError as exc:
             self._emit(f"✗ Cannot import mkpfs: {exc}", "error")
             self._emit("   Ensure cryptography is installed: pip install cryptography", "muted")
@@ -1015,7 +1006,7 @@ class BasePanel(ctk.CTkFrame):
                 exit_code = int(cli_mkpfs_main(args))
         except SystemExit as exc:
             exit_code = int(exc.code) if exc.code is not None else 0
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._emit(f"✗ Unexpected error: {exc}", "error")
             return
         finally:
@@ -1083,9 +1074,7 @@ class PackFolderPanel(BasePanel):
             browse_label=tr("browse"),
         ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=16
-        )
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
 
         SectionLabel(card, tr("options"), color=self._accent).grid(
             row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
@@ -1112,8 +1101,12 @@ class PackFolderPanel(BasePanel):
 
         # Temp folder (optional, spans both columns below checkboxes)
         PathRow(
-            opt, tr("pf_temp"), self._temp_folder,
-            mode="folder", placeholder=tr("pf_temp_ph"), browse_label=tr("browse"),
+            opt,
+            tr("pf_temp"),
+            self._temp_folder,
+            mode="folder",
+            placeholder=tr("pf_temp_ph"),
+            browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
     def _run_command(self) -> None:
@@ -1186,9 +1179,7 @@ class PackFilePanel(BasePanel):
             browse_label=tr("browse"),
         ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=16
-        )
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
 
         SectionLabel(card, tr("options"), color=self._accent).grid(
             row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
@@ -1210,8 +1201,12 @@ class PackFilePanel(BasePanel):
         )
 
         PathRow(
-            opt, tr("pkf_temp"), self._temp_folder,
-            mode="folder", placeholder=tr("pkf_temp_ph"), browse_label=tr("browse"),
+            opt,
+            tr("pkf_temp"),
+            self._temp_folder,
+            mode="folder",
+            placeholder=tr("pkf_temp_ph"),
+            browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
     def _run_command(self) -> None:
@@ -1226,7 +1221,6 @@ class PackFilePanel(BasePanel):
         if temp := self._temp_folder.get().strip():
             args += ["--temp-folder", temp]
         self._run_mkpfs(args)
-
 
 
 # ---------------------------------------------------------------------------
@@ -1263,42 +1257,50 @@ class VerifyPanel(BasePanel):
             row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
         )
         PathRow(
-            card, tr("v_image_label"), self._image, mode="open",
+            card,
+            tr("v_image_label"),
+            self._image,
+            mode="open",
             filetypes=[("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")],
-            placeholder=tr("v_image_ph"), browse_label=tr("browse"),
+            placeholder=tr("v_image_ph"),
+            browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
 
         PathRow(
-            card, tr("v_source_label"), self._source, mode="folder",
-            placeholder=tr("v_source_ph"), browse_label=tr("browse"),
+            card,
+            tr("v_source_label"),
+            self._source,
+            mode="folder",
+            placeholder=tr("v_source_ph"),
+            browse_label=tr("browse"),
         ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=16
-        )
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("v_hashes"), color=self._accent).grid(
             row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
 
-        for col, (lkey, var, phkey) in enumerate([
-            ("v_crc32", self._crc32, "v_crc32_ph"),
-            ("v_sha256", self._sha256, "v_sha256_ph"),
-        ]):
+        for col, (lkey, var, phkey) in enumerate(
+            [
+                ("v_crc32", self._crc32, "v_crc32_ph"),
+                ("v_sha256", self._sha256, "v_sha256_ph"),
+            ]
+        ):
             hf: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
-            hf.grid(row=5, column=col, sticky="ew",
-                    padx=(16 if col == 0 else 6, 6 if col == 0 else 16), pady=(0, 14))
-            ctk.CTkLabel(hf, text=tr(lkey), font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(
-                anchor="w", pady=(0, 3)
-            )
+            hf.grid(row=5, column=col, sticky="ew", padx=(16 if col == 0 else 6, 6 if col == 0 else 16), pady=(0, 14))
+            ctk.CTkLabel(hf, text=tr(lkey), font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(anchor="w", pady=(0, 3))
             ctk.CTkEntry(
-                hf, textvariable=var, placeholder_text=tr(phkey),
-                fg_color=_BG_INPUT, border_color=_BORDER_BRIGHT,
-                corner_radius=8, font=_FONT_UI, text_color=_TEXT_PRIMARY,
+                hf,
+                textvariable=var,
+                placeholder_text=tr(phkey),
+                fg_color=_BG_INPUT,
+                border_color=_BORDER_BRIGHT,
+                corner_radius=8,
+                font=_FONT_UI,
+                text_color=_TEXT_PRIMARY,
             ).pack(fill="x")
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
-            row=6, column=0, columnspan=2, sticky="ew", padx=16
-        )
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=6, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("encryption"), color=self._accent).grid(
             row=7, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
@@ -1309,9 +1311,14 @@ class VerifyPanel(BasePanel):
             anchor="w", pady=(0, 3)
         )
         ctk.CTkEntry(
-            enc, textvariable=self._ekpfs, placeholder_text=tr("v_ekpfs_ph"),
-            fg_color=_BG_INPUT, border_color=_BORDER_BRIGHT,
-            corner_radius=8, font=_FONT_MONO, text_color=_TEXT_PRIMARY,
+            enc,
+            textvariable=self._ekpfs,
+            placeholder_text=tr("v_ekpfs_ph"),
+            fg_color=_BG_INPUT,
+            border_color=_BORDER_BRIGHT,
+            corner_radius=8,
+            font=_FONT_MONO,
+            text_color=_TEXT_PRIMARY,
         ).pack(fill="x", pady=(0, 6))
         NeonCheckbox(enc, text=tr("v_newcrypt"), variable=self._new_crypt, accent=self._accent).pack(anchor="w")
 
@@ -1365,14 +1372,16 @@ class InspectPanel(BasePanel):
             row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
         )
         PathRow(
-            card, tr("i_image_label"), self._image, mode="open",
+            card,
+            tr("i_image_label"),
+            self._image,
+            mode="open",
             filetypes=[("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")],
-            placeholder=tr("i_image_ph"), browse_label=tr("browse"),
+            placeholder=tr("i_image_ph"),
+            browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
-            row=2, column=0, columnspan=2, sticky="ew", padx=16
-        )
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("options"), color=self._accent).grid(
             row=3, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
@@ -1391,9 +1400,14 @@ class InspectPanel(BasePanel):
             anchor="w", pady=(0, 3)
         )
         ctk.CTkEntry(
-            ekpfs_col, textvariable=self._ekpfs, placeholder_text=tr("i_ekpfs_ph"),
-            fg_color=_BG_INPUT, border_color=_BORDER_BRIGHT,
-            corner_radius=8, font=_FONT_MONO, text_color=_TEXT_PRIMARY,
+            ekpfs_col,
+            textvariable=self._ekpfs,
+            placeholder_text=tr("i_ekpfs_ph"),
+            fg_color=_BG_INPUT,
+            border_color=_BORDER_BRIGHT,
+            corner_radius=8,
+            font=_FONT_MONO,
+            text_color=_TEXT_PRIMARY,
         ).pack(fill="x")
 
     def _run_command(self) -> None:
@@ -1438,14 +1452,16 @@ class TreePanel(BasePanel):
             row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
         )
         PathRow(
-            card, tr("t_image_label"), self._image, mode="open",
+            card,
+            tr("t_image_label"),
+            self._image,
+            mode="open",
             filetypes=[("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")],
-            placeholder=tr("t_image_ph"), browse_label=tr("browse"),
+            placeholder=tr("t_image_ph"),
+            browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
-            row=2, column=0, columnspan=2, sticky="ew", padx=16
-        )
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("encryption"), color=self._accent).grid(
             row=3, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
@@ -1456,9 +1472,14 @@ class TreePanel(BasePanel):
             anchor="w", pady=(0, 3)
         )
         ctk.CTkEntry(
-            enc, textvariable=self._ekpfs, placeholder_text=tr("t_ekpfs_ph"),
-            fg_color=_BG_INPUT, border_color=_BORDER_BRIGHT,
-            corner_radius=8, font=_FONT_MONO, text_color=_TEXT_PRIMARY,
+            enc,
+            textvariable=self._ekpfs,
+            placeholder_text=tr("t_ekpfs_ph"),
+            fg_color=_BG_INPUT,
+            border_color=_BORDER_BRIGHT,
+            corner_radius=8,
+            font=_FONT_MONO,
+            text_color=_TEXT_PRIMARY,
         ).pack(fill="x", pady=(0, 6))
         NeonCheckbox(enc, text=tr("t_newcrypt"), variable=self._new_crypt, accent=self._accent).pack(anchor="w")
 
@@ -1508,19 +1529,25 @@ class UnpackPanel(BasePanel):
             row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
         )
         PathRow(
-            card, tr("u_image_label"), self._image, mode="open",
+            card,
+            tr("u_image_label"),
+            self._image,
+            mode="open",
             filetypes=[("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")],
-            placeholder=tr("u_image_ph"), browse_label=tr("browse"),
+            placeholder=tr("u_image_ph"),
+            browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
 
         PathRow(
-            card, tr("u_out_label"), self._output, mode="folder",
-            placeholder=tr("u_out_ph"), browse_label=tr("browse"),
+            card,
+            tr("u_out_label"),
+            self._output,
+            mode="folder",
+            placeholder=tr("u_out_ph"),
+            browse_label=tr("browse"),
         ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=16
-        )
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("options"), color=self._accent).grid(
             row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
@@ -1539,9 +1566,14 @@ class UnpackPanel(BasePanel):
             anchor="w", pady=(0, 3)
         )
         ctk.CTkEntry(
-            enc_col, textvariable=self._ekpfs, placeholder_text=tr("u_ekpfs_ph"),
-            fg_color=_BG_INPUT, border_color=_BORDER_BRIGHT,
-            corner_radius=8, font=_FONT_MONO, text_color=_TEXT_PRIMARY,
+            enc_col,
+            textvariable=self._ekpfs,
+            placeholder_text=tr("u_ekpfs_ph"),
+            fg_color=_BG_INPUT,
+            border_color=_BORDER_BRIGHT,
+            corner_radius=8,
+            font=_FONT_MONO,
+            text_color=_TEXT_PRIMARY,
         ).pack(fill="x")
 
         NeonCheckbox(opt, text=tr("u_newcrypt"), variable=self._new_crypt, accent=self._accent).grid(
@@ -1634,11 +1666,11 @@ class MkPFSApp(ctk.CTk):
 
     _PAGES: ClassVar[list[tuple[str, str, type, str]]] = [
         ("nav_pack_folder", "nav_pack_folder", PackFolderPanel, _NEON_BLUE),
-        ("nav_pack_file",   "nav_pack_file",   PackFilePanel,   _NEON_CYAN),
-        ("nav_verify",      "nav_verify",       VerifyPanel,     _NEON_GREEN),
-        ("nav_inspect",     "nav_inspect",       InspectPanel,    _NEON_PURPLE),
-        ("nav_tree",        "nav_tree",          TreePanel,       _NEON_AMBER),
-        ("nav_unpack",      "nav_unpack",        UnpackPanel,     _NEON_PINK),
+        ("nav_pack_file", "nav_pack_file", PackFilePanel, _NEON_CYAN),
+        ("nav_verify", "nav_verify", VerifyPanel, _NEON_GREEN),
+        ("nav_inspect", "nav_inspect", InspectPanel, _NEON_PURPLE),
+        ("nav_tree", "nav_tree", TreePanel, _NEON_AMBER),
+        ("nav_unpack", "nav_unpack", UnpackPanel, _NEON_PINK),
     ]
 
     def __init__(self) -> None:
@@ -1679,7 +1711,7 @@ class MkPFSApp(ctk.CTk):
             self.wm_iconphoto(True, photo)
             # Keep a reference so the image is not garbage-collected by Python
             self._icon_ref: ImageTk.PhotoImage = photo
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def _build_sidebar(self) -> None:
@@ -1700,20 +1732,29 @@ class MkPFSApp(ctk.CTk):
         brand.pack_propagate(False)
         ctk.CTkLabel(brand, text="MkPFS", font=("Segoe UI", 22, "bold"), text_color=_NEON_BLUE).pack(anchor="w")
         self._subtitle_label: ctk.CTkLabel = ctk.CTkLabel(
-            brand, text=tr("app_subtitle"), font=("Segoe UI", 9), text_color=_TEXT_MUTED,
+            brand,
+            text=tr("app_subtitle"),
+            font=("Segoe UI", 9),
+            text_color=_TEXT_MUTED,
         )
         self._subtitle_label.pack(anchor="w")
 
         ctk.CTkFrame(sidebar, height=1, fg_color=_NEON_BLUE).pack(fill="x", padx=10, pady=(8, 14))
 
         self._ops_label: ctk.CTkLabel = ctk.CTkLabel(
-            sidebar, text=tr("operations"), font=("Segoe UI", 9, "bold"), text_color=_TEXT_MUTED,
+            sidebar,
+            text=tr("operations"),
+            font=("Segoe UI", 9, "bold"),
+            text_color=_TEXT_MUTED,
         )
         self._ops_label.pack(anchor="w", padx=16, pady=(0, 6))
 
         for key, label_key, _, accent in self._PAGES:
             btn: NavButton = NavButton(
-                sidebar, text=tr(label_key), command=lambda k=key: self._select(k), accent=accent,
+                sidebar,
+                text=tr(label_key),
+                command=lambda k=key: self._select(k),
+                accent=accent,
             )
             btn.pack(fill="x", padx=10, pady=2)
             self._nav_buttons[key] = btn
@@ -1723,7 +1764,10 @@ class MkPFSApp(ctk.CTk):
         lang_frame: ctk.CTkFrame = ctk.CTkFrame(sidebar, fg_color="transparent")
         lang_frame.pack(fill="x", padx=12, pady=(0, 6))
         self._lang_label_widget: ctk.CTkLabel = ctk.CTkLabel(
-            lang_frame, text=tr("lang_label"), font=("Segoe UI", 9, "bold"), text_color=_TEXT_MUTED,
+            lang_frame,
+            text=tr("lang_label"),
+            font=("Segoe UI", 9, "bold"),
+            text_color=_TEXT_MUTED,
         )
         self._lang_label_widget.pack(anchor="w", pady=(0, 4))
 
@@ -1744,7 +1788,10 @@ class MkPFSApp(ctk.CTk):
         ).pack(fill="x")
 
         self._ver_label: ctk.CTkLabel = ctk.CTkLabel(
-            sidebar, text=tr("version_footer"), font=("Segoe UI", 9), text_color=_TEXT_MUTED,
+            sidebar,
+            text=tr("version_footer"),
+            font=("Segoe UI", 9),
+            text_color=_TEXT_MUTED,
         )
         self._ver_label.pack(side="bottom", pady=12)
 
@@ -1777,7 +1824,7 @@ class MkPFSApp(ctk.CTk):
         Args:
             display_name: Human-readable language name chosen by the user.
         """
-        global _current_locale  # noqa: PLW0603
+        global _current_locale
         for locale, name in _LANG_NAMES.items():
             if name == display_name:
                 _current_locale = locale
@@ -1816,5 +1863,6 @@ if __name__ == "__main__":
     # executable on Windows. Without it, each multiprocessing.Pool worker
     # spawned by pfs.py re-imports __main__, opening a new GUI window.
     import multiprocessing
+
     multiprocessing.freeze_support()
     main()
