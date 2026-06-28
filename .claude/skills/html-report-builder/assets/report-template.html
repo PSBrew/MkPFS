@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🔎 [TASK] Report — [TIMESTAMP]</title>
+  <style>
+    :root {
+      --bg:#081a34; --panel:#0a1f3f; --panel2:#0d274f; --fg:#e8f0ff; --muted:#b3c1d9;
+      --accent:#7cc7ff; --ok:#22c55e; --warn:#eab308; --err:#ef4444; --code:#07162e;
+      --border:#113766; --shadow: 0 6px 24px rgba(0,0,0,0.35);
+    }
+    html, body { height:100%; }
+    body {
+      margin:0; background: linear-gradient(180deg, var(--bg), #07152b 60%);
+      color:var(--fg); font: 16px/1.55 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    }
+    .container { max-width: 1040px; margin: 36px auto 80px; padding: 0 20px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom: 16px; }
+    h1 { margin:0; font-size: 1.9rem; line-height:1.2; letter-spacing: .2px; }
+    .pill { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background: #0e2954; color:#d7e7ff; font-size: 12px; border:1px solid #133567; }
+    .grid { display:grid; grid-template-columns: 1fr; gap:16px; }
+    .card { background: linear-gradient(180deg, var(--panel), var(--panel2)); border:1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+    .card h2 { margin: 0; padding: 14px 16px; color: var(--accent); font-size:1.1rem; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.2); }
+    .card .body { padding: 16px; }
+    p { margin: .6em 0; }
+    ul, ol { padding-left: 1.1rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .kv { display:grid; grid-template-columns: 160px 1fr; gap:8px 16px; }
+    .kv div:nth-child(odd) { color: var(--muted); }
+
+    .badges { display:flex; flex-wrap:wrap; gap:8px; }
+    .badge { background:#0f2c5a; padding:4px 8px; border-radius:8px; border:1px solid var(--border); font-size:12px; color:#cfe4ff; }
+
+    .progress { position:relative; background:#0a1f3e; border:1px solid var(--border); border-radius:10px; height:18px; width:100%; overflow:hidden; }
+    .bar { height:100%; width:[PROGRESS%]; background: linear-gradient(90deg,#2563eb,#22c55e); box-shadow: inset 0 0 10px rgba(0,0,0,0.25); }
+    .progress-label { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:12px; color:#cfe4ff; text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+
+    pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    pre { white-space: pre-wrap; word-break: break-word; background: var(--code); padding:14px; border-radius:12px; border:1px solid var(--border); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03); }
+
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .err { color: var(--err); }
+    .muted { color: var(--muted); }
+
+    footer { margin-top: 24px; color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🔎 [TASK] Report</h1>
+      <div class="pill" title="Generated timestamp">🗓️ [TIMESTAMP]</div>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <h2>✨ Executive summary</h2>
+        <div class="body">
+          <p>[1–3 sentences with key outcomes. Use ✅ for passes, ❌ for failures, ⚠️ for partials.]</p>
+          <div class="badges">
+            <div class="badge">Checks: ✅ [X] / ❌ [Y] / ⚠️ [Z]</div>
+            <div class="badge">Duration: [DURATION]</div>
+            <div class="badge">Scope: [SCOPE]</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>📍 Context</h2>
+        <div class="body">
+          <p>[Why this report exists; user request summary.]</p>
+          <div class="kv">
+            <div>Requester</div><div>[REQUESTER]</div>
+            <div>Task</div><div>[TASK]</div>
+            <div>Environment</div><div>[ENVIRONMENT]</div>
+            <div>References</div><div>[REFS]</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>⏳ Progress</h2>
+        <div class="body">
+          <div class="progress" aria-label="Progress">
+            <div class="bar"></div>
+            <div class="progress-label">[PROGRESS%]</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🔬 Findings</h2>
+        <div class="body">
+          <ul>
+            <li>✅ [Finding 1 with supporting data]</li>
+            <li>✅ [Finding 2 with supporting data]</li>
+            <li>❌ [Issue found with short impact statement]</li>
+            <li>⚠️ [Risk/uncertainty to follow up]</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🧰 Commands run</h2>
+        <div class="body">
+          <pre><code>$ [command one]
+[trimmed output]
+
+$ [command two]
+[trimmed output]</code></pre>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🗂️ Evidence (selected excerpts)</h2>
+        <div class="body">
+          <pre><code>[short log/test output excerpts]
+[Note: full logs saved to ./tmp/[LOGFILE].log]</code></pre>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🧭 Recommendations</h2>
+        <div class="body">
+          <ol>
+            <li>➡️ [Specific next step 1]</li>
+            <li>➡️ [Specific next step 2]</li>
+            <li>📌 [Owner/assignee and due date if known]</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🔗 References</h2>
+        <div class="body">
+          <ul>
+            <li><a href="[URL-1]" target="_blank" rel="noopener noreferrer">[Label 1]</a></li>
+            <li><a href="[URL-2]" target="_blank" rel="noopener noreferrer">[Label 2]</a></li>
+            <li><code>./tmp/[RELATED-FILE]</code></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </div>
+  
+  <script>
+    // Optional: if you replace [PROGRESS%] with a number like 65%, this script will sync the bar width
+    (function(){
+      try {
+        var label = document.querySelector('.progress-label');
+        var bar = document.querySelector('.bar');
+        if(label && bar){ bar.style.width = label.textContent.trim(); }
+      } catch(e){}
+    })();
+  </script>
+</body>
+</html>

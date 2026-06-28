@@ -1,6 +1,9 @@
 ---
 name: running-unit-tests
-description: Run project checks/tests and iteratively fix failures until the branch is green. Use this skill when you finish to implement a feature or fix a bug and want to get the branch ready to push.
+description: >
+  Run formatting, linting, and tests; then iteratively fix failures until the branch is green.
+  Use this after implementing a feature or fixing a bug to get the branch ready to push.
+  Triggers: "tests", "run tests", "lint", "format", "CI red", "fix failing tests".
 context: fork
 ---
 
@@ -36,4 +39,10 @@ These are the steps to follow when you run into test failures:
    - Confirm `./run-tests.sh` completes successfully with no failures.
    - Optionally re-run `uv run --frozen pre-commit run --all-files` to catch any hook-specific issues.
    - Summarize what was fixed and list any remaining risks or follow-ups before push.
+
+## Tips and setup notes
+
+- First time setup: if `.venv/` does not exist, run `uv sync` once to create it, or run `./run-tests.sh` after creating `.venv` manually.
+- Using a different virtualenv: set `SKIP_VENV=1` before running the script and ensure `python3` resolves to the desired environment.
+- Faster loops: during debugging, run `uv run --frozen pytest -k <pattern> -q` to target specific tests, then finish with a full `./run-tests.sh` run.
 

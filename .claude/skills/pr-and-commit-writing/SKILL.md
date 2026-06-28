@@ -1,10 +1,12 @@
 ---
-name: creating-pull-requests
-description: Create or edit public-facing commits, PR titles, PR descriptions, comments, labels, and tags with a user-first style.
+name: pr-and-commit-writing
+description: >
+  Write commit messages, PR titles/descriptions, and GitHub comments with a user-first style; apply 
+  release-drafter-compatible labels; produce release-note-ready PR titles.
 context: fork
 ---
 
-# Creating Pull Requests
+# Writing PRs, commit messages, and GitHub comments
 
 Use this skill whenever you need to:
 - create or edit a pull request
@@ -24,43 +26,33 @@ Keep everything:
 
 ## Commit message rules
 
-1. Use Conventional Commits for the title.
-   - Examples:
-     - `Avoid broken inner filenames`
-     - `Make single-file images safer`
-
-2. Keep the title short and human-friendly.
-   - Say what problem was solved, not internal implementation details.
-
-3. In the body, keep it simple.
-   - Include:
-     - `Why:` the user-facing problem
-     - `What:` the high-level change
-     - `Test:` one short validation note
+1. Use a short, natural-language title (≤50 chars). Emoji allowed but optional.
+2. Focus on the user-facing problem solved; avoid deep implementation details.
+3. Leave a blank line between the title and the body.
+4. Optional body: keep concise (wrap ~72 cols) and include the user-visible problem and the high-level change.
 
 Example:
 
 ```text
-🔧 fix: avoid broken inner filenames
+Avoid broken inner filenames by removing special characters
 
-Why: some consoles could not mount images when the inner filename had special characters.
-What: sanitize the internal filename, prefer title IDs, and warn when names differ during verify.
-Test: ran ./run-tests.sh and verified full pytest pass.
+Some consoles could not mount images when inner filenames had special characters.
+This change sanitizes the internal filename, prefers title IDs, and warns when names are changed.
+Verification still works even when external and internal names differ.
 ```
 
 ## PR title rules
 
-1. Write one short sentence.
-2. Explain the problem solved.
-3. Prefer user language over code language.
-4. Avoid deep implementation details.
-5. Write titles so they can be used directly in release notes — do not use Conventional Commit prefixes (e.g., `feat:`, `fix:`, `chore:`).
+1. One short sentence (≤72 chars), plain language, user-facing.
+2. Describe the problem solved or user impact; avoid deep implementation details.
+3. No Conventional Commit prefixes (no `feat:`, `fix:`, etc.).
+4. Titles should paste directly into release notes.
 
 Good examples:
 - `Fix inner image names that break mounts`
 - `Make single-file image names safer`
 - `Avoid mount failures caused by special characters in inner image names`
-- `Updated the documentation about XYZ`
+- `Update the documentation about the verify command`
 
 
 ## PR description rules
@@ -81,34 +73,35 @@ Recommended structure:
 
 ## 🧪 How to test
 - One short command or simple manual flow.
+- Link related issues (e.g., Closes #123).
 
 ## 💬 Notes for non-technical readers 
 - Reassure the reader what changed and what did not change.
 ```
 
-### Example PR description
+### Example Pull Request description
 
 ```md
-# Fix inner image names that break mounts ✅
+# Fix inner image names that break mounts
 
-## Why? 🤔
+## 🤔 Why?
 - Some consoles could not mount single-file images when the inner filename had special characters.
 
-## What changed 🔧
+## 🔧 What changed
 - The inner filename is now cleaned automatically by default.
 - PlayStation title IDs like `CUSA` and `PPSA` are preferred when found.
 - A short warning is shown when the inner filename is renamed.
 - Verification still works even when the external and internal file names differ.
 
-## How to test 🧪
+## 🧪 How to test
 - Pack a single file with special characters and run `mkpfs verify --source-file`.
 
-## Notes for non-technical readers 💬
+## 💬 Notes for non-technical readers
 - This improves compatibility.
 - The file contents do not change, only the internal filename is adjusted.
 ```
 
-### Writing guidance
+### General Writing guidance
 
 - Use emoji lightly for scanning: ✅ 🔧 🧪 🤔 💬 ⚠️ 📦
 - Keep paragraphs short.
@@ -125,27 +118,26 @@ Recommended structure:
 Use labels that fit the release drafter config in `.github/release-drafter-config.yml`.
 
 ### Type labels, pick one
-- `bug`
-- `fix`
-- `feature`
-- `docs`
-- `maintenance`
-- `dependencies`
-- `security`
-- `breaking`
+- `type: feature`
+- `type: bug`
+- `type: maintenance`
+- `type: docs`
+- `type: dependencies`
+- `type: security`
+- `type: breaking`
 
 ### Other labels
 - `skip-changelog` only when the PR should not appear in release notes
 - Area or workflow labels are fine if the repo uses them, but the main release label should stay compatible with release drafter
 
 ### Mapping guidance
-- User-visible fix: `bug` or `fix`
-- New user-facing capability: `feature`
-- Docs-only change: `docs`
-- Cleanup, tooling, refactor, or maintenance work: `maintenance`
-- Dependency update: `dependencies`
-- Security fix: `security`
-- Breaking change: `breaking`
+- User-visible fix: `type: bug`
+- New user-facing capability: `type: feature`
+- Docs-only change: `type: docs`
+- Cleanup, tooling, refactor, or maintenance work: `type: maintenance`
+- Dependency update: `type: dependencies`
+- Security fix: `type: security`
+- Breaking change: `type: breaking`
 
 Choose labels based on the user impact first, then the implementation details.
 
@@ -154,17 +146,24 @@ Choose labels based on the user impact first, then the implementation details.
 When editing PRs with `gh`, prefer:
 - `gh pr edit ...`
 - `gh pr create ...`
-- `gh pr edit <number> --add-label "type: bug"`
+- `GH_PAGER=cat gh pr edit <number> --add-label "type: bug"`
+- `GH_PAGER=cat gh pr edit <number> --add-label "skip-changelog"`
+
+## Gotchas
+- PR titles: plain sentence, no emoji, no Conventional Commit prefixes; release-note ready.
+- Use `type:` labels so release drafter categorizes the PR correctly.
+- Avoid PII, local paths, or internal-only details in public text.
 
 ## Final checklist
 
 Before publishing a commit message, PR body, or comment, check:
-- Is the title short and user-friendly?
+- Is the PR title release-note ready (plain sentence, ≤72 chars, no CC prefixes, no emoji)?
 - Does the text explain the problem first?
 - Is there a clear **Why?** section for PRs?
-- Are there UTF-8 icons in the PR description?
+- Are there UTF-8 icons in the PR description (lightly used)?
 - Is the language understandable to a non-technical reader?
-- Did you assign sensible labels that match release drafter?
+- Did you apply the correct `type:` label and `skip-changelog` if needed?
+- Did you link related issues (e.g., Closes #123)?
 - Did you avoid mentioning any AI tools?
 - After editing with `gh`, did you re-read the final published PR title/body and confirm it still matches this skill instead of a generic Markdown template?
 - If a repository instruction says to use this skill for PR text, did you follow the full structure here rather than only invoking the skill tool?
