@@ -1,17 +1,21 @@
 name: CI
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 on:
   push:
     branches:
-      - '**'
+      - main
+      - master
     tags:
       - '**'
   pull_request:
     branches:
       - '**'
   release:
-      types: [published, prereleased, created, edited]
+    types: [published, prereleased, created, edited]
 jobs:
   build:
     name: 📦 Builds the Python package
