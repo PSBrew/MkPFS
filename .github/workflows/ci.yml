@@ -32,9 +32,9 @@ jobs:
         run: uv run twine check dist/*
       - name: Smoke install wheel
         run: python -m venv /tmp/mkpfs-release-check && /tmp/mkpfs-release-check/bin/python -m pip install dist/*.whl && /tmp/mkpfs-release-check/bin/python -c "import mkpfs; print('mkpfs imported successfully')"
-        - name: Store the distribution packages
-          uses: actions/upload-artifact@v6
-          with:
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v6
+        with:
           name: python-package-distributions
           path: dist/
 
