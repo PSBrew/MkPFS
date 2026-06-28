@@ -117,27 +117,27 @@ Recommended structure:
 
 Use labels that fit the release drafter config in `.github/release-drafter-config.yml`.
 
-### Type labels, pick one
-- `type: feature`
-- `type: bug`
-- `type: maintenance`
-- `type: docs`
-- `type: dependencies`
-- `type: security`
-- `type: breaking`
+### Labels, pick one primary
+- `feature`
+- `bug`
+- `maintenance`
+- `docs`
+- `dependencies`
+- `security`
+- `breaking`
 
 ### Other labels
 - `skip-changelog` only when the PR should not appear in release notes
 - Area or workflow labels are fine if the repo uses them, but the main release label should stay compatible with release drafter
 
 ### Mapping guidance
-- User-visible fix: `type: bug`
-- New user-facing capability: `type: feature`
-- Docs-only change: `type: docs`
-- Cleanup, tooling, refactor, or maintenance work: `type: maintenance`
-- Dependency update: `type: dependencies`
-- Security fix: `type: security`
-- Breaking change: `type: breaking`
+- User-visible fix: `bug`
+- New user-facing capability: `feature`
+- Docs-only change: `docs`
+- Cleanup, tooling, refactor, or maintenance work: `maintenance`
+- Dependency update: `dependencies`
+- Security fix: `security`
+- Breaking change: `breaking`
 
 Choose labels based on the user impact first, then the implementation details.
 
@@ -146,12 +146,12 @@ Choose labels based on the user impact first, then the implementation details.
 When editing PRs with `gh`, prefer:
 - `gh pr edit ...`
 - `gh pr create ...`
-- `GH_PAGER=cat gh pr edit <number> --add-label "type: bug"`
+- `GH_PAGER=cat gh pr edit <number> --add-label "bug"`
 - `GH_PAGER=cat gh pr edit <number> --add-label "skip-changelog"`
 
 ## Gotchas
 - PR titles: plain sentence, no emoji, no Conventional Commit prefixes; release-note ready.
-- Use `type:` labels so release drafter categorizes the PR correctly.
+- Use repo-standard labels so release drafter categorizes the PR correctly.
 - Avoid PII, local paths, or internal-only details in public text.
 
 ## Final checklist

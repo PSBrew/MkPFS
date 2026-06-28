@@ -70,17 +70,17 @@ template: |
 version-resolver:
   major:
     labels:
-      - 'type: breaking'
+      - 'breaking'
   minor:
     labels:
-      - 'type: feature'
+      - 'feature'
   patch:
     labels:
-      - 'type: bug'
-      - 'type: maintenance'
-      - 'type: docs'
-      - 'type: dependencies'
-      - 'type: security'
+      - 'bug'
+      - 'maintenance'
+      - 'docs'
+      - 'dependencies'
+      - 'security'
   default: patch
 
 exclude-labels:
@@ -89,24 +89,24 @@ exclude-labels:
 categories:
   - title: 'Breaking'
     labels:
-      - 'type: breaking'
+      - 'breaking'
   - title: 'New'
     labels:
-      - 'type: feature'
+      - 'feature'
   - title: 'Bug Fixes'
     labels:
-      - 'type: bug'
+      - 'bug'
   - title: 'Maintenance'
     labels:
-      - 'type: maintenance'
+      - 'maintenance'
   - title: 'Documentation'
     labels:
-      - 'type: docs'
+      - 'docs'
   - title: 'Dependency Updates'
     labels:
-      - 'type: dependencies'
+      - 'dependencies'
     collapse-after: 5
   - title: 'Security'
     labels:
-      - 'type: security'
+      - 'security'
   - title: 'Other changes'
