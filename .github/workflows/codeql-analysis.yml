@@ -23,7 +23,7 @@ jobs:
           - language: actions
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup uv (project tooling)
         uses: astral-sh/setup-uv@v7
       - name: Setup Python
