@@ -11,9 +11,17 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-    - name: 'Auto-assign issue'
-      uses: pozil/auto-assign-issue@v1
-      with:
+      - name: Auto-assign issue
+        if: github.event_name == 'issues'
+        uses: pozil/auto-assign-issue@v1
+        with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           assignees: RenanGBarreto
-          numOfAssignee: 1
+
+      - name: Auto-assign pull request
+        if: github.event_name == 'pull_request'
+        uses: actions-ecosystem/action-add-assignees@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          assignees: |
+            RenanGBarreto
