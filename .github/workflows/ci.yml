@@ -182,8 +182,10 @@ jobs:
           pkgbuild \
             --install-location /Applications \
             --component "dist/MkPFS.app" \
+            --version "${ART_VERSION}" \
+            --identifier "com.psbrew.mkpfs" \
             dist/mkpfs-component.pkg
-          productbuild --identifier com.psbrew.mkpfs --version "${VERSION_SHORT}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg"
+          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_VERSION}-macos-${ARCH}.pkg"
           rm -f dist/mkpfs-component.pkg || true
 
       - name: Build Linux onefile GUI
