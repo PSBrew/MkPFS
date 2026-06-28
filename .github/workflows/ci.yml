@@ -216,13 +216,41 @@ jobs:
             echo "appimagetool not available, skipping AppImage creation" >&2
           fi
 
-      - name: Upload desktop binaries (artifacts)
+      - name: Upload Windows executable artifact
+        if: startsWith(matrix.os, 'windows')
         uses: actions/upload-artifact@v6
         with:
-          name: mkpfs-${{ env.ART_VERSION }}-${{ matrix.os }}
+          name: mkpfs-${{ env.ART_VERSION }}-windows-${{ env.ARCH }}.exe
           path: |
-            dist/mkpfs-*
+            dist/mkpfs-${{ env.ART_VERSION }}-windows-*.exe
           if-no-files-found: error
+
+      - name: Upload macOS pkg artifact
+        if: startsWith(matrix.os, 'macos')
+        uses: actions/upload-artifact@v6
+        with:
+          name: mkpfs-${{ env.ART_VERSION }}-macos-${{ env.ARCH }}.pkg
+          path: |
+            dist/mkpfs-${{ env.ART_VERSION }}-macos-*.pkg
+          if-no-files-found: error
+
+      - name: Upload Linux tar.gz artifact
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: actions/upload-artifact@v6
+        with:
+          name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.tar.gz
+          path: |
+            dist/mkpfs-${{ env.ART_VERSION }}-linux-*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Linux AppImage artifact
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: actions/upload-artifact@v6
+        with:
+          name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.appimage
+          path: |
+            dist/mkpfs-${{ env.ART_VERSION }}-ubuntu.appimage
+          if-no-files-found: warn
 
   publish-to-pypi:
     name: 🐍 Publish Python distribution to PyPI
