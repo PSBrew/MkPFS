@@ -69,7 +69,7 @@ jobs:
           echo "WHEEL_NAME=$base" >> "$GITHUB_ENV"
 
       - name: Store the distribution packages (wheel)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.WHEEL_NAME }}
           path: dist/${{ env.WHEEL_NAME }}
@@ -326,7 +326,7 @@ jobs:
 
       - name: Upload Windows executable artifact
         if: startsWith(matrix.os, 'windows')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: mkpfs-${{ env.ART_VERSION }}-windows-${{ env.ARCH }}.exe
           path: |
@@ -335,7 +335,7 @@ jobs:
 
       - name: Upload macOS pkg artifact
         if: startsWith(matrix.os, 'macos')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: mkpfs-${{ env.ART_VERSION }}-macos-${{ env.ARCH }}.pkg
           path: |
@@ -344,7 +344,7 @@ jobs:
 
       - name: Upload Linux tar.gz artifact
         if: startsWith(matrix.os, 'ubuntu')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.tar.gz
           path: |
@@ -353,7 +353,7 @@ jobs:
 
       - name: Upload Linux AppImage artifact
         if: startsWith(matrix.os, 'ubuntu')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: mkpfs-${{ env.ART_VERSION }}-linux-${{ env.ARCH }}.AppImage
           path: |
