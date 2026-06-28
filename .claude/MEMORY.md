@@ -36,22 +36,6 @@ Short summary:
 - For .ffpfs, mounting uses LVD attach + pfs nmount options and then validates mounted block size vs chosen sector size.
 - Practical compatibility requirements for generated images include image-root layout, valid sce_sys/param.json, and eboot.bin present at image root.
 
-How to inspect this knowledge quickly:
-
-- Start with the report: [related-projects/ShadowMountPlus.md](../related-projects/ShadowMountPlus.md).
-- Then inspect original source code under: [related-projects/shadowmountplus](../related-projects/shadowmountplus).
-- Priority files for mount and filesystem behavior:
-	- [related-projects/shadowmountplus/src/sm_image.c](../related-projects/shadowmountplus/src/sm_image.c)
-	- [related-projects/shadowmountplus/include/sm_mount_defs.h](../related-projects/shadowmountplus/include/sm_mount_defs.h)
-	- [related-projects/shadowmountplus/src/sm_mount_device.c](../related-projects/shadowmountplus/src/sm_mount_device.c)
-	- [related-projects/shadowmountplus/src/sm_scan_tree.c](../related-projects/shadowmountplus/src/sm_scan_tree.c)
-	- [related-projects/shadowmountplus/src/sm_scan.c](../related-projects/shadowmountplus/src/sm_scan.c)
-	- [related-projects/shadowmountplus/src/sm_gameinfo.c](../related-projects/shadowmountplus/src/sm_gameinfo.c)
-	- [related-projects/shadowmountplus/src/sm_install.c](../related-projects/shadowmountplus/src/sm_install.c)
-	- [related-projects/shadowmountplus/src/sm_filesystem.c](../related-projects/shadowmountplus/src/sm_filesystem.c)
-	- [related-projects/shadowmountplus/src/sm_config_mount.c](../related-projects/shadowmountplus/src/sm_config_mount.c)
-	- [related-projects/shadowmountplus/config.ini.example](../related-projects/shadowmountplus/config.ini.example)
-
 ### PKGTool
 
 - Repository/source: https://github.com/thesupersonic16/PKGTool
@@ -65,20 +49,6 @@ Short summary:
 - Decompression is custom marker/back-reference based (`ReadAndDecompress`) and loops to decompressed size.
 - Writer currently leaves CRC unimplemented and writes entries as uncompressed with zeroed compression/attribute block.
 - Repack behavior is non-recursive and effectively basename-oriented by default, which matters for faithful recreation tooling.
-
-How to inspect this knowledge quickly:
-
-- Start with summary: [related-projects/pkgtool.md](../related-projects/pkgtool.md)
-- Validate against source folder: [related-projects/pkgtool](../related-projects/pkgtool)
-- Priority files/pages:
-	- [related-projects/pkgtool/PKGTool/PKGArchive.cs](../related-projects/pkgtool/PKGTool/PKGArchive.cs)
-	- [related-projects/pkgtool/PKGTool/Program.cs](../related-projects/pkgtool/PKGTool/Program.cs)
-	- [related-projects/pkgtool/PKGTool/PKGTool.csproj](../related-projects/pkgtool/PKGTool/PKGTool.csproj)
-	- [related-projects/pkgtool/PKGTool.sln](../related-projects/pkgtool/PKGTool.sln)
-	- [related-projects/pkgtool/.gitmodules](../related-projects/pkgtool/.gitmodules)
-	- [related-projects/pkgtool/HedgeLib/HedgeLib/IO/ExtendedBinary.cs](../related-projects/pkgtool/HedgeLib/HedgeLib/IO/ExtendedBinary.cs)
-	- [related-projects/pkgtool/HedgeLib/HedgeLib/Archives/Archive.cs](../related-projects/pkgtool/HedgeLib/HedgeLib/Archives/Archive.cs)
-	- [related-projects/pkgtool/HedgeLib/HedgeLib/Archives/ArchiveFile.cs](../related-projects/pkgtool/HedgeLib/HedgeLib/Archives/ArchiveFile.cs)
 
 ### LibOrbisPkg
 
@@ -94,25 +64,6 @@ Short summary:
 - PFSC support is asymmetric: the reader handles compressed and direct sectors, while the bundled writer emits header plus full-block mapping for nested `pfs_image.dat` content.
 - A notable compatibility detail is the `newCrypt` branch in `PfsGenEncKey`, which is triggered from PKG `pfs_flags` during PFS reads.
 
-How to inspect this knowledge quickly:
-
-- Start with summary: [related-projects/liborbispkg.md](../related-projects/liborbispkg.md)
-- Validate against source folder: [related-projects/liborbispkg](../related-projects/liborbispkg)
-- Priority files/pages:
-	- [related-projects/liborbispkg/LibOrbisPkg/PFS/PFSBuilder.cs](../related-projects/liborbispkg/LibOrbisPkg/PFS/PFSBuilder.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/PFS/PfsReader.cs](../related-projects/liborbispkg/LibOrbisPkg/PFS/PfsReader.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/PFS/PfsStructs.cs](../related-projects/liborbispkg/LibOrbisPkg/PFS/PfsStructs.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/Util/Crypto.cs](../related-projects/liborbispkg/LibOrbisPkg/Util/Crypto.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/PFS/FlatPathTable.cs](../related-projects/liborbispkg/LibOrbisPkg/PFS/FlatPathTable.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/PFS/FSTree.cs](../related-projects/liborbispkg/LibOrbisPkg/PFS/FSTree.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/PFS/PFSCReader.cs](../related-projects/liborbispkg/LibOrbisPkg/PFS/PFSCReader.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/PFS/PFSCWriter.cs](../related-projects/liborbispkg/LibOrbisPkg/PFS/PFSCWriter.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/PKG/Pkg.cs](../related-projects/liborbispkg/LibOrbisPkg/PKG/Pkg.cs)
-	- [related-projects/liborbispkg/LibOrbisPkg/PKG/Entry.cs](../related-projects/liborbispkg/LibOrbisPkg/PKG/Entry.cs)
-	- [related-projects/liborbispkg/PkgTool/Program.cs](../related-projects/liborbispkg/PkgTool/Program.cs)
-	- [related-projects/liborbispkg/LibOrbisPkgTests/PfsReaderTests.cs](../related-projects/liborbispkg/LibOrbisPkgTests/PfsReaderTests.cs)
-	- [related-projects/liborbispkg/LibOrbisPkgTests/PkgBuildTest.cs](../related-projects/liborbispkg/LibOrbisPkgTests/PkgBuildTest.cs)
-
 ### LibOrbisPkg Wiki
 
 - Repository/source: https://github.com/maxton/LibOrbisPkg.wiki.git
@@ -127,18 +78,6 @@ Short summary:
 - The library page is best used as a namespace and capability map, not a stable API contract.
 - The PkgTool wiki page is currently only a placeholder and should not be treated as authoritative CLI documentation.
 
-How to inspect this knowledge quickly:
-
-- Start with summary: [related-projects/liborbispkg-wiki.md](../related-projects/liborbispkg-wiki.md)
-- Validate against snapshot folder: [related-projects/liborbispkg-wiki](../related-projects/liborbispkg-wiki)
-- Priority files/pages:
-	- [related-projects/liborbispkg-wiki/PKG-Information.md](../related-projects/liborbispkg-wiki/PKG-Information.md)
-	- [related-projects/liborbispkg-wiki/PkgEditor.md](../related-projects/liborbispkg-wiki/PkgEditor.md)
-	- [related-projects/liborbispkg-wiki/Library.md](../related-projects/liborbispkg-wiki/Library.md)
-	- [related-projects/liborbispkg-wiki/Home.md](../related-projects/liborbispkg-wiki/Home.md)
-  - [related-projects/liborbispkg-wiki/PkgTool.md](../related-projects/liborbispkg-wiki/PkgTool.md)
-  - [related-projects/liborbispkg-wiki/manifest.md](../related-projects/liborbispkg-wiki/manifest.md)
-
 ### kstuff-lite
 
 - Repository/source: https://github.com/EchoStretch/kstuff-lite
@@ -152,21 +91,6 @@ Short summary:
 - `KSTUFF_OBS=1` enables observability artifacts and shared-area snapshot support.
 - The crypto stack focuses on `fpkg`, `FSELF`, and debug NPDRM handling, with small caches for repeated HMAC and XTS work.
 
-How to inspect this knowledge quickly:
-
-- Start with summary: [related-projects/kstuff-lite.md](../related-projects/kstuff-lite.md)
-- Validate against source folder: [related-projects/kstuff-lite](../related-projects/kstuff-lite)
-- Priority files:
-  - [related-projects/kstuff-lite/README.md](../related-projects/kstuff-lite/README.md)
-  - [related-projects/kstuff-lite/ci-ps5-kstuff-ldr.sh](../related-projects/kstuff-lite/ci-ps5-kstuff-ldr.sh)
-  - [related-projects/kstuff-lite/.gitmodules](../related-projects/kstuff-lite/.gitmodules)
-  - [related-projects/kstuff-lite/ps5-kstuff/Makefile](../related-projects/kstuff-lite/ps5-kstuff/Makefile)
-  - [related-projects/kstuff-lite/ps5-kstuff-ldr/main.c](../related-projects/kstuff-lite/ps5-kstuff-ldr/main.c)
-  - [related-projects/kstuff-lite/ps5-kstuff/uelf/main.c](../related-projects/kstuff-lite/ps5-kstuff/uelf/main.c)
-  - [related-projects/kstuff-lite/ps5-kstuff/uelf/pfs_crypto.c](../related-projects/kstuff-lite/ps5-kstuff/uelf/pfs_crypto.c)
-  - [related-projects/kstuff-lite/ps5-kstuff/uelf/fpkg.c](../related-projects/kstuff-lite/ps5-kstuff/uelf/fpkg.c)
-  - [related-projects/kstuff-lite/ps5-kstuff/uelf/fself.c](../related-projects/kstuff-lite/ps5-kstuff/uelf/fself.c)
-  - [related-projects/kstuff-lite/ps5-kstuff/uelf/npdrm.c](../related-projects/kstuff-lite/ps5-kstuff/uelf/npdrm.c)
 
 ### Other Knowledge Sources
 

@@ -1,5 +1,5 @@
 ---
-name: html-reporting
+name: creating-reports
 description: Generate a polished companion HTML report for detailed answers, checks, and verification outputs. Use this for complex multiple-command investigations or when asked for a report. Always produce the normal chat response first, then generate the HTML report as a companion artifact. Include a clickable path to the report in the chat response.
 context: fork
 ---

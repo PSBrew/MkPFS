@@ -15,7 +15,6 @@ This guide is for contributors working on the CLI, library, packaging, or the re
 
 ```bash
 uv sync --group dev
-git submodule update --init --recursive --depth 1 --recommend-shallow
 uv run pre-commit install
 ```
 
@@ -32,7 +31,6 @@ uv run --frozen twine check dist/*
 ## 🧪 What to update where
 
 - `README.md` — public project overview, badges, screenshots, quick-start messaging, sponsorship links
-- `related-projects/` — canonical archived sources, summaries, and reference material
 
 ## 🔎 Pull request expectations
 

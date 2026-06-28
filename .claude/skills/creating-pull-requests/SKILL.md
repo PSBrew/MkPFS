@@ -1,10 +1,10 @@
 ---
-name: pr-writing
+name: creating-pull-requests
 description: Create or edit public-facing commits, PR titles, PR descriptions, comments, labels, and tags with a user-first style.
 context: fork
 ---
 
-# PR Writing
+# Creating Pull Requests
 
 Use this skill whenever you need to:
 - create or edit a pull request
@@ -26,8 +26,8 @@ Keep everything:
 
 1. Use Conventional Commits for the title.
    - Examples:
-     - `fix: avoid broken inner filenames`
-     - `feat: make single-file images safer`
+     - `Avoid broken inner filenames`
+     - `Make single-file images safer`
 
 2. Keep the title short and human-friendly.
    - Say what problem was solved, not internal implementation details.
@@ -54,6 +54,7 @@ Test: ran ./run-tests.sh and verified full pytest pass.
 2. Explain the problem solved.
 3. Prefer user language over code language.
 4. Avoid deep implementation details.
+5. Write titles so they can be used directly in release notes — do not use Conventional Commit prefixes (e.g., `feat:`, `fix:`, `chore:`).
 
 Good examples:
 - `Fix inner image names that break mounts`
