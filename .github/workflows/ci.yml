@@ -178,6 +178,17 @@ jobs:
             /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString \"${VERSION_SHORT}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string \"${VERSION_SHORT}\"" "$PLIST" || true
             /usr/libexec/PlistBuddy -c "Set :CFBundleVersion \"${ART_VERSION}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string \"${ART_VERSION}\"" "$PLIST" || true
           fi
+          # Diagnostic: list app bundle and check executable linkage
+          echo "--- Info.plist ---"
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST" || true
+          echo "--- App bundle contents ---"
+          ls -la dist/MkPFS.app || true
+          echo "--- MacOS executable contents ---"
+          ls -la dist/MkPFS.app/Contents/MacOS || true
+          for exe in dist/MkPFS.app/Contents/MacOS/*; do
+            echo "--- otool -L $exe ---";
+            otool -L "$exe" || true;
+          done
           # create component package then product package so installer shows proper title/version
           pkgbuild \
             --install-location /Applications \
