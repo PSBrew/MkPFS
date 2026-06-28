@@ -11,10 +11,10 @@ on:
     branches:
       - '**'
   release:
-      types: [published]
+      types: [published, prereleased, created, edited]
 jobs:
   build:
-    name: 📦 Builds the package
+    name: 📦 Builds the Python package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +37,132 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
+
+  build-binaries:
+    name: 🖥️ Build desktop binaries (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python 3.11
+        run: uv python install 3.11
+
+      - name: Sync deps (GUI included in dev group)
+        run: uv sync --group dev --frozen
+
+      - name: Compute VERSION and ARCH
+        id: meta
+        shell: bash
+        run: |
+          VERSION=$(python - <<'PY'
+import tomllib
+with open('pyproject.toml','rb') as f:
+    print(tomllib.load(f)['project']['version'])
+PY
+          )
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64) ARCH_NORM=x64 ;;
+            amd64)  ARCH_NORM=x64 ;;
+            arm64)  ARCH_NORM=arm64 ;;
+            aarch64) ARCH_NORM=arm64 ;;
+            *) ARCH_NORM=$ARCH ;;
+          esac
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "ARCH=$ARCH_NORM" >> "$GITHUB_ENV"
+
+      - name: Prepare icons (Windows/Linux)
+        if: startsWith(matrix.os, 'windows') || startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          mkdir -p dist
+          python - <<'PY'
+from PIL import Image
+from pathlib import Path
+src = Path('assets/images/icon.png')
+img = Image.open(src).convert('RGBA')
+sizes = [(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)]
+out = Path('dist/icon.ico')
+img.save(out, sizes=sizes)
+print('Wrote', out)
+PY
+
+      - name: Prepare icons (macOS)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          mkdir -p dist/MkPFS.iconset
+          ICONSRC="assets/images/icon.png"
+          for SZ in 16 32 64 128 256 512; do
+            sips -z "$SZ" "$SZ" "$ICONSRC" --out "dist/MkPFS.iconset/icon_${SZ}x${SZ}.png" >/dev/null
+            DBL=$((SZ*2))
+            sips -z "$DBL" "$DBL" "$ICONSRC" --out "dist/MkPFS.iconset/icon_${SZ}x${SZ}@2x.png" >/dev/null
+          done
+          iconutil -c icns "dist/MkPFS.iconset" -o "dist/MkPFS.icns"
+
+      - name: Build Windows onefile GUI
+        if: startsWith(matrix.os, 'windows')
+        shell: bash
+        run: |
+          uvx pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --windowed \
+            --name MkPFS \
+            --icon dist/icon.ico \
+            mkpfs/gui.py
+          mv "dist/MkPFS.exe" "dist/MkPFS-${VERSION}-windows-${ARCH}.exe"
+
+      - name: Build macOS app and pkg
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          uvx pyinstaller \
+            --noconfirm \
+            --clean \
+            --windowed \
+            --onedir \
+            --name MkPFS \
+            --icon dist/MkPFS.icns \
+            mkpfs/gui.py
+          pkgbuild \
+            --install-location /Applications \
+            --component "dist/MkPFS.app" \
+            "dist/MkPFS-${VERSION}-macos-${ARCH}.pkg"
+
+      - name: Build Linux onefile GUI
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tk
+          uvx pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --windowed \
+            --name MkPFS \
+            --icon dist/icon.ico \
+            mkpfs/gui.py
+          mv "dist/MkPFS" "dist/MkPFS-${VERSION}-linux-${ARCH}"
+
+      - name: Upload desktop binaries (artifacts)
+        uses: actions/upload-artifact@v5
+        with:
+          name: desktop-binaries-${{ matrix.os }}
+          path: |
+            dist/MkPFS-*
+          if-no-files-found: error
+
   publish-to-pypi:
     name: 🐍 Publish Python distribution to PyPI
     if: github.event_name == 'release' && github.event.release.prerelease == false
@@ -56,3 +182,52 @@ jobs:
           path: dist/
       - name: Publish distribution 📦 to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  attach-to-release:
+    name: 📎 Attach build artifacts to the GitHub Release
+    if: github.event_name == 'release'
+    needs:
+      - build
+      - build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts from this workflow
+        uses: actions/download-artifact@v6
+        with:
+          path: release_assets
+          merge-multiple: true
+      - name: Show artifacts
+        run: ls -R release_assets || true
+      - name: Upload assets to this Release (by release_id)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLOAD_URL: ${{ github.event.release.upload_url }}
+        run: |
+          set -euo pipefail
+          ASSETS_DIR=release_assets
+          if [ ! -d "$ASSETS_DIR" ] || [ -z "$(find "$ASSETS_DIR" -type f -maxdepth 5 | head -n1)" ]; then
+            echo "No artifact files found to upload"
+            exit 0
+          fi
+          BASE_URL=${UPLOAD_URL%%\{*}
+          echo "Using upload URL: $BASE_URL"
+          while IFS= read -r -d '' f; do
+            name=$(basename "$f")
+            mime=$(file -b --mime-type "$f" 2>/dev/null || echo application/octet-stream)
+            echo "Uploading $name ($mime)"
+            http=$(curl -sS -o /tmp/upload_resp.json -w "%{http_code}" -X POST \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Content-Type: $mime" \
+              --data-binary @"$f" \
+              "$BASE_URL?name=$name")
+            if [ "$http" -ge 200 ] && [ "$http" -lt 300 ]; then
+              echo "Uploaded $name (HTTP $http)"
+            else
+              echo "Upload failed for $name (HTTP $http) for file $f"
+              sed -e 's/\x1b\[[0-9;]*m//g' -e 's/\r//g' /tmp/upload_resp.json || true
+              exit 1
+            fi
+          done < <(find "$ASSETS_DIR" -type f -print0)

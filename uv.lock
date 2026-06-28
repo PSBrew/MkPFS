@@ -1003,6 +1003,8 @@ dependencies = [
 [package.optional-dependencies]
 gui = [
     { name = "customtkinter" },
+    { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pillow", version = "12.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 
 [package.dev-dependencies]
@@ -1011,6 +1013,9 @@ dev = [
     { name = "build", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "coverage", version = "7.10.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "coverage", version = "7.14.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "customtkinter" },
+    { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pillow", version = "12.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pre-commit", version = "4.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pre-commit", version = "4.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1019,16 +1024,12 @@ dev = [
     { name = "ruff" },
     { name = "twine" },
 ]
-gui = [
-    { name = "customtkinter" },
-    { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "pillow", version = "12.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=47.0.0" },
     { name = "customtkinter", marker = "extra == 'gui'", specifier = ">=5.2.0" },
+    { name = "pillow", marker = "extra == 'gui'", specifier = ">=9.0.0" },
     { name = "zlib-ng", specifier = ">=0.5.1" },
 ]
 provides-extras = ["gui"]
@@ -1037,15 +1038,13 @@ provides-extras = ["gui"]
 dev = [
     { name = "build", specifier = ">=1.2.2" },
     { name = "coverage", specifier = ">=7.5.4" },
+    { name = "customtkinter", specifier = ">=5.2.0" },
+    { name = "pillow", specifier = ">=9.0.0" },
     { name = "pre-commit", specifier = ">=3.5.0" },
     { name = "pytest", specifier = ">=8.3.5" },
     { name = "pytest-cov", specifier = ">=5.0.0" },
     { name = "ruff", specifier = ">=0.11.12" },
     { name = "twine", specifier = ">=6.1.0" },
-]
-gui = [
-    { name = "customtkinter", specifier = ">=5.2.0" },
-    { name = "pillow", specifier = ">=9.0.0" },
 ]
 
 [[package]]
