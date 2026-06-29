@@ -4,13 +4,14 @@
   <welcome file="welcome.rtf"/>
   <choices-outline>
     <line choice="default">
-      <line choice="mkpfs"/>
+      <line choice="com.psbrew.mkpfs"/>
     </line>
   </choices-outline>
-  <!-- Make the choice explicitly visible so Installer shows the package -->
-  <choice id="mkpfs" title="MkPFS" visible="true">
-    <pkg-ref id="com.psbrew.mkpfs">mkpfs-component.pkg</pkg-ref>
+  <!-- Choice id must match pkg-ref id so productbuild marks it visible correctly -->
+  <choice id="com.psbrew.mkpfs" title="MkPFS" visible="true">
+    <!-- Use an anchor reference so productbuild embeds the package from the resources directory -->
+    <pkg-ref id="com.psbrew.mkpfs">#mkpfs-component.pkg</pkg-ref>
   </choice>
   <!-- Point package reference to the component file placed in the resources directory -->
-  <pkg-ref id="com.psbrew.mkpfs" version="__ART_VERSION__" auth="root">mkpfs-component.pkg</pkg-ref>
+  <pkg-ref id="com.psbrew.mkpfs" version="__ART_VERSION__" auth="root">#mkpfs-component.pkg</pkg-ref>
 </installer-gui-script>
