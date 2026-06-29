@@ -1,4 +1,4 @@
-# <img src="assets/images/icon.png" alt="MkPFS icon" width="40" /> MkPFS
+# MkPFS
 
 [![PyPI](https://img.shields.io/pypi/v/mkpfs?style=flat-square&logo=pypi&logoColor=white&color=2563eb)](https://pypi.org/project/mkpfs/)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-2563eb?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-380/)

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+  <title>MkPFS __ART_VERSION__</title>
+  <background file="background.png" alignment="center"/>
+  <welcome file="welcome.rtf"/>
+  <choices-outline>
+    <line choice="default">
+      <line choice="mkpfs"/>
+    </line>
+  </choices-outline>
+  <choice id="mkpfs" title="MkPFS">
+    <pkg-ref id="com.psbrew.mkpfs"/>
+  </choice>
+  <pkg-ref id="com.psbrew.mkpfs" version="__ART_VERSION__" auth="root">#mkpfs-component.pkg</pkg-ref>
+</installer-gui-script>

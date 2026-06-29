@@ -209,16 +209,59 @@ jobs:
               chmod +x "dist/MkPFS.app/Contents/MacOS/$exe_name" || true
             fi
           fi
-          # create component package then product package so installer shows proper title/version
-          # sanitize ART_VERSION for filename use
+
+          # Ensure the generated .icns is embedded in the app bundle and Info.plist points to it
+          if [ -f "dist/MkPFS.icns" ]; then
+            mkdir -p dist/MkPFS.app/Contents/Resources || true
+            cp -f "dist/MkPFS.icns" "dist/MkPFS.app/Contents/Resources/MkPFS.icns" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile \"MkPFS.icns\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string \"MkPFS.icns\"" "$PLIST" || true
+          fi
+
+          # create a simple postinstall script that writes a VERSION file into the app bundle
+          mkdir -p dist/installer-scripts || true
+          cat > dist/installer-scripts/postinstall <<'POST'
+          #!/bin/bash
+          set -e
+          APP="/Applications/MkPFS.app"
+          if [ -d "$APP" ]; then
+            RES="$APP/Contents/Resources"
+            mkdir -p "$RES"
+            echo "MkPFS ${ART_VERSION}" > "$RES/VERSION.txt"
+            chown root:wheel "$RES/VERSION.txt" || true
+            chmod 644 "$RES/VERSION.txt" || true
+          fi
+          exit 0
+          POST
+          chmod +x dist/installer-scripts/postinstall || true
+
+          # create installer resources (welcome, background) and use manifest from assets
+          mkdir -p dist/installer-resources || true
+          # prefer a tailored installer background if provided, otherwise fall back to the app icon
+          if [ -f assets/images/installer-background.png ]; then
+            cp -f assets/images/installer-background.png dist/installer-resources/background.png || true
+          elif [ -f assets/images/icon.png ]; then
+            cp -f assets/images/icon.png dist/installer-resources/background.png || true
+          fi
+          if [ -f assets/installer/welcome.rtf ]; then
+            sed "s/__ART_VERSION__/${ART_VERSION//\//\/}/g" assets/installer/welcome.rtf > dist/installer-resources/welcome.rtf || cp assets/installer/welcome.rtf dist/installer-resources/welcome.rtf || true
+          fi
+
+          # copy distribution manifest from assets and substitute ART_VERSION placeholder
+          if [ -f assets/installer/distribution.xml ]; then
+            mkdir -p dist/installer-resources || true
+            sed "s/__ART_VERSION__/${ART_VERSION//\//\/}/g" assets/installer/distribution.xml > dist/installer-resources/distribution.xml || cp assets/installer/distribution.xml dist/installer-resources/distribution.xml || true
+          fi
+
+          # create component package (the raw pkg that installs the .app)
           ART_FILE_SAFE=$(echo "$ART_VERSION" | tr ' ' '_' | tr -d '()')
           pkgbuild \
             --install-location /Applications \
             --component "dist/MkPFS.app" \
             --version "${ART_VERSION}" \
             --identifier "com.psbrew.mkpfs" \
+            --scripts dist/installer-scripts \
             dist/mkpfs-component.pkg
-          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
+          productbuild --distribution dist/installer-resources/distribution.xml --resources dist/installer-resources "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
           rm -f dist/mkpfs-component.pkg || true
 
       - name: Build Linux onefile GUI
