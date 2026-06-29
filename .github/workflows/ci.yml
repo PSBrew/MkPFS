@@ -171,8 +171,10 @@ jobs:
           # Human readable display name used both for Info.plist and the installer title
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             DISPLAY_NAME="MkPFS ${VERSION}"
+            VERSION_STRING="${VERSION}"
           else
             DISPLAY_NAME="MkPFS ${VERSION_SHORT} (${COMMIT_SHORT})"
+            VERSION_STRING="${VERSION_SHORT}-${COMMIT_SHORT}"
           fi
 
           # Ensure PyInstaller can see packages installed into the repo .venv
@@ -234,7 +236,7 @@ jobs:
             --identifier "com.psbrew.mkpfs" \
             dist/mkpfs-component.pkg
           # Use a human-friendly installer title so macOS Installer GUI shows product name/version
-          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --title "${DISPLAY_NAME}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
+          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --title "MkPFS" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
           rm -f dist/mkpfs-component.pkg || true
 
       - name: Build Linux onefile GUI
