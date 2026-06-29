@@ -262,6 +262,16 @@ jobs:
           # copy the component package into the distribution resources so productbuild can find it by #mkpfs-component.pkg
           cp -f dist/mkpfs-component.pkg dist/installer-resources/mkpfs-component.pkg || true
 
+          # Diagnostic: show installer resources and synthesized distribution to help debug "no software to install" errors
+          echo "--- dist/installer-resources listing ---"
+          ls -la dist/installer-resources || true
+          echo "--- distribution.xml ---"
+          cat dist/installer-resources/distribution.xml || true
+          echo "--- Attempting productbuild --synthesize (diagnostic) ---"
+          /usr/bin/productbuild --synthesize --package dist/installer-resources/mkpfs-component.pkg dist/installer-resources/synth_distribution.xml || true
+          echo "--- synthesized distribution (if produced) ---"
+          cat dist/installer-resources/synth_distribution.xml || true
+
           # build product package using the Distribution XML and the resources directory so the installer UI is customized
           productbuild --distribution dist/installer-resources/distribution.xml --resources dist/installer-resources "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
           rm -f dist/mkpfs-component.pkg || true
