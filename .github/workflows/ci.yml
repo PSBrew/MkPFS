@@ -165,9 +165,8 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
-          # Ensure GUI runtime dependencies are installed into the same Python interpreter uvx uses
-          uvx python -m pip install --upgrade pip
-          uvx python -m pip install --upgrade customtkinter Pillow
+          # GUI dependencies are installed by the earlier `uv sync --group dev` step which prepares .venv
+          # Use the environment prepared by uv to run PyInstaller via the uvx wrapper.
 
           # Human readable display name used both for Info.plist and the installer title
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
