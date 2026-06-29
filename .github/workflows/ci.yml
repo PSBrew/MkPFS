@@ -175,12 +175,16 @@ jobs:
             DISPLAY_NAME="MkPFS ${VERSION_SHORT} (${COMMIT_SHORT})"
           fi
 
+          # Ensure PyInstaller can see packages installed into the repo .venv
+          SITE_PACKAGES="$PWD/.venv/lib/python3.11/site-packages"
+
           uvx pyinstaller \
             --noconfirm \
             --clean \
             --windowed \
             --onedir \
             --additional-hooks-dir pyinstaller-hooks \
+            --paths "$SITE_PACKAGES" \
             --name MkPFS \
             --icon dist/MkPFS.icns \
             --collect-all customtkinter \
