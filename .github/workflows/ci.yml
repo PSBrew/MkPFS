@@ -165,31 +165,41 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
+          # Ensure GUI runtime dependencies are installed into the same Python interpreter uvx uses
+          uvx python -m pip install --upgrade pip
+          uvx python -m pip install --upgrade customtkinter Pillow
+
+          # Human readable display name used both for Info.plist and the installer title
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            DISPLAY_NAME="MkPFS ${VERSION}"
+          else
+            DISPLAY_NAME="MkPFS ${VERSION_SHORT} (${COMMIT_SHORT})"
+          fi
+
           uvx pyinstaller \
             --noconfirm \
             --clean \
             --windowed \
             --onedir \
+            --additional-hooks-dir pyinstaller-hooks \
             --name MkPFS \
             --icon dist/MkPFS.icns \
             --collect-all customtkinter \
+            --collect-submodules customtkinter \
             --collect-all PIL \
             --add-data "assets:assets" \
             --hidden-import cryptography \
+            --hidden-import customtkinter \
             mkpfs/gui.py
+
           # Post-process app bundle Info.plist to set user-friendly display name and version
           PLIST="dist/MkPFS.app/Contents/Info.plist"
           if [ -f "$PLIST" ]; then
-            # human readable display name
-            if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-              DISPLAY_NAME="MkPFS ${VERSION}"
-            else
-              DISPLAY_NAME="MkPFS ${VERSION_SHORT} (${COMMIT_SHORT})"
-            fi
             /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName \"${DISPLAY_NAME}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string \"${DISPLAY_NAME}\"" "$PLIST" || true
             /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString \"${VERSION_SHORT}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string \"${VERSION_SHORT}\"" "$PLIST" || true
             /usr/libexec/PlistBuddy -c "Set :CFBundleVersion \"${ART_VERSION}\"" "$PLIST" || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string \"${ART_VERSION}\"" "$PLIST" || true
           fi
+
           # Diagnostic: list app bundle and check executable linkage
           echo "--- Info.plist ---"
           /usr/libexec/PlistBuddy -c "Print" "$PLIST" || true
@@ -201,6 +211,7 @@ jobs:
             echo "--- otool -L $exe ---";
             otool -L "$exe" || true;
           done
+
           # Ensure CFBundleExecutable matches actual executable and make it executable
           if [ -d dist/MkPFS.app/Contents/MacOS ]; then
             exe_name=$(basename "$(ls dist/MkPFS.app/Contents/MacOS | head -n1)" ) || true
@@ -209,6 +220,7 @@ jobs:
               chmod +x "dist/MkPFS.app/Contents/MacOS/$exe_name" || true
             fi
           fi
+
           # create component package then product package so installer shows proper title/version
           # sanitize ART_VERSION for filename use
           ART_FILE_SAFE=$(echo "$ART_VERSION" | tr ' ' '_' | tr -d '()')
@@ -218,7 +230,8 @@ jobs:
             --version "${ART_VERSION}" \
             --identifier "com.psbrew.mkpfs" \
             dist/mkpfs-component.pkg
-          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
+          # Use a human-friendly installer title so macOS Installer GUI shows product name/version
+          productbuild --identifier com.psbrew.mkpfs --version "${ART_VERSION}" --title "${DISPLAY_NAME}" --package dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
           rm -f dist/mkpfs-component.pkg || true
 
       - name: Build Linux onefile GUI
