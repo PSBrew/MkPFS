@@ -273,7 +273,35 @@ jobs:
           cat dist/installer-resources/synth_distribution.xml || true
 
           # build product package using the Distribution XML and the resources directory so the installer UI is customized
-          productbuild --distribution dist/installer-resources/distribution.xml --resources dist/installer-resources "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
+          # Use --package-path to ensure productbuild can locate and embed the component package from our resources folder
+          productbuild --distribution dist/installer-resources/distribution.xml --package-path dist/installer-resources --resources dist/installer-resources "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
+
+          # Diagnostic: show the produced product and its size, then attempt to expand it to verify it contains packages
+          echo "--- dist listing (post-productbuild) ---"
+          ls -la dist || true
+          echo "--- produced product file size ---"
+          stat -f "%N %z bytes" "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || ls -la "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || true
+          echo "--- du summary ---"
+          du -sh dist/* || true
+
+          # Try to expand the product package to inspect contents (diagnostic)
+          TMP_EXPAND_DIR=$(mktemp -d /tmp/mkpfs-expand.XXXX)
+          echo "Expanding product to $TMP_EXPAND_DIR"
+          if /usr/bin/pkgutil --expand-full "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" "$TMP_EXPAND_DIR"; then
+            echo "--- expanded product listing ---"
+            ls -la "$TMP_EXPAND_DIR" || true
+          else
+            echo "pkgutil --expand-full failed or product is not expandable" || true
+          fi
+
+          # Fail fast if produced product looks suspiciously small (< 100KB)
+          PROD_SIZE=$(stat -f "%z" "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" 2>/dev/null || echo 0)
+          echo "produced product size: $PROD_SIZE"
+          if [ "$PROD_SIZE" -lt 102400 ]; then
+            echo "ERROR: produced product pkg is unexpectedly small ($PROD_SIZE bytes). Aborting upload." >&2
+            exit 1
+          fi
+
           rm -f dist/mkpfs-component.pkg || true
 
       - name: Build Linux onefile GUI
