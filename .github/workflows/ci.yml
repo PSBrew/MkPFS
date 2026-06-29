@@ -236,19 +236,16 @@ jobs:
 
           # create installer resources (welcome, background) and use manifest from assets
           mkdir -p dist/installer-resources || true
-          # prefer a tailored installer background if provided, otherwise fall back to the app icon
-          if [ -f assets/images/installer-background.png ]; then
-            cp -f assets/images/installer-background.png dist/installer-resources/background.png || true
-          elif [ -f assets/images/icon.png ]; then
-            cp -f assets/images/icon.png dist/installer-resources/background.png || true
-          fi
+          # create installer resources directory
+          mkdir -p dist/installer-resources || true
+
+          # Copy welcome.rtf from assets (inject ART_VERSION)
           if [ -f assets/installer/welcome.rtf ]; then
             sed "s/__ART_VERSION__/${ART_VERSION//\//\/}/g" assets/installer/welcome.rtf > dist/installer-resources/welcome.rtf || cp assets/installer/welcome.rtf dist/installer-resources/welcome.rtf || true
           fi
 
           # copy distribution manifest from assets and substitute ART_VERSION placeholder
           if [ -f assets/installer/distribution.xml ]; then
-            mkdir -p dist/installer-resources || true
             sed "s/__ART_VERSION__/${ART_VERSION//\//\/}/g" assets/installer/distribution.xml > dist/installer-resources/distribution.xml || cp assets/installer/distribution.xml dist/installer-resources/distribution.xml || true
           fi
 
@@ -261,6 +258,11 @@ jobs:
             --identifier "com.psbrew.mkpfs" \
             --scripts dist/installer-scripts \
             dist/mkpfs-component.pkg
+
+          # copy the component package into the distribution resources so productbuild can find it by #mkpfs-component.pkg
+          cp -f dist/mkpfs-component.pkg dist/installer-resources/mkpfs-component.pkg || true
+
+          # build product package using the Distribution XML and the resources directory so the installer UI is customized
           productbuild --distribution dist/installer-resources/distribution.xml --resources dist/installer-resources "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg" || cp dist/mkpfs-component.pkg "dist/mkpfs-${ART_FILE_SAFE}-macos-${ARCH}.pkg"
           rm -f dist/mkpfs-component.pkg || true
 
