@@ -1,0 +1,4 @@
+# Keep committed task files out of pi find/grep discovery (host model + research
+# workers) while git still tracks them. .ignore is read by fd/ripgrep, not by
+# git, so tasks stay committable. Managed by pi-task.
+*
