@@ -5,6 +5,7 @@ This module provides the Progress class used by CLI build flows.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 
@@ -93,6 +94,20 @@ class Progress:
         sys.stderr.flush()
         self.last_phase = phase
 
+        # Emit additive global progress events to any registered handlers.
+        with contextlib.suppress(Exception):
+            # Import the discovery module lazily to avoid import-time cycles.
+            from . import discovery as _discovery
+
+            with contextlib.suppress(Exception):
+                _discovery._emit_progress_event_raw(
+                    phase=phase,
+                    done=done,
+                    total=total,
+                    bytes_processed=bytes_processed if bytes_processed > 0 else None,
+                    timestamp=time.time(),
+                )
+
     def status(self, message: str) -> None:
         """Print a status message without progress bar.
 
@@ -103,3 +118,16 @@ class Progress:
             return
         sys.stderr.write(message + "\n")
         sys.stderr.flush()
+
+        # Emit a lightweight status event to registered handlers (non-breaking)
+        with contextlib.suppress(Exception):
+            from . import discovery as _discovery
+
+            with contextlib.suppress(Exception):
+                _discovery._emit_progress_event_raw(
+                    phase="status",
+                    done=0,
+                    total=0,
+                    bytes_processed=None,
+                    timestamp=time.time(),
+                )
