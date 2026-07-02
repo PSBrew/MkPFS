@@ -3,7 +3,7 @@ id: TASK_AUTO_0001
 state: in_progress
 phase: done
 created_at: 2026-07-01T14:06:42.651Z
-updated_at: 2026-07-02T03:02:48.055Z
+updated_at: 2026-07-02T13:19:44.715Z
 title: I've recently implemented a simple GUI to allow some users to run the mkpfs commands without having to use the command line directly.
 ---
 
@@ -46,7 +46,7 @@ A3: allow a small shared API in mkpfs (reusing the existing argparse builders an
 
 - [x] TASK_0001  Add shared mkpfs metadata and progress hooks | decisions (explicit user choices — these OVERRIDE the spec doc wherever they conflict; follow them exactly): allow a small shared API in mkpfs itself for command metadata, default output naming, and progress events; discover commands/options dynamically by first importing the mkpfs package and fall back to parsing mkpfs --help if import metadata isn't available
 - [x] TASK_0002  Split the GUI into a package with focused modules | decisions (explicit user choices — these OVERRIDE the spec doc wherever they conflict; follow them exactly): keep CustomTkinter/tkinter to minimize scope, preserve current behavior and packaging, and focus on modularization
-- [ ] TASK_0003  Build dynamic command navigation and option forms | decisions (explicit user choices — these OVERRIDE the spec doc wherever they conflict; follow them exactly): discover commands/options dynamically by first importing the mkpfs package and fall back to parsing mkpfs --help if import metadata isn't available; allow a small shared API in mkpfs itself for command metadata, default output naming, and progress events; keep CustomTkinter/tkinter to minimize scope
+- [x] TASK_0003  Build dynamic command navigation and option forms | decisions (explicit user choices — these OVERRIDE the spec doc wherever they conflict; follow them exactly): discover commands/options dynamically by first importing the mkpfs package and fall back to parsing mkpfs --help if import metadata isn't available; allow a small shared API in mkpfs itself for command metadata, default output naming, and progress events; keep CustomTkinter/tkinter to minimize scope
 - [ ] Implement default output naming, footer versioning, and progress mirroring | decisions (explicit user choices — these OVERRIDE the spec doc wherever they conflict; follow them exactly): allow a small shared API in mkpfs itself for command metadata, default output naming, and progress events
 - [ ] Make the window responsive, resizable, and maximizable | decisions (explicit user choices — these OVERRIDE the spec doc wherever they conflict; follow them exactly): keep CustomTkinter/tkinter to minimize scope, preserve current behavior and packaging
 
