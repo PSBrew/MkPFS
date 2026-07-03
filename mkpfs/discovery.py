@@ -38,6 +38,41 @@ cli_metadata: dict | None = None
 _progress_handlers: list[Callable[[ProgressEvent], None]] = []
 _progress_handlers_lock = threading.Lock()
 
+# Default output naming
+
+
+def default_output_name(command_path: str, source_path: str | Path | None = None) -> str:
+    """Generate an argparse-friendly default output filename for a command.
+
+    Derives a filename from the command path (e.g. ``"pack.folder"`` →
+    ``"pack_folder"``, ``"pack.file"`` → ``"pack_file"``, ``"verify"`` →
+    ``"verify"``).  When a source path is provided, the result is prefixed
+    with a sanitised version of the source's stem or parent directory name
+    (e.g. ``"my_game"`` + ``"pack.folder"`` → ``"my_game_pack_folder"``).
+
+    Args:
+        command_path: Dot-joined command path from argparse metadata, e.g.
+            ``"pack.folder"``, ``"pack.file"``, ``"verify"``.
+        source_path: Optional path to the primary input (source dir or file).
+            When provided, its stem or directory name is used as a prefix.
+
+    Returns:
+        A filesystem-safe, underscore-joined basename (no extension).
+    """
+    # Convert command path to underscore form: "pack.folder" -> "pack_folder"
+    underscored: str = command_path.replace(".", "_").replace("-", "_")
+
+    if source_path is not None:
+        src: Path = Path(source_path)
+        source_basename: str = src.stem if src.suffix else src.name
+        # Sanitise the source basename for use as a filename component
+        safe_source: str = "".join(c if (c.isalnum() or c in "_-.") else "_" for c in source_basename).strip(".")
+        if safe_source:
+            return f"{safe_source}_{underscored}"
+
+    return underscored
+
+
 # Default timeouts for help subprocesses
 _SUBPROCESS_TIMEOUT: float = 5.0
 _GLOBAL_HELP_WALLCAP: float = 10.0

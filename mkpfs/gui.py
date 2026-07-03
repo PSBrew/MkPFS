@@ -1207,6 +1207,10 @@ class BasePanel(ctk.CTkFrame):
         self._log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._accent: str = _PANEL_ACCENT.get(self._panel_key, _NEON_BLUE)
 
+        # Progress handler registration for progress mirroring.
+        self._unregister_progress: Callable[[], None] | None = None
+        self._try_register_progress_handler()
+
         # Header
         header: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=24, pady=(22, 0))
@@ -1314,14 +1318,45 @@ class BasePanel(ctk.CTkFrame):
         """Execute the operation; runs inside a background thread."""
         raise NotImplementedError
 
+    def _try_register_progress_handler(self) -> None:
+        """Register a progress event handler for progress-bar mirroring.
+
+        When ``mkpfs.discovery.register_progress_handler`` is importable,
+        subscribes to progress events and updates this panel's progress bar
+        to ``determinate`` mode with the fraction done/total. Stores the
+        unregister callable so the subscription can be cleaned up on destroy.
+        """
+        with contextlib.suppress(Exception):
+            from mkpfs.discovery import register_progress_handler
+
+            def _on_progress(event: Any) -> None:
+                """Mirror a ProgressEvent into this panel's progress bar."""
+                with contextlib.suppress(Exception):
+                    pct: float = event.done / max(event.total, 1)
+                    self._progress.set(pct)
+                    self.after(0, lambda: self._progress.configure(mode="determinate"))
+
+            self._unregister_progress = register_progress_handler(_on_progress)
+
+    def destroy(self) -> None:
+        """Clean up progress handler subscription and destroy the widget."""
+        if self._unregister_progress is not None:
+            with contextlib.suppress(Exception):
+                self._unregister_progress()
+            self._unregister_progress = None
+        super().destroy()
+
     def _on_run(self) -> None:
-        """Clear log and launch the background worker thread."""
+        """Clear log, reset progress, and launch the background worker thread."""
         if self._busy:
             return
         self._log.clear()
         self._busy = True
         self._run_btn.configure(state="disabled", text=tr("running"))
-        self._progress.start()
+        # Reset progress bar to zero determinate before each new command.
+        self._progress.stop()
+        self._progress.configure(mode="determinate")
+        self._progress.set(0)
         threading.Thread(target=self._worker, daemon=True).start()
 
     def _worker(self) -> None:
@@ -1485,6 +1520,10 @@ class PackFolderPanel(BasePanel):
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
+        # Output-prefill tracking: remembers the last autofilled output path so
+        # user manual edits are not overwritten on subsequent source changes.
+        self._last_autofilled_output: str = ""
+        self._src.trace_add("write", lambda *_: self._prefill_output())
         super().__init__(parent)
 
     def _build_controls(self, card: GlassCard) -> None:
@@ -1549,6 +1588,45 @@ class PackFolderPanel(BasePanel):
             browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
+    def _prefill_output(self) -> None:
+        """Autofill the output path from the source path.
+
+        Generates a default output filename from the command path
+        (``"pack.folder"``) and the source folder value. Only autofills
+        when the output field is empty or still contains the last
+        autofilled value (user has not manually edited it).
+        """
+        import pathlib
+
+        src_val: str = self._src.get().strip()
+        if not src_val:
+            return
+        src_path: pathlib.Path = pathlib.Path(src_val)
+
+        fallback_basename: str = src_path.name if src_path.is_dir() else src_path.stem
+        fallback_basename = (
+            "".join(c if (c.isalnum() or c in "_-.") else "_" for c in fallback_basename).strip(".") or "image"
+        )
+
+        default_out: str = ""
+        try:
+            from mkpfs.discovery import default_output_name
+            from mkpfs.discovery import normalize_output_path as norm_fn
+
+            basename: str = default_output_name("pack.folder", src_path)
+            parent_dir: pathlib.Path = src_path.parent if src_path.is_absolute() else pathlib.Path()
+            suggested_str: str = str(parent_dir / f"{basename}.ffpfsc")
+            result_path, _changed = norm_fn(suggested_str, ".ffpfsc")
+            default_out = str(result_path)
+        except Exception:
+            parent_dir = src_path.parent if src_path.is_absolute() else pathlib.Path()
+            default_out = str(parent_dir / f"{fallback_basename}.ffpfsc")
+
+        current: str = self._out.get().strip()
+        if not current or current == self._last_autofilled_output:
+            self._out.set(default_out)
+            self._last_autofilled_output = default_out
+
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
         out: str = self._out.get().strip()
@@ -1590,6 +1668,10 @@ class PackFilePanel(BasePanel):
         self._version: ctk.StringVar = ctk.StringVar(value="PS4")
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
+        # Output-prefill tracking: remembers the last autofilled output path so
+        # user manual edits are not overwritten on subsequent source changes.
+        self._last_autofilled_output: str = ""
+        self._src.trace_add("write", lambda *_: self._prefill_output())
         super().__init__(parent)
 
     def _build_controls(self, card: GlassCard) -> None:
@@ -1648,6 +1730,45 @@ class PackFilePanel(BasePanel):
             placeholder=tr("pkf_temp_ph"),
             browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+    def _prefill_output(self) -> None:
+        """Autofill the output path from the source path.
+
+        Generates a default output filename from the command path
+        (``"pack.file"``) and the source file value. Only autofills when
+        the output field is empty or still contains the last autofilled
+        value (user has not manually edited it).
+        """
+        import pathlib
+
+        src_val: str = self._src.get().strip()
+        if not src_val:
+            return
+        src_path: pathlib.Path = pathlib.Path(src_val)
+
+        fallback_basename: str = src_path.stem or src_path.name
+        fallback_basename = (
+            "".join(c if (c.isalnum() or c in "_-.") else "_" for c in fallback_basename).strip(".") or "image"
+        )
+
+        default_out: str = ""
+        try:
+            from mkpfs.discovery import default_output_name
+            from mkpfs.discovery import normalize_output_path as norm_fn
+
+            basename: str = default_output_name("pack.file", src_path)
+            parent_dir: pathlib.Path = src_path.parent if src_path.is_absolute() else pathlib.Path()
+            suggested_str: str = str(parent_dir / f"{basename}.ffpfsc")
+            result_path, _changed = norm_fn(suggested_str, ".ffpfsc")
+            default_out = str(result_path)
+        except Exception:
+            parent_dir = src_path.parent if src_path.is_absolute() else pathlib.Path()
+            default_out = str(parent_dir / f"{fallback_basename}.ffpfsc")
+
+        current: str = self._out.get().strip()
+        if not current or current == self._last_autofilled_output:
+            self._out.set(default_out)
+            self._last_autofilled_output = default_out
 
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
@@ -2202,43 +2323,13 @@ class DynamicPanel(BasePanel):
         # Repeatable list containers: dest -> list of _RepeatableRow
         self._repeatable_rows: dict[str, list[_RepeatableRow]] = {}
 
-        # Progress handler registration (if discovery module exposes it).
-        self._unregister_progress: Callable[[], None] | None = None
-        self._try_register_progress_handler()
-
         # Output prefill support.
         self._source_positional_dests: list[str] = []
         self._output_positional_dests: list[str] = []
+        # Track the last autofilled output value so we don't overwrite user edits.
+        self._last_autofilled_output: str = ""
 
         super().__init__(parent)
-
-    def _try_register_progress_handler(self) -> None:
-        """Try to subscribe to progress events from the discovery module.
-
-        If ``mkpfs.discovery.register_progress_handler`` is importable,
-        register a handler that updates the progress bar and phase label
-        from ``ProgressEvent`` data.  Stores the unregister callable for
-        cleanup on teardown.
-        """
-        with contextlib.suppress(Exception):
-            from mkpfs.discovery import register_progress_handler
-
-            def _on_progress(event: Any) -> None:
-                """Handle a ProgressEvent from the discovery module."""
-                with contextlib.suppress(Exception):
-                    pct: float = event.done / max(event.total, 1)
-                    self._progress.set(pct)
-                    self.after(0, lambda: self._progress.configure(mode="determinate"))
-
-            self._unregister_progress = register_progress_handler(_on_progress)
-
-    def destroy(self) -> None:
-        """Clean up progress handler subscription and destroy the widget."""
-        if self._unregister_progress is not None:
-            with contextlib.suppress(Exception):
-                self._unregister_progress()
-            self._unregister_progress = None
-        super().destroy()
 
     def _build_controls(self, card: GlassCard) -> None:
         """Build the form from ArgOption metadata."""
@@ -2574,17 +2665,21 @@ class DynamicPanel(BasePanel):
     def _prefill_output(self) -> None:
         """Prefill output path fields from source positional args.
 
-        When ``default_image_basename`` is importable from the discovery
-        module, generates a suggested output basename from the first
-        source positional field.  Updates all ``path-save`` positional
-        fields with the derived path.
+        Generates a default output basename from the command path and the first
+        source positional field's value by calling ``default_output_name`` from
+        the discovery module.  Only autofills when the output field is empty or
+        still contains the previous autofill (user has not manually edited it
+        since the last autofill).
+
+        The last autofilled value is tracked so command-option changes re-autofill
+        when the user has not made manual edits.
         """
         import pathlib
 
         if not self._output_positional_dests or not self._source_positional_dests:
             return
 
-        # Collect source path values.
+        # Collect the first non-empty source path value.
         src_val: str = ""
         for sd in self._source_positional_dests:
             sv: Any = self._fields.get(sd)
@@ -2598,33 +2693,39 @@ class DynamicPanel(BasePanel):
             return
 
         src_path: pathlib.Path = pathlib.Path(src_val)
-        basename: str = src_path.name
+        stem: str = src_path.stem if src_path.suffix else src_path.name
 
-        # Try discovery module's default_image_basename.
+        # Use the shared default_output_name API.
         try:
-            from mkpfs.discovery import default_image_basename
+            from mkpfs.discovery import default_output_name
 
-            if src_path.is_dir() or not src_path.suffix:
-                basename = default_image_basename(src_path)
+            basename: str = default_output_name(self._cmd_path, src_path)
         except Exception:
-            basename = src_path.stem or src_path.name
+            basename = stem or "image"
+
+        # Derive the suggested output path (same directory as source).
+        parent_dir: pathlib.Path = src_path.parent if src_path.is_absolute() else pathlib.Path()
+        suggested: pathlib.Path = parent_dir / f"{basename}.ffpfsc"
+        suggested_str: str = str(suggested)
 
         # Update output fields.
         for od in self._output_positional_dests:
             ov: Any = self._fields.get(od)
             if isinstance(ov, ctk.StringVar):
                 current: str = ov.get().strip()
-                if not current:
-                    # Derive a sensible default.
-                    parent_dir: pathlib.Path = src_path.parent if src_path.is_absolute() else pathlib.Path()
-                    suggested: pathlib.Path = parent_dir / f"{basename}.ffpfsc"
+                # Autofill when empty, or when it still matches the last autofill
+                # (meaning the user has not manually changed it).
+                if not current or current == self._last_autofilled_output:
                     try:
                         from mkpfs.discovery import normalize_output_path
 
-                        result_path, _changed = normalize_output_path(str(suggested), ".ffpfsc")
-                        ov.set(str(result_path))
+                        result_path, _changed = normalize_output_path(suggested_str, ".ffpfsc")
+                        result_str: str = str(result_path)
+                        ov.set(result_str)
+                        self._last_autofilled_output = result_str
                     except Exception:
-                        ov.set(str(suggested))
+                        ov.set(suggested_str)
+                        self._last_autofilled_output = suggested_str
 
     def _run_command(self) -> None:
         """Validate fields and invoke mkpfs in-process."""
@@ -2729,8 +2830,16 @@ class MkPFSApp(ctk.CTk):
         self._try_dynamic_discovery()
 
         self._set_window_icon()
+
+        # Main area: sidebar + content side-by-side, above the footer.
+        self._main_area: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
+        self._main_area.pack(fill="both", expand=True)
+
         self._build_sidebar()
         self._build_content()
+
+        # Version footer bar (persistent across all window states).
+        self._build_footer()
 
         # Select first entry.
         first_key: str = next(iter(self._nav_buttons))
@@ -2825,10 +2934,35 @@ class MkPFSApp(ctk.CTk):
             # Icon setup is optional; ignore expected failures (file missing or unreadable).
             return
 
+    def _build_footer(self) -> None:
+        """Build the persistent version-footer bar at the bottom of the window.
+
+        Displays ``mkpfs vX.Y.Z`` sourced from the mkpfs package version string
+        via runtime introspection.  Visible in every window state (idle, running,
+        error).
+        """
+        from mkpfs import __version__
+
+        footer: ctk.CTkFrame = ctk.CTkFrame(
+            self,
+            fg_color=_BG_PANEL,
+            corner_radius=0,
+            height=26,
+        )
+        footer.pack(side="bottom", fill="x")
+        footer.pack_propagate(False)
+
+        ctk.CTkLabel(
+            footer,
+            text=f"mkpfs v{__version__}",
+            font=("Segoe UI", 9),
+            text_color=_TEXT_MUTED,
+        ).pack(side="right", padx=(0, 14), pady=2)
+
     def _build_sidebar(self) -> None:
         """Build the left navigation sidebar with language selector."""
         sidebar: ctk.CTkFrame = ctk.CTkFrame(
-            self,
+            self._main_area,
             width=_SIDEBAR_W,
             fg_color=_BG_PANEL,
             corner_radius=0,
@@ -2898,17 +3032,11 @@ class MkPFSApp(ctk.CTk):
             command=self._on_lang_change,
         ).pack(fill="x")
 
-        self._ver_label: ctk.CTkLabel = ctk.CTkLabel(
-            sidebar,
-            text=tr("version_footer"),
-            font=("Segoe UI", 9),
-            text_color=_TEXT_MUTED,
-        )
-        self._ver_label.pack(side="bottom", pady=12)
+        # Version label removed from sidebar — now lives in the footer bar.
 
     def _build_content(self) -> None:
         """Pre-instantiate all panels inside the content area."""
-        self._content: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
+        self._content: ctk.CTkFrame = ctk.CTkFrame(self._main_area, fg_color="transparent")
         self._content.pack(side="left", fill="both", expand=True)
 
         if self._dynamic:
@@ -2955,11 +3083,13 @@ class MkPFSApp(ctk.CTk):
         self._refresh_all_labels()
 
     def _refresh_all_labels(self) -> None:
-        """Propagate the new locale to all sidebar widgets and panels."""
+        """Propagate the new locale to all sidebar widgets and panels.
+
+        The version footer is static and does not change with locale.
+        """
         self._subtitle_label.configure(text=tr("app_subtitle"))
         self._ops_label.configure(text=tr("operations"))
         self._lang_label_widget.configure(text=tr("lang_label"))
-        self._ver_label.configure(text=tr("version_footer"))
         for key, label_key, _, _ in self._pages:
             if key in self._nav_buttons:
                 self._nav_buttons[key].configure(text=tr(label_key))
