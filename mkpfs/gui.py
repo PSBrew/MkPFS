@@ -559,8 +559,7 @@ class LogPane(ctk.CTkFrame):
             parent: Parent widget.
             **kwargs: Extra keyword arguments forwarded to CTkFrame.
         """
-        kwargs.setdefault("height", 240)
-        kwargs.setdefault("height", 240)
+        # No explicit height — pack(expand=True) distribution handles sizing.
         super().__init__(
             parent,
             fg_color=_BG_INPUT,
@@ -2805,8 +2804,8 @@ class MkPFSApp(ctk.CTk):
         """Initialise and configure the application window."""
         super().__init__()
         self.title("MkPFS")
-        self.geometry("1120x780")
-        self.minsize(900, 620)
+        self.geometry("1200x800")
+        self.minsize(800, 600)
         self.configure(fg_color=_BG_DEEP)
 
         self._pages: list[tuple[str, str, type | None, str]] = list(
