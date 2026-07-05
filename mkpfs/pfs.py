@@ -1106,6 +1106,18 @@ def encode_pfsc_payload(
         encoded_blocks.append(chosen_block)
         if progress_callback is not None:
             progress_callback(len(block))
+            try:
+                from . import discovery as _discovery
+
+                _discovery._emit_progress_event_raw(
+                    phase="compress",
+                    done=0,
+                    total=0,
+                    bytes_processed=len(block),
+                    timestamp=time.time(),
+                )
+            except Exception:
+                pass
 
     header_size: int = _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size)
     offsets: list[int] = [header_size]
@@ -1351,6 +1363,18 @@ def _analyze_pfsc_file_storage(
                     chosen_payload_size += len(padded_chunk)
                 if progress_callback is not None:
                     progress_callback(len(chunk))
+                    try:
+                        from . import discovery as _discovery
+
+                        _discovery._emit_progress_event_raw(
+                            phase="compress",
+                            done=0,
+                            total=0,
+                            bytes_processed=len(chunk),
+                            timestamp=time.time(),
+                        )
+                    except Exception:
+                        pass
     else:
         worker_args_iter: Iterator[tuple[int, int, int]] = _iter_pfsc_block_worker_args(
             block_count=block_count,
@@ -1381,6 +1405,18 @@ def _analyze_pfsc_file_storage(
                     chosen_payload_size += padded_block_len
                 if progress_callback is not None:
                     progress_callback(raw_block_len)
+                    try:
+                        from . import discovery as _discovery
+
+                        _discovery._emit_progress_event_raw(
+                            phase="compress",
+                            done=0,
+                            total=0,
+                            bytes_processed=raw_block_len,
+                            timestamp=time.time(),
+                        )
+                    except Exception:
+                        pass
 
     encoded_payload_size: int = header_size + chosen_payload_size
     hypothetical_all_compressed_size: int = header_size + all_compressed_size
@@ -1495,6 +1531,18 @@ def _encode_pfsc_stream_into_handle(
         emitted_blocks += 1
         if progress_callback is not None:
             progress_callback(raw_len)
+            try:
+                from . import discovery as _discovery
+
+                _discovery._emit_progress_event_raw(
+                    phase="compress",
+                    done=0,
+                    total=0,
+                    bytes_processed=raw_len,
+                    timestamp=time.time(),
+                )
+            except Exception:
+                pass
 
     def _iter_logical_blocks() -> Iterator[bytes]:
         buffer: bytearray = bytearray()
@@ -1605,6 +1653,18 @@ def _encode_pfsc_into_handle(
                 offsets.append(offsets[-1] + len(selected_chunk))
                 if progress_callback is not None:
                     progress_callback(len(chunk))
+                    try:
+                        from . import discovery as _discovery
+
+                        _discovery._emit_progress_event_raw(
+                            phase="compress",
+                            done=0,
+                            total=0,
+                            bytes_processed=len(chunk),
+                            timestamp=time.time(),
+                        )
+                    except Exception:
+                        pass
     else:
         worker_args_iter: Iterator[tuple[int, int, int]] = _iter_pfsc_block_worker_args(
             block_count=block_count,
@@ -1631,6 +1691,18 @@ def _encode_pfsc_into_handle(
             offsets.append(offsets[-1] + len(selected_chunk))
             if progress_callback is not None:
                 progress_callback(len(raw_chunk))
+                try:
+                    from . import discovery as _discovery
+
+                    _discovery._emit_progress_event_raw(
+                        phase="compress",
+                        done=0,
+                        total=0,
+                        bytes_processed=len(raw_chunk),
+                        timestamp=time.time(),
+                    )
+                except Exception:
+                    pass
 
         # Bound in-flight work to ``max_in_flight`` blocks and write results in
         # submit order. An unbounded ``imap`` lets a fast compressor pool outrun

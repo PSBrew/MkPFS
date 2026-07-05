@@ -1,13 +1,17 @@
 """Graphical user interface for mkpfs - futuristic neon glassmorphism design."""
 
+from __future__ import annotations
+
+import argparse
 import builtins
 import contextlib
 import io
 import queue
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import filedialog
-from typing import Any, ClassVar
+from typing import Any, Callable
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -555,8 +559,7 @@ class LogPane(ctk.CTkFrame):
             parent: Parent widget.
             **kwargs: Extra keyword arguments forwarded to CTkFrame.
         """
-        kwargs.setdefault("height", 240)
-        kwargs.setdefault("height", 240)
+        # No explicit height — pack(expand=True) distribution handles sizing.
         super().__init__(
             parent,
             fg_color=_BG_INPUT,
@@ -715,6 +718,468 @@ class NeonCheckbox(ctk.CTkCheckBox):
 
 
 # ---------------------------------------------------------------------------
+# Argparse option metadata extraction
+# ---------------------------------------------------------------------------
+
+# Key for 'pack folder' and 'pack file' subcommands.  The root parser uses
+# 'command' and 'pack_command' to mirror argparse's nested subparser dests.
+_PACK_SUBKEY: dict[str, str] = {
+    "pack folder": "pack.folder",
+    "pack file": "pack.file",
+    "pack exfat": "pack.exfat",
+}
+
+
+@dataclass
+class ArgOption:
+    """Normalised representation of a single CLI argument for the form builder."""
+
+    dest: str
+    """Argparse dest (e.g. 'source_dir', 'no_compress')."""
+    flags: list[str] = field(default_factory=list)
+    """CLI flag strings (e.g. ['--source-dir'], ['--compress','--no-compress'])."""
+    flag_str: str = ""
+    """Primary flag for argv construction (e.g. '--no-compress', '--version')."""
+    help: str = ""
+    """Help text from argparse."""
+    required: bool = False
+    """Whether this argument is required."""
+    kind: str = "text"
+    """Widget hint: 'text', 'bool', 'choice', 'path-folder', 'path-open',
+    'path-save', 'append'."""
+    default: Any = None
+    """Default value (str, bool, int, or None)."""
+    choices: list[str] | None = None
+    """Allowed values for choice/enum arguments."""
+    group: str = ""
+    """Logical section label for grouping related controls (e.g. 'paths', 'options')."""
+    positional: bool = False
+    """True for positional arguments that appear first."""
+    negate_flag: str = ""
+    """For store_true flags: the flag that disables (e.g. '--no-compress' when
+    default is True). Used to present a checkbox that defaults to on."""
+    int_type: bool = False
+    """True for int-typed arguments; entry validates as numeric."""
+
+
+# Accent palette per top-level subcommand (static map + dynamic fallback).
+_DYNAMIC_ACCENTS: dict[str, str] = {
+    "pack": _NEON_BLUE,
+    "verify": _NEON_GREEN,
+    "inspect": _NEON_PURPLE,
+    "tree": _NEON_AMBER,
+    "unpack": _NEON_PINK,
+}
+
+# Fallback accent colour when a subcommand isn't in the map.
+_DEFAULT_DYNAMIC_ACCENT: str = _NEON_BLUE
+
+
+# Expanded accent palette for nested pack subcommands.
+_DYNAMIC_ACCENTS_PACK: dict[str, str] = {
+    "pack.folder": _NEON_BLUE,
+    "pack.file": _NEON_CYAN,
+    "pack.exfat": _NEON_BLUE,
+}
+
+
+def _accent_for_cmd_path(cmd_path: str) -> str:
+    """Resolve the neon accent for a (possibly nested) command path.
+
+    Args:
+        cmd_path: Dot-joined command path, e.g. ``"pack.folder"`` or ``"tree"``.
+
+    Returns:
+        Hex colour string.
+    """
+    if cmd_path in _DYNAMIC_ACCENTS_PACK:
+        return _DYNAMIC_ACCENTS_PACK[cmd_path]
+    top: str = cmd_path.split(".")[0]
+    return _DYNAMIC_ACCENTS.get(top, _DEFAULT_DYNAMIC_ACCENT)
+
+
+def _get_argparse_metadata() -> dict[str, list[ArgOption]]:
+    """Introspect the live argparse parsers and return structured metadata.
+
+    Calls ``cli_mkpfs_main_parsers()``, walks the subparser hierarchy, and
+    extracts every argument's dest, flags, default, type, and required flag.
+    The result is a dict mapping a dot-joined command path
+    (e.g. ``"pack.folder"``) to an ordered list of ``ArgOption`` objects.
+
+    Returns:
+        Mapping from command path to ordered argument list.  Empty dict when
+        the ``mkpfs.cli`` module cannot be imported.
+    """
+    try:
+        from mkpfs.cli import cli_mkpfs_main_parsers
+    except ImportError:
+        return {}
+
+    root: Any = cli_mkpfs_main_parsers()
+    result: dict[str, list[ArgOption]] = {}
+
+    # Walk subparsers.  argparse's internal _subparsers._group_actions[0]
+    # contains each subparser action, each with .choices mapping name->parser.
+    if not hasattr(root, "_subparsers"):
+        return {}
+    top_group: Any = getattr(root._subparsers, "_group_actions", [None])[0]
+    if top_group is None:
+        return {}
+
+    for name, parser in top_group.choices.items():
+        _walk_parser(parser, [name], result)
+    return result
+
+
+def _walk_parser(
+    parser: Any,
+    path: list[str],
+    result: dict[str, list[ArgOption]],
+) -> None:
+    """Recursively walk an argparse parser extracting argument metadata."""
+    cmd_key: str = ".".join(path)
+
+    # Collect actions by dest.  Multiple actions for the same dest happen
+    # with toggle pairs (store_true + store_false on same dest) and mutually
+    # exclusive groups with separate flag actions.
+    actions_by_dest: dict[str, list[Any]] = {}
+    for action in parser._actions:
+        if action.dest in ("help", "command", "pack_command"):
+            continue
+        if isinstance(action, argparse._SubParsersAction):
+            continue
+        actions_by_dest.setdefault(action.dest, []).append(action)
+
+    # Now convert each dest group to an ArgOption.
+    options: list[ArgOption] = []
+
+    for dest, actions in actions_by_dest.items():
+        # Gather all flags across all actions for this dest.
+        all_flags: list[str] = []
+        for a in actions:
+            all_flags.extend(a.option_strings)
+
+        # Use the first action as representative.
+        primary: Any = actions[0]
+        cls_name: str = primary.__class__.__name__
+        is_pos: bool = not bool(primary.option_strings)
+
+        opt: ArgOption = ArgOption(
+            dest=dest,
+            flags=list(all_flags),
+            help=getattr(primary, "help", "") or "",
+            positional=is_pos,
+        )
+
+        if is_pos:
+            opt.required = True
+            dl: str = dest.lower()
+            if "source" in dl or ("dir" in dl and "output" not in dl):
+                opt.kind = "path-folder"
+                opt.group = "paths"
+            elif "image" in dl or ("file" in dl and "output" not in dl):
+                opt.kind = "path-open"
+                opt.group = "paths"
+            elif "output" in dl or "out" in dl:
+                opt.kind = "path-save"
+                opt.group = "paths"
+            else:
+                opt.group = "paths"
+            options.append(opt)
+            continue
+
+        # Optional argument.
+        default_val: Any = getattr(primary, "default", None)
+
+        # Detect store_true / store_false.
+        if cls_name == "_StoreTrueAction" or cls_name == "_StoreFalseAction":
+            # Check if there's a counterpart (toggle pair).
+            has_store_true: bool = any(a.__class__.__name__ == "_StoreTrueAction" for a in actions)
+            has_store_false: bool = any(a.__class__.__name__ == "_StoreFalseAction" for a in actions)
+
+            if has_store_true and has_store_false:
+                # Toggle pair: e.g. --adjust-output-file-extension /
+                # --no-adjust-output-file-extension both share same dest.
+                # The store_true action's default is the truth.
+                store_true_act: Any = next(a for a in actions if a.__class__.__name__ == "_StoreTrueAction")
+                opt.kind = "bool"
+                opt.default = bool(store_true_act.default)
+                opt.group = "options"
+                # Primary flag is the store_true variant.
+                opt.flag_str = store_true_act.option_strings[0] if store_true_act.option_strings else ""
+            elif cls_name == "_StoreTrueAction":
+                opt.kind = "bool"
+                opt.default = bool(default_val) if default_val is not None else False
+                opt.group = "options"
+                opt.flag_str = primary.option_strings[0] if primary.option_strings else ""
+            else:
+                # Lone store_false — unusual but handle it.
+                opt.kind = "bool"
+                opt.default = bool(default_val) if default_val is not None else True
+                opt.group = "options"
+                opt.flag_str = primary.option_strings[0] if primary.option_strings else ""
+
+        elif getattr(primary, "choices", None):
+            opt.kind = "choice"
+            opt.choices = list(primary.choices)
+            opt.group = "options"
+            if default_val is not None:
+                opt.default = str(default_val)
+            opt.flag_str = primary.option_strings[0] if primary.option_strings else ""
+
+        elif isinstance(primary, argparse._AppendAction):
+            opt.kind = "append"
+            opt.group = "options"
+            opt.default = []
+            opt.flag_str = primary.option_strings[0] if primary.option_strings else ""
+
+        else:
+            # General store (text, int, path).
+            opt.group = "options"
+            if default_val is not None and default_val is not argparse.SUPPRESS:
+                opt.default = str(default_val)
+            opt.flag_str = primary.option_strings[0] if primary.option_strings else ""
+
+            # Detect int type.
+            if getattr(primary, "type", None) is int:
+                opt.int_type = True
+                opt.kind = "text"
+            else:
+                opt.kind = "text"
+
+            # Path detection by name.
+            dl = dest.lower()
+            if "key" in dl or "ekpfs" in dl:
+                opt.group = "encryption"
+            elif "crc" in dl or "sha" in dl or "hash" in dl:
+                opt.group = "hashes"
+            elif (("folder" in dl or "temp" in dl) and opt.kind == "text") or ("source" in dl and "dir" in dl):
+                opt.kind = "path-folder"
+                opt.group = "paths"
+            elif "source" in dl and "file" in dl:
+                opt.kind = "path-open"
+                opt.group = "paths"
+
+        options.append(opt)
+
+    # Sort: positionals first, then by dest.
+    result[cmd_key] = sorted(options, key=lambda o: (not o.positional, o.dest))
+
+    # Recurse into nested subparsers.
+    if hasattr(parser, "_subparsers"):
+        sub_group: Any = getattr(parser._subparsers, "_group_actions", [None])[0]
+        if sub_group is not None:
+            for sname, sparser in sub_group.choices.items():
+                _walk_parser(sparser, [*path, sname], result)
+
+
+# Lazy cached metadata so we only introspect argparse once.
+_cache_argparse_meta: dict[str, list[ArgOption]] | None = None
+
+
+def _ensure_argparse_meta() -> dict[str, list[ArgOption]]:
+    """Return cached argparse metadata, building on first call."""
+    global _cache_argparse_meta
+    if _cache_argparse_meta is None:
+        _cache_argparse_meta = _get_argparse_metadata()
+    return _cache_argparse_meta
+
+
+# ---------------------------------------------------------------------------
+# CLI metadata discovery helpers
+# ---------------------------------------------------------------------------
+
+
+def _discover_cli_metadata() -> dict[str, list[ArgOption]]:
+    """Discover CLI commands and options through the discovery chain.
+
+    Priority order:
+      1. ``mkpfs.discovery.get_cli_metadata(prefer_import=True)``
+      2. Argparse introspection via ``_ensure_argparse_meta()``
+      3. Subprocess help-text parsing fallback.
+
+    Returns:
+        Mapping from command path to ordered ``ArgOption`` list.  Empty dict
+        when all discovery methods fail.
+    """
+    result: dict[str, list[ArgOption]] = {}
+
+    # Tier 1: use the discovery module's get_cli_metadata (import or help fallback).
+    try:
+        from mkpfs.discovery import get_cli_metadata
+
+        meta = get_cli_metadata(prefer_import=True)
+        if meta.get("commands"):
+            result = _convert_discovery_meta(meta)
+            if result and any(result.values()):
+                return result
+    except Exception:
+        pass
+
+    # Tier 2: live argparse introspection.
+    try:
+        result = _ensure_argparse_meta()
+        if result:
+            return result
+    except Exception:
+        pass
+
+    # Tier 3: subprocess help-text parsing (already attempted in tier 1 when
+    # prefer_import failed; re-run without the import path if needed).
+    with contextlib.suppress(Exception):
+        result = _parse_help_text_metadata()
+
+    return result
+
+
+def _convert_discovery_meta(meta: dict) -> dict[str, list[ArgOption]]:
+    """Convert discovery metadata into ArgOption lists.
+
+    The ``get_cli_metadata()`` return value only provides command names +
+    help text when coming from the help fallback.  When enriched opts are
+    present we take them; otherwise we synthesise a minimal positional-
+    only form for each command so the sidebar can still be built.
+    """
+    result: dict[str, list[ArgOption]] = {}
+    commands: dict = meta.get("commands", {})
+    for cmd_name, cmd_data in sorted(commands.items()):
+        if isinstance(cmd_data, str):
+            # Short help string only.
+            result[cmd_name] = []
+            continue
+        if isinstance(cmd_data, dict):
+            help_text: str | None = cmd_data.get("help")
+            raw_opts: list | None = cmd_data.get("options")
+            if raw_opts:
+                opts = [ArgOption(**o) for o in raw_opts]
+            elif help_text:
+                opts = _parse_options_from_help(help_text, cmd_name)
+            else:
+                opts = []
+            result[cmd_name] = opts
+
+    return result
+
+
+def _parse_options_from_help(help_text: str, cmd_name: str) -> list[ArgOption]:
+    """Parse ArgOption list from argparse-generated --help output.
+
+    This is a best-effort parser that extracts positional arguments,
+    optional flags, choices, and help text from the standard argparse
+    help format.
+    """
+    import re as _re
+
+    options: list[ArgOption] = []
+    lines: list[str] = help_text.splitlines()
+
+    # Detect positional arguments block.
+    in_positionals: bool = False
+    in_options: bool = False
+
+    for line in lines:
+        stripped: str = line.strip()
+
+        # Section headers.
+        if _re.match(r"^positional arguments:\s*$", stripped, _re.IGNORECASE):
+            in_positionals = True
+            in_options = False
+            continue
+        if _re.match(r"^(optional arguments|options):\s*$", stripped, _re.IGNORECASE):
+            in_positionals = False
+            in_options = True
+            continue
+
+        if not (in_positionals or in_options):
+            continue
+
+        # Match "  NAME  help text" for positionals.
+        m = _re.match(r"^\s{2,}([a-z][a-z0-9_-]+)\s{2,}(.*)$", stripped, _re.IGNORECASE)
+        if m and in_positionals:
+            opt = ArgOption(
+                dest=m.group(1),
+                help=m.group(2),
+                positional=True,
+                required=True,
+            )
+            dl: str = opt.dest.lower()
+            if "source" in dl or ("dir" in dl and "output" not in dl):
+                opt.kind = "path-folder"
+                opt.group = "paths"
+            elif "image" in dl or ("file" in dl and "output" not in dl):
+                opt.kind = "path-open"
+                opt.group = "paths"
+            elif "output" in dl or "out" in dl:
+                opt.kind = "path-save"
+                opt.group = "paths"
+            else:
+                opt.kind = "text"
+                opt.group = "paths"
+            options.append(opt)
+            continue
+
+        # Match "  -f, --flag [VALUE]  help text" for optionals.
+        # Also handle "  --flag [VALUE]  help" (single flag).
+        m = _re.match(
+            r"^\s{2,}(-[a-zA-Z0-9]\s*,\s*)?(--[a-z0-9][a-z0-9-]*)(\s+[A-Z][A-Z_]*)?\s{2,}(.*)$",
+            stripped,
+        )
+        if m and in_options:
+            flag_str: str = m.group(2)
+            metavar: str | None = m.group(3)
+            help_str: str = m.group(4) or ""
+            dest: str = flag_str.lstrip("-").replace("-", "_")
+
+            opt = ArgOption(
+                dest=dest,
+                flags=[flag_str],
+                flag_str=flag_str,
+                help=help_str,
+                positional=False,
+                group="options",
+            )
+
+            # Heuristic kind detection from flag/help.
+            if metavar:
+                metavar_upper: str = metavar.strip().upper()
+                if metavar_upper in {"PATH", "DIR", "FILE", "FOLDER", "IMAGE"}:
+                    if "out" in dest.lower() or "output" in help_str.lower():
+                        opt.kind = "path-save"
+                        opt.group = "paths"
+                    elif "folder" in dest.lower() or "temp" in dest.lower() or "dir" in dest.lower():
+                        opt.kind = "path-folder"
+                        opt.group = "paths"
+                    else:
+                        opt.kind = "path-open"
+                        opt.group = "paths"
+            elif "flag" in help_str.lower() or "no-" in flag_str:
+                opt.kind = "bool"
+                opt.default = "no-" not in flag_str
+            options.append(opt)
+
+    return options
+
+
+def _parse_help_text_metadata() -> dict[str, list[ArgOption]]:
+    """Fallback discovery via subprocess help-text parsing.
+
+    Runs ``mkpfs --help`` and each per-command ``mkpfs <cmd> --help``
+    through a subprocess, extracting command names and help text.  The
+    ArgOption lists are built by ``_parse_options_from_help``.
+    """
+    result: dict[str, list[ArgOption]] = {}
+    try:
+        from mkpfs.discovery import get_cli_metadata
+
+        meta = get_cli_metadata(prefer_import=False)
+        if meta.get("commands"):
+            result = _convert_discovery_meta(meta)
+    except Exception:
+        pass
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Panel base class
 # ---------------------------------------------------------------------------
 
@@ -740,6 +1205,10 @@ class BasePanel(ctk.CTkFrame):
         self._busy: bool = False
         self._log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._accent: str = _PANEL_ACCENT.get(self._panel_key, _NEON_BLUE)
+
+        # Progress handler registration for progress mirroring.
+        self._unregister_progress: Callable[[], None] | None = None
+        self._try_register_progress_handler()
 
         # Header
         header: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
@@ -848,14 +1317,45 @@ class BasePanel(ctk.CTkFrame):
         """Execute the operation; runs inside a background thread."""
         raise NotImplementedError
 
+    def _try_register_progress_handler(self) -> None:
+        """Register a progress event handler for progress-bar mirroring.
+
+        When ``mkpfs.discovery.register_progress_handler`` is importable,
+        subscribes to progress events and updates this panel's progress bar
+        to ``determinate`` mode with the fraction done/total. Stores the
+        unregister callable so the subscription can be cleaned up on destroy.
+        """
+        with contextlib.suppress(Exception):
+            from mkpfs.discovery import register_progress_handler
+
+            def _on_progress(event: Any) -> None:
+                """Mirror a ProgressEvent into this panel's progress bar."""
+                with contextlib.suppress(Exception):
+                    pct: float = event.done / max(event.total, 1)
+                    self._progress.set(pct)
+                    self.after(0, lambda: self._progress.configure(mode="determinate"))
+
+            self._unregister_progress = register_progress_handler(_on_progress)
+
+    def destroy(self) -> None:
+        """Clean up progress handler subscription and destroy the widget."""
+        if self._unregister_progress is not None:
+            with contextlib.suppress(Exception):
+                self._unregister_progress()
+            self._unregister_progress = None
+        super().destroy()
+
     def _on_run(self) -> None:
-        """Clear log and launch the background worker thread."""
+        """Clear log, reset progress, and launch the background worker thread."""
         if self._busy:
             return
         self._log.clear()
         self._busy = True
         self._run_btn.configure(state="disabled", text=tr("running"))
-        self._progress.start()
+        # Reset progress bar to zero determinate before each new command.
+        self._progress.stop()
+        self._progress.configure(mode="determinate")
+        self._progress.set(0)
         threading.Thread(target=self._worker, daemon=True).start()
 
     def _worker(self) -> None:
@@ -1019,6 +1519,10 @@ class PackFolderPanel(BasePanel):
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
+        # Output-prefill tracking: remembers the last autofilled output path so
+        # user manual edits are not overwritten on subsequent source changes.
+        self._last_autofilled_output: str = ""
+        self._src.trace_add("write", lambda *_: self._prefill_output())
         super().__init__(parent)
 
     def _build_controls(self, card: GlassCard) -> None:
@@ -1083,6 +1587,45 @@ class PackFolderPanel(BasePanel):
             browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
+    def _prefill_output(self) -> None:
+        """Autofill the output path from the source path.
+
+        Generates a default output filename from the command path
+        (``"pack.folder"``) and the source folder value. Only autofills
+        when the output field is empty or still contains the last
+        autofilled value (user has not manually edited it).
+        """
+        import pathlib
+
+        src_val: str = self._src.get().strip()
+        if not src_val:
+            return
+        src_path: pathlib.Path = pathlib.Path(src_val)
+
+        fallback_basename: str = src_path.name if src_path.is_dir() else src_path.stem
+        fallback_basename = (
+            "".join(c if (c.isalnum() or c in "_-.") else "_" for c in fallback_basename).strip(".") or "image"
+        )
+
+        default_out: str = ""
+        try:
+            from mkpfs.discovery import default_output_name
+            from mkpfs.discovery import normalize_output_path as norm_fn
+
+            basename: str = default_output_name("pack.folder", src_path)
+            parent_dir: pathlib.Path = src_path.parent if src_path.is_absolute() else pathlib.Path()
+            suggested_str: str = str(parent_dir / f"{basename}.ffpfsc")
+            result_path, _changed = norm_fn(suggested_str, ".ffpfsc")
+            default_out = str(result_path)
+        except Exception:
+            parent_dir = src_path.parent if src_path.is_absolute() else pathlib.Path()
+            default_out = str(parent_dir / f"{fallback_basename}.ffpfsc")
+
+        current: str = self._out.get().strip()
+        if not current or current == self._last_autofilled_output:
+            self._out.set(default_out)
+            self._last_autofilled_output = default_out
+
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
         out: str = self._out.get().strip()
@@ -1124,6 +1667,10 @@ class PackFilePanel(BasePanel):
         self._version: ctk.StringVar = ctk.StringVar(value="PS4")
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
+        # Output-prefill tracking: remembers the last autofilled output path so
+        # user manual edits are not overwritten on subsequent source changes.
+        self._last_autofilled_output: str = ""
+        self._src.trace_add("write", lambda *_: self._prefill_output())
         super().__init__(parent)
 
     def _build_controls(self, card: GlassCard) -> None:
@@ -1182,6 +1729,45 @@ class PackFilePanel(BasePanel):
             placeholder=tr("pkf_temp_ph"),
             browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+    def _prefill_output(self) -> None:
+        """Autofill the output path from the source path.
+
+        Generates a default output filename from the command path
+        (``"pack.file"``) and the source file value. Only autofills when
+        the output field is empty or still contains the last autofilled
+        value (user has not manually edited it).
+        """
+        import pathlib
+
+        src_val: str = self._src.get().strip()
+        if not src_val:
+            return
+        src_path: pathlib.Path = pathlib.Path(src_val)
+
+        fallback_basename: str = src_path.stem or src_path.name
+        fallback_basename = (
+            "".join(c if (c.isalnum() or c in "_-.") else "_" for c in fallback_basename).strip(".") or "image"
+        )
+
+        default_out: str = ""
+        try:
+            from mkpfs.discovery import default_output_name
+            from mkpfs.discovery import normalize_output_path as norm_fn
+
+            basename: str = default_output_name("pack.file", src_path)
+            parent_dir: pathlib.Path = src_path.parent if src_path.is_absolute() else pathlib.Path()
+            suggested_str: str = str(parent_dir / f"{basename}.ffpfsc")
+            result_path, _changed = norm_fn(suggested_str, ".ffpfsc")
+            default_out = str(result_path)
+        except Exception:
+            parent_dir = src_path.parent if src_path.is_absolute() else pathlib.Path()
+            default_out = str(parent_dir / f"{fallback_basename}.ffpfsc")
+
+        current: str = self._out.get().strip()
+        if not current or current == self._last_autofilled_output:
+            self._out.set(default_out)
+            self._last_autofilled_output = default_out
 
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
@@ -1581,6 +2167,575 @@ class UnpackPanel(BasePanel):
 
 
 # ---------------------------------------------------------------------------
+# Dynamic panel -- builds controls from argparse metadata
+# ---------------------------------------------------------------------------
+
+# Heuristic filetype filters for path fields.
+_PFS_IMAGE_FILETYPES: list[tuple[str, str]] = [("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")]
+_PFSC_FILETYPES: list[tuple[str, str]] = [("PFS image", "*.ffpfsc"), ("All files", "*.*")]
+_FFPFS_FILETYPES: list[tuple[str, str]] = [("PFS image", "*.ffpfs"), ("All files", "*.*")]
+
+
+def _filetypes_for_option(opt: ArgOption) -> list[tuple[str, str]] | None:
+    """Return a sensible filetype filter for a path option based on its dest name."""
+    dl: str = opt.dest.lower()
+    if ("image" in dl or ("file" in dl and opt.positional)) and opt.kind == "path-open":
+        return _PFS_IMAGE_FILETYPES
+    if opt.kind == "path-save" and ("image" in dl or "out" in dl) and ("pfs" in dl or "image" in dl):
+        return _PFS_IMAGE_FILETYPES
+    return None
+
+
+def _path_mode_for_option(opt: ArgOption) -> str:
+    """Return 'folder', 'open', or 'save' based on dest name heuristics."""
+    if opt.kind == "path-folder":
+        return "folder"
+    if opt.kind == "path-save":
+        return "save"
+    return "open"
+
+
+def _human_label(dest: str) -> str:
+    """Derive a human-readable label from an argparse dest name.
+
+    Args:
+        dest: e.g. 'source_dir', 'ekpfs_key', 'no_compress'.
+
+    Returns:
+        Title-case space-separated label.
+    """
+    # Drop the 'no_' prefix for display.
+    name: str = dest.removeprefix("no_")
+    # Replace underscores with spaces and title-case.
+    return " ".join(w.capitalize() for w in name.split("_"))
+
+
+def _placeholder_for_option(opt: ArgOption) -> str:
+    """Return a placeholder string for an option's entry field."""
+    dl: str = opt.dest.lower()
+    if "crc" in dl:
+        return "e.g. 7F528D1F"
+    if "sha" in dl:
+        return "64 hex chars…"
+    if "ekpfs" in dl:
+        return "64 hex chars…"
+    if opt.kind in ("path-folder", "path-open", "path-save"):
+        return f"Select {opt.dest.replace('_', ' ')}…"
+    if opt.choices:
+        return ""
+    return ""
+
+
+class _RepeatableRow(ctk.CTkFrame):
+    """A row in a repeatable (append-action) argument list: entry + remove button."""
+
+    def __init__(
+        self,
+        parent: Any,
+        remove_cb: Callable[[_RepeatableRow], None],
+        accent: str = _NEON_BLUE,
+    ) -> None:
+        super().__init__(parent, fg_color="transparent")
+        self._remove_cb: Callable[[_RepeatableRow], None] = remove_cb
+        self._var: ctk.StringVar = ctk.StringVar()
+
+        self.columnconfigure(0, weight=1)
+        ctk.CTkEntry(
+            self,
+            textvariable=self._var,
+            fg_color=_BG_INPUT,
+            border_color=_BORDER_BRIGHT,
+            corner_radius=8,
+            font=_FONT_UI,
+            text_color=_TEXT_PRIMARY,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        ctk.CTkButton(
+            self,
+            text="-",
+            width=32,
+            height=32,
+            corner_radius=8,
+            fg_color=_BG_PANEL,
+            hover_color=_ERROR,
+            border_width=1,
+            border_color=_BORDER_BRIGHT,
+            font=_FONT_LABEL,
+            text_color=_TEXT_SECONDARY,
+            command=self._on_remove,
+        ).grid(row=0, column=1)
+
+    def _on_remove(self) -> None:
+        self._remove_cb(self)
+
+    @property
+    def value(self) -> str:
+        return self._var.get().strip()
+
+
+class DynamicPanel(BasePanel):
+    """A panel whose controls are built dynamically from argparse metadata.
+
+    Constructed with a command path string (e.g. ``"pack.folder"``) and the
+    ordered list of ``ArgOption`` objects for that command.
+    """
+
+    def __init__(self, parent: Any, cmd_path: str, options: list[ArgOption]) -> None:
+        """Initialise a DynamicPanel.
+
+        Args:
+            parent: Parent widget.
+            cmd_path: Dot-joined command path, e.g. ``"pack.folder"``.
+            options: Ordered list of ArgOption describing CLI arguments.
+        """
+        self._cmd_path: str = cmd_path
+        self._arg_options: list[ArgOption] = options
+        self._panel_key = cmd_path
+        self._accent_cfg: str = _accent_for_cmd_path(cmd_path)
+
+        # Derive title/subtitle keys.
+        self._title_key = f"dyn_{cmd_path.replace('.', '_')}_title"
+        self._subtitle_key = f"dyn_{cmd_path.replace('.', '_')}_subtitle"
+
+        # Add dynamic translations for this command.
+        # We use the cmd path parts to build the label.
+        cmd_parts: list[str] = cmd_path.split(".")
+        display_title: str = " ".join(w.capitalize() for w in cmd_parts)
+
+        # Try to get a help-based subtitle from the metadata.
+        display_subtitle: str = ""
+        for o in options:
+            if o.help:
+                display_subtitle = o.help
+                break
+
+        # Store the title/subtitle for all three locales.
+        for locale_key in ("en", "pt_BR", "es"):
+            _TRANSLATIONS.setdefault(locale_key, {})[self._title_key] = display_title
+            _TRANSLATIONS[locale_key][self._subtitle_key] = display_subtitle or display_title
+
+        # Set accent before BasePanel.__init__ runs.
+        self._accent = self._accent_cfg
+
+        # Field variables: dict[str, Any] mapping dest -> StringVar | BooleanVar | list[StringVar]
+        self._fields: dict[str, Any] = {}
+        # Repeatable list containers: dest -> list of _RepeatableRow
+        self._repeatable_rows: dict[str, list[_RepeatableRow]] = {}
+
+        # Output prefill support.
+        self._source_positional_dests: list[str] = []
+        self._output_positional_dests: list[str] = []
+        # Track the last autofilled output value so we don't overwrite user edits.
+        self._last_autofilled_output: str = ""
+
+        super().__init__(parent)
+
+    def _build_controls(self, card: GlassCard) -> None:
+        """Build the form from ArgOption metadata."""
+        card.columnconfigure(0, weight=1)
+        card.columnconfigure(1, weight=1)
+
+        # Separate positionals and optionals.
+        positionals: list[ArgOption] = [o for o in self._arg_options if o.positional]
+        optionals: list[ArgOption] = [o for o in self._arg_options if not o.positional]
+
+        # Section labels by group: tracks which groups we've emitted.
+        emitted_groups: dict[str, int] = {}
+        row: int = 0
+
+        def _section(group: str, r: int) -> int:
+            if group not in emitted_groups:
+                SectionLabel(card, tr(group), color=self._accent).grid(
+                    row=r, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
+                )
+                emitted_groups[group] = r
+                return r + 1
+            return r
+
+        # Track positional dests for output prefill.
+        self._source_positional_dests = [
+            o.dest for o in positionals if o.kind in ("path-folder", "path-open") and o.required
+        ]
+        self._output_positional_dests = [o.dest for o in positionals if o.kind == "path-save"]
+
+        # Render positionals first.
+        for opt in positionals:
+            row = _section(opt.group, row)
+            row = self._render_control(card, opt, row, span=True)
+
+        # Add traces on required positional fields for continuous validation
+        # and output prefill.
+        for opt in positionals:
+            if not opt.required:
+                continue
+            field: Any = self._fields.get(opt.dest)
+            if isinstance(field, ctk.StringVar):
+                field.trace_add("write", lambda *_: self._update_run_button_state())
+
+        # Set up output prefill trace on source fields.
+        for src_dest in self._source_positional_dests:
+            src_var: Any = self._fields.get(src_dest)
+            if isinstance(src_var, ctk.StringVar):
+                src_var.trace_add("write", lambda *_: self._prefill_output())
+
+        # Separator between positional and optional sections.
+        if positionals and optionals:
+            ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
+                row=row, column=0, columnspan=2, sticky="ew", padx=16
+            )
+            row += 1
+
+        # Render optionals, grouping by section.
+        cur_group: str | None = None
+        opt_frame: ctk.CTkFrame | None = None
+        opt_row: int = 0
+
+        for opt in optionals:
+            if opt.group != cur_group or opt_frame is None:
+                # Flush previous frame.
+                if opt_frame is not None:
+                    opt_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+                    row += 1
+
+                row = _section(opt.group, row)
+                opt_frame = ctk.CTkFrame(card, fg_color="transparent")
+                opt_frame.columnconfigure((0, 1), weight=1)
+                opt_row = 0
+                cur_group = opt.group
+
+            opt_row = self._render_control(opt_frame, opt, opt_row, span=False)
+
+        # Pack the last opt frame.
+        if opt_frame is not None:
+            opt_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+            row += 1
+
+        # Initial validation state.
+        self._update_run_button_state()
+
+    def _render_control(
+        self,
+        parent: Any,
+        opt: ArgOption,
+        row: int,
+        span: bool = False,
+    ) -> int:
+        """Render a single control widget for the given option, returning next row."""
+        col_span: int = 2 if span else 1
+        col: int = 0
+
+        if opt.kind == "bool":
+            var: ctk.BooleanVar = ctk.BooleanVar(value=bool(opt.default))
+            self._fields[opt.dest] = var
+            label: str = _human_label(opt.dest)
+            NeonCheckbox(
+                parent,
+                text=label,
+                variable=var,
+                accent=self._accent,
+            ).grid(row=row, column=col, columnspan=col_span, sticky="w", padx=(0, 8), pady=3)
+            return row + 1
+
+        elif opt.kind == "choice":
+            var = ctk.StringVar(value=str(opt.default) if opt.default else (opt.choices[0] if opt.choices else ""))
+            self._fields[opt.dest] = var
+            label = _human_label(opt.dest)
+            str_choices: list[str] = [str(c) for c in opt.choices] if opt.choices else []
+            OptionRow(
+                parent,
+                label=label,
+                variable=var,
+                values=str_choices,
+                accent=self._accent,
+            ).grid(row=row, column=col, columnspan=col_span, sticky="ew", padx=(0, 8), pady=(0, 8))
+            return row + 1
+
+        elif opt.kind in ("path-folder", "path-open", "path-save"):
+            var = ctk.StringVar(value=str(opt.default) if opt.default else "")
+            self._fields[opt.dest] = var
+            mode: str = _path_mode_for_option(opt)
+            ft: list[tuple[str, str]] | None = _filetypes_for_option(opt)
+            label = _human_label(opt.dest)
+            placeholder: str = _placeholder_for_option(opt)
+            PathRow(
+                parent,
+                label=label,
+                variable=var,
+                mode=mode,
+                filetypes=ft,
+                placeholder=placeholder,
+                browse_label=tr("browse"),
+            ).grid(row=row, column=col, columnspan=col_span, sticky="ew", padx=(0, 8), pady=(0, 10))
+            return row + 1
+
+        elif opt.kind == "append":
+            # Repeatable list: label + add button + list of entry rows.
+            self._repeatable_rows.setdefault(opt.dest, [])
+            self._fields[opt.dest] = []  # list of StringVar managed via rows
+
+            label = _human_label(opt.dest)
+
+            # Label row with add button.
+            label_frame: ctk.CTkFrame = ctk.CTkFrame(parent, fg_color="transparent")
+            label_frame.grid(row=row, column=col, columnspan=col_span, sticky="ew", padx=(0, 8), pady=(0, 3))
+            row += 1
+            ctk.CTkLabel(label_frame, text=label, font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(
+                side="left", anchor="w"
+            )
+
+            def _add_repeatable() -> None:
+                rrow: _RepeatableRow = _RepeatableRow(
+                    self._list_frame, self._on_remove_repeatable, accent=self._accent
+                )
+                self._repeatable_rows[opt.dest].append(rrow)
+                rrow.pack(fill="x", pady=(0, 4))
+                self._fields[opt.dest].append(rrow._var)
+
+            ctk.CTkButton(
+                label_frame,
+                text="+",
+                width=32,
+                height=24,
+                corner_radius=8,
+                fg_color=_BG_PANEL,
+                hover_color=self._accent,
+                border_width=1,
+                border_color=_BORDER_BRIGHT,
+                font=_FONT_LABEL,
+                text_color=_TEXT_SECONDARY,
+                command=_add_repeatable,
+            ).pack(side="right")
+
+            # Container for repeatable rows.
+            self._list_frame: ctk.CTkFrame = ctk.CTkFrame(parent, fg_color="transparent")
+            self._list_frame.grid(row=row, column=col, columnspan=col_span, sticky="ew", padx=(0, 8), pady=(0, 8))
+            return row + 1
+
+        else:
+            # Generic text/numeric entry.
+            default_str: str = str(opt.default) if opt.default else ""
+            var = ctk.StringVar(value=default_str)
+            self._fields[opt.dest] = var
+            label = _human_label(opt.dest)
+            placeholder = _placeholder_for_option(opt)
+
+            # Entry with label above.
+            ef: ctk.CTkFrame = ctk.CTkFrame(parent, fg_color="transparent")
+            ef.grid(row=row, column=col, columnspan=col_span, sticky="ew", padx=(0, 8), pady=(0, 8))
+            ctk.CTkLabel(ef, text=label, font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(anchor="w", pady=(0, 3))
+            font_used: tuple[str, int] = (
+                _FONT_MONO if ("key" in opt.dest.lower() or "ekpfs" in opt.dest.lower()) else _FONT_UI
+            )
+            ctk.CTkEntry(
+                ef,
+                textvariable=var,
+                placeholder_text=placeholder,
+                fg_color=_BG_INPUT,
+                border_color=_BORDER_BRIGHT,
+                corner_radius=8,
+                font=font_used,
+                text_color=_TEXT_PRIMARY,
+            ).pack(fill="x")
+            return row + 1
+
+    def _on_remove_repeatable(self, row_widget: _RepeatableRow) -> None:
+        """Remove a repeatable row from its container."""
+        # Find which dest owns this row.
+        for dest, rows in self._repeatable_rows.items():
+            if row_widget in rows:
+                rows.remove(row_widget)
+                row_widget.destroy()
+                # Also remove from fields list.
+                if dest in self._fields:
+                    self._fields[dest] = [v for v in self._fields[dest] if v is not row_widget._var]
+                break
+
+    def _validate_and_build_argv(self) -> list[str] | None:
+        """Validate required fields and build the argv list.
+
+        Returns:
+            argv list ready for ``_run_mkpfs``, or None on validation failure.
+        """
+        argv: list[str] = []
+
+        # Build the command path prefix.
+        cmd_parts: list[str] = self._cmd_path.split(".")
+        argv.extend(cmd_parts)
+
+        # Collect positional values first.
+        positionals: list[ArgOption] = [o for o in self._arg_options if o.positional]
+        for opt in positionals:
+            value: str = ""
+            field: Any = self._fields.get(opt.dest)
+            if field is not None:
+                if isinstance(field, ctk.StringVar):
+                    value = field.get().strip()
+                elif isinstance(field, ctk.BooleanVar):
+                    value = str(field.get())
+            if opt.required and not value:
+                self._emit(f"✗ {_human_label(opt.dest)} is required.", "error")
+                return None
+            if value:
+                argv.append(value)
+
+        # Collect optional values.
+        optionals: list[ArgOption] = [o for o in self._arg_options if not o.positional]
+        # sort by position in options list
+        for opt in optionals:
+            field = self._fields.get(opt.dest)
+
+            if opt.kind == "bool":
+                if isinstance(field, ctk.BooleanVar):
+                    val: bool = field.get()
+                    # Determine which flag to emit.
+                    # For toggle pairs (store_true + store_false on same dest),
+                    # the flag_str comes from the store_true variant.
+                    # For store_true with default=True (i.e. negate_flag),
+                    # the default is on, and the user unchecked → emit the negate flag.
+                    flag: str = opt.flag_str
+                    if not flag:
+                        flag = f"--{opt.dest.replace('_', '-')}"
+
+                    # Heuristic: if default is True and value is False, emit the negation.
+                    # Check if there's a flag containing 'no-' for this dest.
+                    no_flags: list[str] = [f for f in opt.flags if f.startswith("--no-")]
+
+                    if opt.default is True and not val and no_flags:
+                        argv.append(no_flags[0])
+                    elif opt.default is False and val:
+                        # Emit the regular flag (pick one that doesn't start with --no-).
+                        yes_flags: list[str] = [f for f in opt.flags if not f.startswith("--no-")]
+                        if yes_flags:
+                            argv.append(yes_flags[0])
+                        else:
+                            argv.append(flag)
+                    elif (opt.default is True and val) or (opt.default is False and not val):
+                        # Default matches; no flag needed.
+                        pass
+
+            elif opt.kind == "choice":
+                if isinstance(field, ctk.StringVar):
+                    val = field.get().strip()
+                    default_s: str = str(opt.default) if opt.default else ""
+                    if val and val != default_s:
+                        argv.append(opt.flag_str)
+                        argv.append(val)
+
+            elif opt.kind == "append":
+                rows: list[_RepeatableRow] = self._repeatable_rows.get(opt.dest, [])
+                for rrow in rows:
+                    v: str = rrow.value
+                    if v:
+                        argv.append(opt.flag_str)
+                        argv.append(v)
+
+            else:
+                # text, path-*.
+                if isinstance(field, ctk.StringVar):
+                    val = field.get().strip()
+                    default_s = str(opt.default) if opt.default else ""
+                    if val and val != default_s:
+                        if opt.flag_str:
+                            argv.append(opt.flag_str)
+                        argv.append(val)
+
+        return argv
+
+    def _update_run_button_state(self) -> None:
+        """Enable or disable the Run button based on required field state.
+
+        All required positional StringVars must contain a non-empty value
+        for the Run button to be enabled.  This is called on every write
+        to a required-field variable via ``trace_add``.
+        """
+        if self._busy:
+            return
+        all_filled: bool = True
+        for opt in self._arg_options:
+            if not opt.required:
+                continue
+            field: Any = self._fields.get(opt.dest)
+            if isinstance(field, ctk.StringVar) and not field.get().strip():
+                all_filled = False
+                break
+        state: str = "normal" if all_filled else "disabled"
+        with contextlib.suppress(Exception):
+            self._run_btn.configure(state=state)
+
+    def _prefill_output(self) -> None:
+        """Prefill output path fields from source positional args.
+
+        Generates a default output basename from the command path and the first
+        source positional field's value by calling ``default_output_name`` from
+        the discovery module.  Only autofills when the output field is empty or
+        still contains the previous autofill (user has not manually edited it
+        since the last autofill).
+
+        The last autofilled value is tracked so command-option changes re-autofill
+        when the user has not made manual edits.
+        """
+        import pathlib
+
+        if not self._output_positional_dests or not self._source_positional_dests:
+            return
+
+        # Collect the first non-empty source path value.
+        src_val: str = ""
+        for sd in self._source_positional_dests:
+            sv: Any = self._fields.get(sd)
+            if isinstance(sv, ctk.StringVar):
+                v: str = sv.get().strip()
+                if v:
+                    src_val = v
+                    break
+
+        if not src_val:
+            return
+
+        src_path: pathlib.Path = pathlib.Path(src_val)
+        stem: str = src_path.stem if src_path.suffix else src_path.name
+
+        # Use the shared default_output_name API.
+        try:
+            from mkpfs.discovery import default_output_name
+
+            basename: str = default_output_name(self._cmd_path, src_path)
+        except Exception:
+            basename = stem or "image"
+
+        # Derive the suggested output path (same directory as source).
+        parent_dir: pathlib.Path = src_path.parent if src_path.is_absolute() else pathlib.Path()
+        suggested: pathlib.Path = parent_dir / f"{basename}.ffpfsc"
+        suggested_str: str = str(suggested)
+
+        # Update output fields.
+        for od in self._output_positional_dests:
+            ov: Any = self._fields.get(od)
+            if isinstance(ov, ctk.StringVar):
+                current: str = ov.get().strip()
+                # Autofill when empty, or when it still matches the last autofill
+                # (meaning the user has not manually changed it).
+                if not current or current == self._last_autofilled_output:
+                    try:
+                        from mkpfs.discovery import normalize_output_path
+
+                        result_path, _changed = normalize_output_path(suggested_str, ".ffpfsc")
+                        result_str: str = str(result_path)
+                        ov.set(result_str)
+                        self._last_autofilled_output = result_str
+                    except Exception:
+                        ov.set(suggested_str)
+                        self._last_autofilled_output = suggested_str
+
+    def _run_command(self) -> None:
+        """Validate fields and invoke mkpfs in-process."""
+        argv: list[str] | None = self._validate_and_build_argv()
+        if argv is None:
+            return
+        self._run_mkpfs(argv)
+
+
+# ---------------------------------------------------------------------------
 # Sidebar navigation button
 # ---------------------------------------------------------------------------
 
@@ -1636,33 +2791,124 @@ class NavButton(ctk.CTkButton):
 
 
 class MkPFSApp(ctk.CTk):
-    """Main application window with neon sidebar and language selector."""
+    """Main application window with neon sidebar and language selector.
 
-    _PAGES: ClassVar[list[tuple[str, str, type, str]]] = [
-        ("nav_pack_folder", "nav_pack_folder", PackFolderPanel, _NEON_BLUE),
-        ("nav_pack_file", "nav_pack_file", PackFilePanel, _NEON_CYAN),
-        ("nav_verify", "nav_verify", VerifyPanel, _NEON_GREEN),
-        ("nav_inspect", "nav_inspect", InspectPanel, _NEON_PURPLE),
-        ("nav_tree", "nav_tree", TreePanel, _NEON_AMBER),
-        ("nav_unpack", "nav_unpack", UnpackPanel, _NEON_PINK),
-    ]
+    At startup, attempts to discover commands via argparse introspection.
+    If that succeeds, the sidebar is built dynamically and each command gets
+    a ``DynamicPanel``.  Otherwise, the original hard-coded panels are used
+    as a fallback.
+    """
+
+    _PAGES: list[tuple[str, str, type | None, str]] | None = None
 
     def __init__(self) -> None:
         """Initialise and configure the application window."""
         super().__init__()
         self.title("MkPFS")
-        self.geometry("1120x780")
-        self.minsize(900, 620)
+        self.geometry("1200x800")
+        self.minsize(800, 600)
         self.configure(fg_color=_BG_DEEP)
 
+        class_pages: list[tuple[str, str, type | None, str]] | None = self._PAGES
+        self._pages: list[tuple[str, str, type | None, str]] = list(
+            class_pages
+            if class_pages is not None
+            else [
+                ("nav_pack_folder", "nav_pack_folder", PackFolderPanel, _NEON_BLUE),
+                ("nav_pack_file", "nav_pack_file", PackFilePanel, _NEON_CYAN),
+                ("nav_verify", "nav_verify", VerifyPanel, _NEON_GREEN),
+                ("nav_inspect", "nav_inspect", InspectPanel, _NEON_PURPLE),
+                ("nav_tree", "nav_tree", TreePanel, _NEON_AMBER),
+                ("nav_unpack", "nav_unpack", UnpackPanel, _NEON_PINK),
+            ]
+        )
         self._panels: dict[str, BasePanel] = {}
         self._nav_buttons: dict[str, NavButton] = {}
         self._active_key: str = ""
+        self._dynamic: bool = False
+
+        # Try dynamic discovery.
+        self._try_dynamic_discovery()
 
         self._set_window_icon()
+
+        # Main area: sidebar + content side-by-side, above the footer.
+        self._main_area: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
+        self._main_area.pack(fill="both", expand=True)
+
         self._build_sidebar()
         self._build_content()
-        self._select(self._PAGES[0][0])
+
+        # Version footer bar (persistent across all window states).
+        self._build_footer()
+
+        # Select first entry.
+        first_key: str = next(iter(self._nav_buttons))
+        self._select(first_key)
+
+    def _try_dynamic_discovery(self) -> None:
+        """Attempt CLI command discovery through the full discovery chain.
+
+        Calls ``_discover_cli_metadata()`` which tries (in order):
+          1. ``mkpfs.discovery.get_cli_metadata(prefer_import=True)``
+          2. Live argparse introspection
+          3. Subprocess help-text parsing fallback
+
+        On success, populates ``_PAGES`` from the discovered metadata.
+        On failure, keeps the hard-coded fallback list.
+        """
+        try:
+            meta: dict[str, list[ArgOption]] = _discover_cli_metadata()
+        except Exception:
+            return
+
+        if not meta:
+            return
+
+        # Build dynamic pages list: (key, label_key, None, accent).
+        # The PanelClass is None for dynamic; we create DynamicPanel in _build_content.
+        dynamic_pages: list[tuple[str, str, type | None, str]] = []
+
+        # Navigation label emoji map by top-level command.
+        EMOJI: dict[str, str] = {
+            "pack": "📦",
+            "pack.folder": "📦",
+            "pack.file": "📄",
+            "pack.exfat": "📦",
+            "verify": "✅",
+            "inspect": "🔍",
+            "tree": "🌲",
+            "unpack": "📂",
+        }
+
+        # Build nav entries.  For top-level commands that have nested subcommands
+        # (pack.*), we use the nested versions directly.
+        seen: set[str] = set()
+        for cmd_path in meta:
+            if cmd_path in seen:
+                continue
+            seen.add(cmd_path)
+
+            accent: str = _accent_for_cmd_path(cmd_path)
+            display_name: str = " ".join(w.capitalize() for w in cmd_path.replace(".", " ").split())
+            emoji: str = EMOJI.get(cmd_path, "")
+            nav_label: str = f"{emoji}  {display_name}" if emoji else display_name
+
+            # Translation key for nav.
+            nav_key: str = f"dyn_nav_{cmd_path.replace('.', '_')}"
+            # Store nav label for all locales.
+            for lk in ("en", "pt_BR", "es"):
+                _TRANSLATIONS.setdefault(lk, {})[nav_key] = nav_label
+
+            dynamic_pages.append((nav_key, nav_key, None, accent))
+
+        # Ensure we have at least the hard-coded set if nothing was discovered.
+        if not dynamic_pages:
+            return
+
+        self._pages = list[tuple[str, str, type | None, str]](dynamic_pages)
+        self._dynamic = True
+        self._dynamic_meta: dict[str, list[ArgOption]] = meta
 
     def _set_window_icon(self) -> None:
         """Load icon.png from assets/images/ and apply it to the window.
@@ -1685,14 +2931,39 @@ class MkPFSApp(ctk.CTk):
             self.wm_iconphoto(True, photo)
             # Keep a reference so the image is not garbage-collected by Python
             self._icon_ref: ImageTk.PhotoImage = photo
-        except (OSError, ValueError, RuntimeError):
+        except (OSError, ValueError, RuntimeError, Exception):
             # Icon setup is optional; ignore expected failures (file missing or unreadable).
             return
+
+    def _build_footer(self) -> None:
+        """Build the persistent version-footer bar at the bottom of the window.
+
+        Displays ``mkpfs vX.Y.Z`` sourced from the mkpfs package version string
+        via runtime introspection.  Visible in every window state (idle, running,
+        error).
+        """
+        from mkpfs import __version__
+
+        footer: ctk.CTkFrame = ctk.CTkFrame(
+            self,
+            fg_color=_BG_PANEL,
+            corner_radius=0,
+            height=26,
+        )
+        footer.pack(side="bottom", fill="x")
+        footer.pack_propagate(False)
+
+        ctk.CTkLabel(
+            footer,
+            text=f"mkpfs v{__version__}",
+            font=("Segoe UI", 9),
+            text_color=_TEXT_MUTED,
+        ).pack(side="right", padx=(0, 14), pady=2)
 
     def _build_sidebar(self) -> None:
         """Build the left navigation sidebar with language selector."""
         sidebar: ctk.CTkFrame = ctk.CTkFrame(
-            self,
+            self._main_area,
             width=_SIDEBAR_W,
             fg_color=_BG_PANEL,
             corner_radius=0,
@@ -1724,7 +2995,7 @@ class MkPFSApp(ctk.CTk):
         )
         self._ops_label.pack(anchor="w", padx=16, pady=(0, 6))
 
-        for key, label_key, _, accent in self._PAGES:
+        for key, label_key, _, accent in self._pages:
             btn: NavButton = NavButton(
                 sidebar,
                 text=tr(label_key),
@@ -1762,21 +3033,27 @@ class MkPFSApp(ctk.CTk):
             command=self._on_lang_change,
         ).pack(fill="x")
 
-        self._ver_label: ctk.CTkLabel = ctk.CTkLabel(
-            sidebar,
-            text=tr("version_footer"),
-            font=("Segoe UI", 9),
-            text_color=_TEXT_MUTED,
-        )
-        self._ver_label.pack(side="bottom", pady=12)
+        # Version label removed from sidebar — now lives in the footer bar.
 
     def _build_content(self) -> None:
         """Pre-instantiate all panels inside the content area."""
-        self._content: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
+        self._content: ctk.CTkFrame = ctk.CTkFrame(self._main_area, fg_color="transparent")
         self._content.pack(side="left", fill="both", expand=True)
-        for key, _, PanelClass, _ in self._PAGES:
-            panel: BasePanel = PanelClass(self._content)
-            self._panels[key] = panel
+
+        if self._dynamic:
+            # Dynamic panels: build from metadata.
+            for key, _, _, _ in self._pages:
+                # Extract cmd_path from the nav_key (strip dyn_nav_ prefix).
+                cmd_path: str = key.removeprefix("dyn_nav_").replace("_", ".")
+                options: list[ArgOption] = self._dynamic_meta.get(cmd_path, [])
+                panel: BasePanel = DynamicPanel(self._content, cmd_path, options)
+                self._panels[key] = panel
+        else:
+            # Fallback: hard-coded panels (PanelClass is never None here).
+            for key, _, PanelClass, _ in self._pages:
+                if PanelClass is not None:
+                    panel: BasePanel = PanelClass(self._content)
+                    self._panels[key] = panel
 
     def _select(self, key: str) -> None:
         """Switch the visible panel.
@@ -1807,13 +3084,16 @@ class MkPFSApp(ctk.CTk):
         self._refresh_all_labels()
 
     def _refresh_all_labels(self) -> None:
-        """Propagate the new locale to all sidebar widgets and panels."""
+        """Propagate the new locale to all sidebar widgets and panels.
+
+        The version footer is static and does not change with locale.
+        """
         self._subtitle_label.configure(text=tr("app_subtitle"))
         self._ops_label.configure(text=tr("operations"))
         self._lang_label_widget.configure(text=tr("lang_label"))
-        self._ver_label.configure(text=tr("version_footer"))
-        for key, label_key, _, _ in self._PAGES:
-            self._nav_buttons[key].configure(text=tr(label_key))
+        for key, label_key, _, _ in self._pages:
+            if key in self._nav_buttons:
+                self._nav_buttons[key].configure(text=tr(label_key))
         for panel in self._panels.values():
             panel.refresh_labels()
 
