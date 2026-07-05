@@ -27,7 +27,7 @@ jobs:
       - name: Setup uv (project tooling)
         uses: astral-sh/setup-uv@v7
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Install Python dependencies for analysis
