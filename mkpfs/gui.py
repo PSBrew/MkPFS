@@ -1011,7 +1011,7 @@ def _discover_cli_metadata() -> dict[str, list[ArgOption]]:
         meta = get_cli_metadata(prefer_import=True)
         if meta.get("commands"):
             result = _convert_discovery_meta(meta)
-            if result:
+            if result and any(result.values()):
                 return result
     except Exception:
         pass
@@ -2289,7 +2289,7 @@ class DynamicPanel(BasePanel):
             options: Ordered list of ArgOption describing CLI arguments.
         """
         self._cmd_path: str = cmd_path
-        self._options: list[ArgOption] = options
+        self._arg_options: list[ArgOption] = options
         self._panel_key = cmd_path
         self._accent_cfg: str = _accent_for_cmd_path(cmd_path)
 
@@ -2336,8 +2336,8 @@ class DynamicPanel(BasePanel):
         card.columnconfigure(1, weight=1)
 
         # Separate positionals and optionals.
-        positionals: list[ArgOption] = [o for o in self._options if o.positional]
-        optionals: list[ArgOption] = [o for o in self._options if not o.positional]
+        positionals: list[ArgOption] = [o for o in self._arg_options if o.positional]
+        optionals: list[ArgOption] = [o for o in self._arg_options if not o.positional]
 
         # Section labels by group: tracks which groups we've emitted.
         emitted_groups: dict[str, int] = {}
@@ -2440,11 +2440,12 @@ class DynamicPanel(BasePanel):
             var = ctk.StringVar(value=str(opt.default) if opt.default else (opt.choices[0] if opt.choices else ""))
             self._fields[opt.dest] = var
             label = _human_label(opt.dest)
+            str_choices: list[str] = [str(c) for c in opt.choices] if opt.choices else []
             OptionRow(
                 parent,
                 label=label,
                 variable=var,
-                values=opt.choices or [],
+                values=str_choices,
                 accent=self._accent,
             ).grid(row=row, column=col, columnspan=col_span, sticky="ew", padx=(0, 8), pady=(0, 8))
             return row + 1
@@ -2562,7 +2563,7 @@ class DynamicPanel(BasePanel):
         argv.extend(cmd_parts)
 
         # Collect positional values first.
-        positionals: list[ArgOption] = [o for o in self._options if o.positional]
+        positionals: list[ArgOption] = [o for o in self._arg_options if o.positional]
         for opt in positionals:
             value: str = ""
             field: Any = self._fields.get(opt.dest)
@@ -2578,7 +2579,7 @@ class DynamicPanel(BasePanel):
                 argv.append(value)
 
         # Collect optional values.
-        optionals: list[ArgOption] = [o for o in self._options if not o.positional]
+        optionals: list[ArgOption] = [o for o in self._arg_options if not o.positional]
         # sort by position in options list
         for opt in optionals:
             field = self._fields.get(opt.dest)
@@ -2650,7 +2651,7 @@ class DynamicPanel(BasePanel):
         if self._busy:
             return
         all_filled: bool = True
-        for opt in self._options:
+        for opt in self._arg_options:
             if not opt.required:
                 continue
             field: Any = self._fields.get(opt.dest)
@@ -2930,7 +2931,7 @@ class MkPFSApp(ctk.CTk):
             self.wm_iconphoto(True, photo)
             # Keep a reference so the image is not garbage-collected by Python
             self._icon_ref: ImageTk.PhotoImage = photo
-        except (OSError, ValueError, RuntimeError):
+        except (OSError, ValueError, RuntimeError, Exception):
             # Icon setup is optional; ignore expected failures (file missing or unreadable).
             return
 
