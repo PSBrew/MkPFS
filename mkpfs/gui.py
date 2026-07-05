@@ -2808,9 +2808,10 @@ class MkPFSApp(ctk.CTk):
         self.minsize(800, 600)
         self.configure(fg_color=_BG_DEEP)
 
+        class_pages: list[tuple[str, str, type | None, str]] | None = self._PAGES
         self._pages: list[tuple[str, str, type | None, str]] = list(
-            self._pages
-            if self._pages is not None
+            class_pages
+            if class_pages is not None
             else [
                 ("nav_pack_folder", "nav_pack_folder", PackFolderPanel, _NEON_BLUE),
                 ("nav_pack_file", "nav_pack_file", PackFilePanel, _NEON_CYAN),

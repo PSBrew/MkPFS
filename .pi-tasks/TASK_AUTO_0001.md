@@ -1,9 +1,9 @@
 ---
 id: TASK_AUTO_0001
-state: in_progress
+state: completed
 phase: done
 created_at: 2026-07-01T14:06:42.651Z
-updated_at: 2026-07-03T10:16:04.546Z
+updated_at: 2026-07-03T10:16:08.605Z
 title: I've recently implemented a simple GUI to allow some users to run the mkpfs commands without having to use the command line directly.
 ---
 
