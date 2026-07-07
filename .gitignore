@@ -11,9 +11,6 @@
 !.claude/MEMORY.md
 !.claude/settings.json
 
-# Pi-Tasks settings
-/.pi-tasks/
-
 # Ignored auto-generated site files
 /site/*
 
@@ -218,6 +215,8 @@ target/
 research/
 /config.json
 
-# Other
-graphify-out
-/.pi-tasks/
+# Graphify
+graphify-out/
+
+# Pi-Tasks settings
+.pi-tasks/
