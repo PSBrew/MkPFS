@@ -220,15 +220,6 @@ class MkPFSApp(ctk.CTk):
             panel.refresh_labels()
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-
 def main() -> None:
     """Launch the MkPFS graphical user interface."""
     app: MkPFSApp = MkPFSApp()

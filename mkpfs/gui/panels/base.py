@@ -243,7 +243,7 @@ class BasePanel(ctk.CTkFrame):
             from mkpfs.cli import cli_mkpfs_main
         except ImportError as exc:
             self._emit(f"✗ Cannot import mkpfs: {exc}", "error")
-            self._emit("   Ensure cryptography is installed: pip install cryptography", "muted")
+            self._emit("   Ensure cryptography is installed: uv sync --group dev", "muted")
             return
 
         self._emit(f"$ mkpfs {' '.join(args)}", "muted")
