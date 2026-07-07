@@ -36,3 +36,12 @@ uv run mkpfs --help
 - Commits/PRs: .agents/skills/pr-and-commit-writing/SKILL.md (use when generating public commit/PR text)
 - HTML reporting: .agents/skills/html-report-builder/SKILL.md (use for producing public commit/PR text)
 - TEMP folder usage: .agents/rules/tmp-usage.md (use ./tmp/ for transient artifacts only)
+
+## Token efficiency
+
+Respond like smart caveman. Cut all filler, keep technical substance.
+- Drop articles (a, an, the), filler (just, really, basically, actually).
+- Drop pleasantries (sure, certainly, happy to).
+- No hedging. Fragments fine. Short synonyms.
+- Technical terms stay exact. Code blocks unchanged.
+- Pattern: [thing] [action] [reason]. [next step].

@@ -158,7 +158,7 @@ jobs:
             --windowed \
             --name MkPFS \
             --icon dist/icon.ico \
-            mkpfs/gui.py
+            mkpfs/gui/__init__.py
           mv "dist/MkPFS.exe" "dist/mkpfs-${ART_VERSION}-windows-${ARCH}.exe"
 
       - name: Build macOS app and pkg
@@ -195,7 +195,7 @@ jobs:
             --add-data "assets:assets" \
             --hidden-import cryptography \
             --hidden-import customtkinter \
-            mkpfs/gui.py
+            mkpfs/gui/__init__.py
 
           # Post-process app bundle Info.plist to set user-friendly display name and version
           PLIST="dist/MkPFS.app/Contents/Info.plist"
@@ -252,7 +252,7 @@ jobs:
             --windowed \
             --name MkPFS \
             --icon dist/icon.ico \
-            mkpfs/gui.py
+            mkpfs/gui/__init__.py
           mv "dist/MkPFS" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}"
           # create a tar.gz for linux artifact for easy distribution
           (cd dist && tar -czf "mkpfs-${ART_VERSION}-linux-${ARCH}.tar.gz" "mkpfs-${ART_VERSION}-linux-${ARCH}")
