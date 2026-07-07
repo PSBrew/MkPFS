@@ -11,6 +11,9 @@
 !.claude/MEMORY.md
 !.claude/settings.json
 
+# Pi-Tasks settings
+/.pi-tasks/
+
 # Ignored auto-generated site files
 /site/*
 
@@ -44,14 +47,6 @@
 /legacy/
 #/current-plan
 
-# Related project files
-/related-projects/*
-!/related-projects/shadowmountplus
-!/related-projects/pkgtool
-!/related-projects/liborbispkg
-!/related-projects/kstuff-lite
-!/related-projects/liborbispkg-wiki
-!/related-projects/*.md
 
 # Temporary files and scratch artifacts
 /tmp/*
@@ -222,3 +217,7 @@ target/
 # Research files
 research/
 /config.json
+
+# Other
+graphify-out
+/.pi-tasks/

@@ -1,0 +1,11 @@
+.git/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+graphify-out/
+*.lock
+*.gz
+.coverage
+*.xml
+.DS_Store
