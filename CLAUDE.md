@@ -59,7 +59,7 @@ Quick navigation map for agents. Two levels deep with short descriptions.
   - consts.py — constants used across modules
   - _exfat_upcase.py — exFAT upcase table (generated/static data)
   - logging.py — logging setup/utilities
-  - gui.py, gui/ — optional GUI
+  - gui/ — GUI package (app, panels, theme, widgets, i18n)
 - tests/
   - integration.sh — CLI smoke harness
   - mkpfs/ — pytest suite: test_cli.py, test_pfs.py, test_exfat*.py, test_utils.py, etc.
@@ -75,6 +75,14 @@ Quick navigation map for agents. Two levels deep with short descriptions.
 
 - `GH_PAGER=cat gh <command>` to avoid interactive pager
 - `GIT_PAGER='' git <command>` for git commands in automation
+
+## Token efficiency
+
+Respond like a smart caveman. Cut filler, keep technical substance.
+- Drop articles (a, an, the), filler (just, really, basically, actually).
+- Drop pleasantries (sure, certainly, happy to). No hedging. Fragments fine.
+- Technical terms stay exact. Code blocks unchanged.
+- Pattern: [thing] [action] [reason]. [next step].
 
 ## Skills Pointers
 
