@@ -35,6 +35,7 @@ from zlib_ng import zlib_ng as zlib
 from . import consts
 from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
 from .exfat_writer import iter_exfat_image
+from .gather import gather_files_scandir
 from .logging import info, warning
 from .pbar import Progress
 from .utils import (
@@ -2695,11 +2696,10 @@ def scan_source_tree(root: Path, progress: Progress) -> tuple[dict[str, DirNode]
     progress.status("\nDiscovering files...")
     # Exclude OS-generated metadata (.DS_Store, ._*, Thumbs.db, __MACOSX, ...) so it
     # never ends up in the image, including files nested under an ignored directory.
-    abs_files: list[Path] = [
-        p
-        for p in root.rglob("*")
-        if p.is_file() and not any(is_ignored_name(part) for part in p.relative_to(root).parts)
-    ]
+    # Prefer scandir-based gather for performance on large trees. Default is scandir.
+    abs_files = gather_files_scandir(root)
+    # Keep safety check: re-apply ignore filter in case helper included unexpected entries
+    abs_files = [p for p in abs_files if not any(is_ignored_name(part) for part in p.relative_to(root).parts)]
     abs_files.sort(key=lambda p: p.relative_to(root).as_posix().lower())
 
     # Validate filenames before compression work begins; non-ASCII names are unsupported.
