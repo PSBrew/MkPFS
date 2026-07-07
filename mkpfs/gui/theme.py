@@ -1,6 +1,15 @@
 """Neon glassmorphism theme constants for the mkpfs GUI."""
 
 # Backgrounds — deep space
+_BG_DEEP = "#0B0E17"  # deepest background
+_BG_PANEL = "#121626"  # card / panel body
+_BG_CARD = "#181E2D"  # inner card
+_BG_INPUT = "#1A2035"  # text input / textbox bg
+_BORDER_BRIGHT = "#2B3553"  # bright border accent
+_TEXT_PRIMARY = "#E8EDF5"  # primary text
+_TEXT_SECONDARY = "#8892B0"  # secondary text
+_TEXT_MUTED = "#4A5580"  # muted text
+
 
 # Neon accents — each panel / element gets its own hue
 _NEON_BLUE = "#00C8FF"  # primary brand, sidebar logo, Pack Folder

@@ -135,7 +135,6 @@ class BasePanel(ctk.CTkFrame):
         self._run_btn.set_label(tr("run"))
         self._log_section_label.configure(text=tr("output_log"))
         self._export_btn.configure(text=tr("export_log"))
-        self._export_btn.configure(text=tr("export_log"))
 
         # Destroy and rebuild the controls card with the new locale strings.
         # pack(before=) keeps the card between the divider and the progress bar.
@@ -243,7 +242,7 @@ class BasePanel(ctk.CTkFrame):
             from mkpfs.cli import cli_mkpfs_main
         except ImportError as exc:
             self._emit(f"✗ Cannot import mkpfs: {exc}", "error")
-            self._emit("   Ensure cryptography is installed: uv sync --group dev", "muted")
+            self._emit("   Ensure cryptography is installed: uv sync", "muted")
             return
 
         self._emit(f"$ mkpfs {' '.join(args)}", "muted")

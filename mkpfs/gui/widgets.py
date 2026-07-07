@@ -197,7 +197,6 @@ class LogPane(ctk.CTkFrame):
             **kwargs: Extra keyword arguments forwarded to CTkFrame.
         """
         kwargs.setdefault("height", 240)
-        kwargs.setdefault("height", 240)
         super().__init__(
             parent,
             fg_color=_BG_INPUT,

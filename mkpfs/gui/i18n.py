@@ -295,6 +295,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
 }
 
+_LANG_NAMES: dict[str, str] = {
+    "en": "English",
+    "pt_BR": "Português (BR)",
+    "es": "Español",
+}
+
 
 # Active locale — updated by the language selector
 _current_locale: str = "en"
