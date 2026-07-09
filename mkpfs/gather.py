@@ -36,13 +36,11 @@ def gather_files_scandir(root: Path) -> list[Path]:
         try:
             with os.scandir(dir_path) as it:
                 entries = list(it)
-        except PermissionError:
-            # Mirror conservative behavior: skip directories we cannot access.
+        except OSError:
+            # Mirror conservative behavior: skip directories we cannot access
+            # or that disappear during traversal (PermissionError,
+            # FileNotFoundError, NotADirectoryError, etc.).
             continue
-
-        # Deterministic per-directory ordering to reduce nondeterminism while
-        # keeping traversal fast. The final global sort is left to the caller.
-        entries.sort(key=lambda e: e.name.lower())
 
         for entry in entries:
             name = entry.name
@@ -52,12 +50,12 @@ def gather_files_scandir(root: Path) -> list[Path]:
             try:
                 # Directories: descend but do NOT follow symlinks
                 if entry.is_dir(follow_symlinks=False):
-                    stack.append(Path(dir_path) / name)
+                    stack.append(dir_path / name)
                     continue
 
                 # Files: include regular files and file symlinks
                 if entry.is_file():
-                    abs_files.append(Path(dir_path) / name)
+                    abs_files.append(dir_path / name)
             except OSError:
                 # If the entry disappears or cannot be inspected, skip it.
                 continue
