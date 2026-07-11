@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import sys
 import time
+from typing import Any, Callable
 
 from .utils import human_readable_size
 
-# Module-level progress listener hook.
 # When set by the GUI, every Progress instance forwards structured
 # ``(action, phase, ...)`` tuples on each ``step()`` / ``status()`` call.
-default_listener: callable | None = None
+# Use a typing Callable for static checking.
+default_listener: Callable[..., Any] | None = None
 
 
 class Progress:
@@ -27,10 +28,10 @@ class Progress:
         width: Width of the visual progress bar in characters.
     """
 
-    def __init__(self, enabled: bool = True, width: int = 32, listener: callable | None = None) -> None:
+    def __init__(self, enabled: bool = True, width: int = 32, listener: Callable[..., Any] | None = None) -> None:
         self.enabled: bool = enabled
         self.width: int = width
-        self.listener: callable | None = listener
+        self.listener: Callable[..., Any] | None = listener
         self.last_phase: str | None = None
         self.phase_start_time: dict[str, float] = {}
         self.phase_bytes: dict[str, int] = {}
@@ -51,14 +52,18 @@ class Progress:
             bytes_processed: Optional number of bytes processed; when provided
                 the progress will display byte-based throughput and ETA.
         """
-        # Fire structured listener (GUI) before the enabled check so progress
-        # reaches the GUI even when the terminal progress is active.
+        # Normalize/clamp numeric inputs so both terminal and GUI listeners
+        # receive consistent, in-range values (prevents ratios > 1).
+        total = max(total, 1)
+        done = max(0, min(done, total))
+
+        # Fire structured listener (GUI) so the GUI receives the normalized
+        # values even when terminal progress output is active.
         if self.listener:
             self.listener("step", phase, done, total, bytes_processed)
 
         if not self.enabled:
             return
-
         # Suppress \r-delimited terminal writes when a GUI listener is active
         # so the log pane doesn't accumulate incremental progress lines.
         if self.listener:
@@ -71,8 +76,6 @@ class Progress:
         if bytes_processed > 0:
             self.phase_bytes[phase] = bytes_processed
 
-        total = max(total, 1)
-        done = max(0, min(done, total))
         ratio: float = done / total
         fill: int = int(self.width * ratio)
         bar: str = "#" * fill + "-" * (self.width - fill)

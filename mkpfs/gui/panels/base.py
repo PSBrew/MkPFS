@@ -289,7 +289,12 @@ class BasePanel(ctk.CTkFrame):
                         self._progress.stop()
                         self._progress.configure(mode="determinate")
                         self._progress.set(0)
-                    ratio = done / total if total > 0 else 0
+                    if total > 0:
+                        ratio = done / total
+                    else:
+                        ratio = 0.0
+                    # Clamp ratio to [0.0, 1.0] to guard against out-of-range listener values
+                    ratio = max(0.0, min(1.0, ratio))
                     self._progress.set(ratio)
                     # Update phase label with the current operation name
                     if phase_name:
