@@ -65,6 +65,8 @@ class BasePanel(ctk.CTkFrame):
         self._reset_after_id: str | None = None
         self._log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._accent: str = _PANEL_ACCENT.get(self._panel_key, _NEON_BLUE)
+        self._last_phase: str = ""
+        self._last_progress: tuple[int, int] = (0, 0)
 
         # Header
         header: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
@@ -196,6 +198,8 @@ class BasePanel(ctk.CTkFrame):
             self.after_cancel(self._reset_after_id)
             self._reset_after_id = None
         self._failed = False
+        self._last_phase = ""
+        self._last_progress = (0, 0)
         self._log.clear()
         self._busy = True
         self._run_btn.configure(state="disabled", text=tr("running"))
@@ -233,6 +237,11 @@ class BasePanel(ctk.CTkFrame):
                         self._progress.set(0)
                         self._phase_label.configure(text="")
                     else:
+                        # Emit a final log line for the last completed phase
+                        if self._last_phase:
+                            prev_done, prev_total = self._last_progress
+                            pct: int = int(prev_done / prev_total * 100) if prev_total > 0 else 100
+                            self._log.append(f"✓ {self._last_phase}: {pct}%", "success")
                         # Freeze progress bar at 100% and show completion label briefly
                         self._progress.stop()
                         self._progress.configure(mode="determinate")
@@ -267,6 +276,14 @@ class BasePanel(ctk.CTkFrame):
                 action, *args = self._progress_queue.get_nowait()
                 if action == "step":
                     phase_name, done, total, _bytes_processed = args
+                    # Emit a log line when a phase completes (done reaches total)
+                    # or when the phase changes to a new one.
+                    if phase_name != self._last_phase and self._last_phase:
+                        prev_done, prev_total = self._last_progress
+                        pct: int = int(prev_done / prev_total * 100) if prev_total > 0 else 100
+                        self._emit(f"✓ {self._last_phase}: {pct}%", "success")
+                    self._last_phase = phase_name
+                    self._last_progress = (done, total)
                     # Switch to determinate mode on first progress event
                     if self._progress.cget("mode") != "determinate":
                         self._progress.stop()
@@ -351,8 +368,14 @@ class BasePanel(ctk.CTkFrame):
 
             def write(self, s: str) -> int:
                 self._buf += s
+                # Process complete lines (delimited by \n). Within each line,
+                # \r means "overwrite the current line" so only the content
+                # after the last \r is kept — matching terminal semantics.
                 while "\n" in self._buf:
                     line, self._buf = self._buf.split("\n", 1)
+                    # \r overwrites: keep only what's after the last \r
+                    if "\r" in line:
+                        line = line.rsplit("\r", 1)[1]
                     stripped: str = line.rstrip()
                     if not stripped:
                         continue
@@ -370,7 +393,20 @@ class BasePanel(ctk.CTkFrame):
                 return len(s)
 
             def flush(self) -> None:
-                pass
+                # Emit any remaining buffered content on flush so the final
+                # progress state appears in the log before completion.
+                if self._buf.strip():
+                    stripped: str = self._buf.rstrip()
+                    self._buf = ""
+                    lower: str = stripped.lower()
+                    tag: str = ""
+                    if lower.startswith(("\u2713", "done:", "complete:", "success:")):
+                        tag = "success"
+                    elif lower.startswith("error ") or "\u274c" in stripped:
+                        tag = "error"
+                    elif lower.startswith("warn ") or "\u26a0" in stripped:
+                        tag = "warning"
+                    self._tag_fn(stripped, tag)
 
         streamer: _Streamer = _Streamer(emit)
         original_input: Any = builtins.input
