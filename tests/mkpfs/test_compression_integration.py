@@ -104,7 +104,7 @@ class TestCompressionCrossBackendDecompress:
         comp._backend = None  # type: ignore[union-attribute]
 
     def test_cross_backend_decompress(self) -> None:
-        """Compressed by zipl-ng, decompressed by stdlib zlib."""
+        """Compressed by zlib-ng, decompressed by stdlib zlib."""
         import mkpfs.compression as comp
 
         original_data = b"cross-backend " * 100
