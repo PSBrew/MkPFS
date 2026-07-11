@@ -233,8 +233,8 @@ class TestCliArgumentHelpers(CliTestCase):
         )
         self.assertEqual(set(choices), {"pack", "verify", "inspect", "tree", "unpack"})
 
-    def test_pack_parser_uses_default_compression_level_of_nine(self) -> None:
-        """The pack parser should expose 9 as the default compression level."""
+    def test_pack_parser_uses_default_compression_level_of_seven(self) -> None:
+        """The pack parser should expose 7 as the default compression level."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
             action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
@@ -246,7 +246,7 @@ class TestCliArgumentHelpers(CliTestCase):
         compression_action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "compression_level"
         )
-        self.assertEqual(compression_action.default, 9)
+        self.assertEqual(compression_action.default, 7)
 
     def test_pack_parser_uses_zero_as_default_threshold_gain(self) -> None:
         """The pack parser should expose 0 as the default threshold gain."""
