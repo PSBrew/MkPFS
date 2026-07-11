@@ -61,7 +61,6 @@ class MkPFSApp(ctk.CTk):
         ("nav_unpack", "nav_unpack", UnpackPanel, _NEON_PINK),
     ]
 
-
     def __init__(self) -> None:
         """Initialise and configure the application window."""
         super().__init__()
