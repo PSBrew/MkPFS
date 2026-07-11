@@ -110,7 +110,7 @@ class TestCompressionCrossBackendDecompress:
         original_data = b"cross-backend " * 100
         compressed_by_zlib_ng = comp.compress_block(original_data, level=9)
 
-        # Switch to stdlib zlib backend and decompress the zipl-ng output.
+        # Switch to stdlib zlib backend and decompress the zlib-ng output.
         try:
             comp.set_backend("zlib")
         except ImportError:
