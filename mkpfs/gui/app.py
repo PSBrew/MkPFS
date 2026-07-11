@@ -53,13 +53,14 @@ class MkPFSApp(ctk.CTk):
 
     _PAGES: ClassVar[list[tuple[str, str, type, str]]] = [
         ("nav_pack_folder", "nav_pack_folder", PackFolderPanel, _NEON_BLUE),
+        ("nav_pack_exfat", "nav_pack_exfat", ExfatPanel, _NEON_ORANGE),
         ("nav_pack_file", "nav_pack_file", PackFilePanel, _NEON_CYAN),
         ("nav_verify", "nav_verify", VerifyPanel, _NEON_GREEN),
         ("nav_inspect", "nav_inspect", InspectPanel, _NEON_PURPLE),
         ("nav_tree", "nav_tree", TreePanel, _NEON_AMBER),
         ("nav_unpack", "nav_unpack", UnpackPanel, _NEON_PINK),
-        ("nav_format_exfat", "nav_format_exfat", ExfatPanel, _NEON_ORANGE),
     ]
+
 
     def __init__(self) -> None:
         """Initialise and configure the application window."""
