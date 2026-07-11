@@ -5,7 +5,16 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from .i18n import _LANG_NAMES, set_locale, tr
-from .panels import BasePanel, InspectPanel, PackFilePanel, PackFolderPanel, TreePanel, UnpackPanel, VerifyPanel
+from .panels import (
+    BasePanel,
+    ExfatPanel,
+    InspectPanel,
+    PackFilePanel,
+    PackFolderPanel,
+    TreePanel,
+    UnpackPanel,
+    VerifyPanel,
+)
 from .theme import (
     _BG_CARD,
     _BG_DEEP,
@@ -17,6 +26,7 @@ from .theme import (
     _NEON_BLUE,
     _NEON_CYAN,
     _NEON_GREEN,
+    _NEON_ORANGE,
     _NEON_PINK,
     _NEON_PURPLE,
     _SIDEBAR_W,
@@ -43,6 +53,7 @@ class MkPFSApp(ctk.CTk):
 
     _PAGES: ClassVar[list[tuple[str, str, type, str]]] = [
         ("nav_pack_folder", "nav_pack_folder", PackFolderPanel, _NEON_BLUE),
+        ("nav_pack_exfat", "nav_pack_exfat", ExfatPanel, _NEON_ORANGE),
         ("nav_pack_file", "nav_pack_file", PackFilePanel, _NEON_CYAN),
         ("nav_verify", "nav_verify", VerifyPanel, _NEON_GREEN),
         ("nav_inspect", "nav_inspect", InspectPanel, _NEON_PURPLE),

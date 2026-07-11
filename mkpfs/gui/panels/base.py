@@ -10,6 +10,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ... import pbar as _pbar
 from ..i18n import tr
 from ..theme import (
     _BG_CARD,
@@ -21,9 +22,24 @@ from ..theme import (
 )
 from ..widgets import GlassCard, LogPane, NeonButton, SectionLabel
 
+
 # ---------------------------------------------------------------------------
 # Panel base class
 # ---------------------------------------------------------------------------
+class QueuedProgress:
+    """Adapter that forwards progress events to a queue for UI-thread polling.
+
+    Wired as ``default_listener`` so **every** Progress instance created during
+    an in-process build automatically pushes progress/status tuples to the
+    queue.  The panel's ``_poll_log_queue`` drains the queue and updates the
+    progress bar / phase label on the UI thread.
+    """
+
+    def __init__(self, q: queue.Queue) -> None:
+        self._q = q
+
+    def __call__(self, action: str, *args: Any) -> None:
+        self._q.put_nowait((action, *args))
 
 
 class BasePanel(ctk.CTkFrame):
@@ -45,8 +61,12 @@ class BasePanel(ctk.CTkFrame):
         """
         super().__init__(parent, fg_color="transparent")
         self._busy: bool = False
+        self._failed: bool = False
+        self._reset_after_id: str | None = None
         self._log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._accent: str = _PANEL_ACCENT.get(self._panel_key, _NEON_BLUE)
+        self._last_phase: str = ""
+        self._last_progress: tuple[int, int] = (0, 0)
 
         # Header
         header: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
@@ -85,7 +105,22 @@ class BasePanel(ctk.CTkFrame):
             corner_radius=4,
             height=4,
         )
-        self._progress.pack(fill="x", padx=24)
+        self._progress.pack(fill="x", padx=24, pady=(14, 2))
+
+        # Phase label shown between progress bar and log area
+        self._phase_label: ctk.CTkLabel = ctk.CTkLabel(
+            self,
+            text="",
+            font=_FONT_SMALL,
+            text_color=_NEON_BLUE,
+        )
+        self._phase_label.pack(anchor="w", padx=26, pady=(0, 4))
+
+        # Progress event queue — QueuedProgress is registered as the module-level
+        # listener so every background-phase Progress.step() / status() call
+        # pushes structured tuples here instead of writing \r-delimited stderr.
+        self._progress_queue: queue.Queue = queue.Queue()
+        self._queued_progress: QueuedProgress = QueuedProgress(self._progress_queue)
         self._progress.stop()
         self._progress.set(0)
 
@@ -158,6 +193,13 @@ class BasePanel(ctk.CTkFrame):
         """Clear log and launch the background worker thread."""
         if self._busy:
             return
+        # Cancel any pending progress-bar reset from a previous completion
+        if self._reset_after_id is not None:
+            self.after_cancel(self._reset_after_id)
+            self._reset_after_id = None
+        self._failed = False
+        self._last_phase = ""
+        self._last_progress = (0, 0)
         self._log.clear()
         self._busy = True
         self._run_btn.configure(state="disabled", text=tr("running"))
@@ -175,19 +217,93 @@ class BasePanel(ctk.CTkFrame):
 
     def _poll_log_queue(self) -> None:
         """Drain the log queue and update the UI; reschedules itself."""
+        # Drain progress events (pbar listener)
+        self._drain_progress_events()
+
+        # Drain log messages
         try:
             while True:
                 tag, text = self._log_queue.get_nowait()
-                if tag == "__done__":
+                if tag == "error":
+                    self._failed = True
+                    self._log.append(text, tag)
+                elif tag == "__done__":
                     self._busy = False
                     self._run_btn.configure(state="normal", text=tr("run"))
-                    self._progress.stop()
-                    self._progress.set(0)
+                    if self._failed:
+                        # On failure, reset immediately — no celebratory 100%
+                        self._progress.stop()
+                        self._progress.configure(mode="indeterminate")
+                        self._progress.set(0)
+                        self._phase_label.configure(text="")
+                    else:
+                        # Emit a final log line for the last completed phase
+                        if self._last_phase:
+                            prev_done, prev_total = self._last_progress
+                            pct: int = int(prev_done / prev_total * 100) if prev_total > 0 else 100
+                            self._log.append(f"✓ {self._last_phase}: {pct}%", "success")
+                        # Freeze progress bar at 100% and show completion label briefly
+                        self._progress.stop()
+                        self._progress.configure(mode="determinate")
+                        self._progress.set(1)
+                        current_label = self._phase_label.cget("text")
+                        if current_label:
+                            self._phase_label.configure(text=f"✓ {current_label}")
+                        else:
+                            self._phase_label.configure(text="✓ " + tr("ok"))
+                        # Reset progress bar after a delay so the final 100% state is visible
+
+                        def _reset_progress() -> None:
+                            try:
+                                self._progress.stop()
+                                self._progress.configure(mode="indeterminate")
+                                self._progress.set(0)
+                                self._phase_label.configure(text="")
+                            except Exception:
+                                pass  # Widget may be destroyed during shutdown
+
+                        self._reset_after_id = self.after(3000, _reset_progress)
                 else:
                     self._log.append(text, tag)
         except queue.Empty:
             pass
         self.after(80, self._poll_log_queue)
+
+    def _drain_progress_events(self) -> None:
+        """Drain progress events from the progress queue and update widgets."""
+        try:
+            while True:
+                action, *args = self._progress_queue.get_nowait()
+                if action == "step":
+                    phase_name, done, total, _bytes_processed = args
+                    # Emit a log line when a phase completes (done reaches total)
+                    # or when the phase changes to a new one.
+                    if phase_name != self._last_phase and self._last_phase:
+                        prev_done, prev_total = self._last_progress
+                        pct: int = int(prev_done / prev_total * 100) if prev_total > 0 else 100
+                        self._emit(f"✓ {self._last_phase}: {pct}%", "success")
+                    self._last_phase = phase_name
+                    self._last_progress = (done, total)
+                    # Switch to determinate mode on first progress event
+                    if self._progress.cget("mode") != "determinate":
+                        self._progress.stop()
+                        self._progress.configure(mode="determinate")
+                        self._progress.set(0)
+                    if total > 0:
+                        ratio = done / total
+                    else:
+                        ratio = 0.0
+                    # Clamp ratio to [0.0, 1.0] to guard against out-of-range listener values
+                    ratio = max(0.0, min(1.0, ratio))
+                    self._progress.set(ratio)
+                    # Update phase label with the current operation name
+                    if phase_name:
+                        self._phase_label.configure(text=phase_name)
+                elif action == "status":
+                    (message,) = args
+                    self._phase_label.configure(text=message.strip())
+        except queue.Empty:
+            pass
 
     def _on_export_log(self) -> None:
         """Open a save dialog and write the current log content to a file."""
@@ -257,31 +373,57 @@ class BasePanel(ctk.CTkFrame):
 
             def write(self, s: str) -> int:
                 self._buf += s
+                # Process complete lines (delimited by \n). Within each line,
+                # \r means "overwrite the current line" so only the content
+                # after the last \r is kept — matching terminal semantics.
                 while "\n" in self._buf:
                     line, self._buf = self._buf.split("\n", 1)
+                    # \r overwrites: keep only what's after the last \r
+                    if "\r" in line:
+                        line = line.rsplit("\r", 1)[1]
                     stripped: str = line.rstrip()
                     if not stripped:
                         continue
                     lower: str = stripped.lower()
                     tag: str = ""
-                    if "error" in lower:
-                        tag = "error"
-                    elif "warning" in lower:
-                        tag = "warning"
-                    elif any(k in lower for k in ("done", "complete", "success", "\u2713")):
+                    # Match error prefix (❌ / ERROR ) not substring so "Errors: 0"
+                    # doesn't falsely set the failed flag on success.
+                    if lower.startswith(("\u2713", "done:", "complete:", "success:")):
                         tag = "success"
+                    elif lower.startswith("error ") or "\u274c" in stripped:
+                        tag = "error"
+                    elif lower.startswith("warn ") or "\u26a0" in stripped:
+                        tag = "warning"
                     self._tag_fn(stripped, tag)
                 return len(s)
 
             def flush(self) -> None:
-                pass
+                # Emit any remaining buffered content on flush so the final
+                # progress state appears in the log before completion.
+                if self._buf.strip():
+                    stripped: str = self._buf.rstrip()
+                    self._buf = ""
+                    lower: str = stripped.lower()
+                    tag: str = ""
+                    if lower.startswith(("\u2713", "done:", "complete:", "success:")):
+                        tag = "success"
+                    elif lower.startswith("error ") or "\u274c" in stripped:
+                        tag = "error"
+                    elif lower.startswith("warn ") or "\u26a0" in stripped:
+                        tag = "warning"
+                    self._tag_fn(stripped, tag)
 
         streamer: _Streamer = _Streamer(emit)
         original_input: Any = builtins.input
         exit_code: int = 0
+
+        # Install a context-local default listener for this execution.
+        # Using a ContextVar avoids a global swap race between threads.
+        token = _pbar.default_listener.set(self._queued_progress)
+
+        # Auto-confirm any "Overwrite? [Y/n]" prompts from the CLI.
+        builtins.input = lambda _prompt="": "y"
         try:
-            # Auto-confirm any "Overwrite? [Y/n]" prompts from the CLI.
-            builtins.input = lambda _prompt="": "y"
             with contextlib.redirect_stdout(streamer), contextlib.redirect_stderr(streamer):
                 exit_code = int(cli_mkpfs_main(args))
         except SystemExit as exc:
@@ -291,7 +433,7 @@ class BasePanel(ctk.CTkFrame):
             return
         finally:
             builtins.input = original_input
-
+            _pbar.default_listener.reset(token)
         self._emit("", "")
         if exit_code == 0:
             self._emit(tr("ok"), "success")
