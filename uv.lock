@@ -2,9 +2,12 @@ version = 1
 revision = 3
 requires-python = ">=3.9"
 resolution-markers = [
-    "python_full_version >= '3.10'",
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 
 [[package]]
@@ -21,8 +24,10 @@ name = "build"
 version = "1.4.4"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "colorama", marker = "python_full_version < '3.10' and os_name == 'nt'" },
@@ -41,7 +46,8 @@ name = "build"
 version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "colorama", marker = "python_full_version >= '3.10' and os_name == 'nt'" },
@@ -164,8 +170,10 @@ name = "cfgv"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/11/74/539e56497d9bd1d484fd863dd69cbbfa653cd2aa27abfe35653494d85e94/cfgv-3.4.0.tar.gz", hash = "sha256:e52591d4c5f5dead8e0f673fb16db7949d2cfb3f7da4582893288f0ded8fe560", size = 7114, upload-time = "2023-08-12T20:38:17.776Z" }
 wheels = [
@@ -177,7 +185,8 @@ name = "cfgv"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4e/b5/721b8799b04bf9afe054a3899c6cf4e880fcf8563cc71c15610242490a0c/cfgv-3.5.0.tar.gz", hash = "sha256:d5b1034354820651caa73ede66a6294d6e95c1b00acc5e9b098e917404669132", size = 7334, upload-time = "2025-11-19T20:55:51.612Z" }
 wheels = [
@@ -319,8 +328,10 @@ name = "coverage"
 version = "7.10.7"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/51/26/d22c300112504f5f9a9fd2297ce33c35f3d353e4aeb987c8419453b2a7c2/coverage-7.10.7.tar.gz", hash = "sha256:f4ab143ab113be368a3e9b795f9cd7906c5ef407d6173fe9675a902e1fffc239", size = 827704, upload-time = "2025-09-21T20:03:56.815Z" }
 wheels = [
@@ -439,7 +450,8 @@ name = "coverage"
 version = "7.14.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b4/91/0a7c28934e50d8ac9a7b117712d176f2953c3170bccced5eaacfa3e96175/coverage-7.14.3.tar.gz", hash = "sha256:1a7563a443f3d53fdeb040ec8c9f7466aed7ca3dc5891aa09d3ca3625fa4387f", size = 924398, upload-time = "2026-06-22T23:10:25.584Z" }
 wheels = [
@@ -545,7 +557,8 @@ name = "cryptography"
 version = "47.0.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version <= '3.9'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "cffi", marker = "python_full_version <= '3.9' and platform_python_implementation != 'PyPy'" },
@@ -608,8 +621,10 @@ name = "cryptography"
 version = "49.0.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
-    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "cffi", marker = "python_full_version > '3.9' and platform_python_implementation != 'PyPy'" },
@@ -721,8 +736,10 @@ name = "filelock"
 version = "3.19.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/40/bb/0ab3e58d22305b6f5440629d20683af28959bf793d98d11950e305c1c326/filelock-3.19.1.tar.gz", hash = "sha256:66eda1888b0171c998b35be2bcc0f6d75c388a7ce20c3f3f37aa8e96c2dddf58", size = 17687, upload-time = "2025-08-14T16:56:03.016Z" }
 wheels = [
@@ -734,7 +751,8 @@ name = "filelock"
 version = "3.29.4"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e6/dc/be6cbe99670cd6e4ad387123647cb08e0c32975e223f82551e914c5568a6/filelock-3.29.4.tar.gz", hash = "sha256:10cdb3656fc44541cdf30652a93fb10ec6b05325620eb316bd26893e4201538a", size = 63028, upload-time = "2026-06-13T16:12:00.744Z" }
 wheels = [
@@ -759,8 +777,10 @@ name = "identify"
 version = "2.6.15"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ff/e7/685de97986c916a6d93b3876139e00eef26ad5bbbd61925d670ae8013449/identify-2.6.15.tar.gz", hash = "sha256:e4f4864b96c6557ef2a1e1c951771838f4edc9df3a72ec7118b338801b11c7bf", size = 99311, upload-time = "2025-10-02T17:43:40.631Z" }
 wheels = [
@@ -772,7 +792,8 @@ name = "identify"
 version = "2.6.19"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/52/63/51723b5f116cc04b061cb6f5a561790abf249d25931d515cd375e063e0f4/identify-2.6.19.tar.gz", hash = "sha256:6be5020c38fcb07da56c53733538a3081ea5aa70d36a156f83044bfbf9173842", size = 99567, upload-time = "2026-04-17T18:39:50.265Z" }
 wheels = [
@@ -793,8 +814,10 @@ name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "zipp", version = "3.23.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -809,7 +832,8 @@ name = "importlib-metadata"
 version = "9.0.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "zipp", version = "4.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -824,8 +848,10 @@ name = "iniconfig"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f2/97/ebf4da567aa6827c909642694d71c9fcf53e5b504f2d96afea02718862f3/iniconfig-2.1.0.tar.gz", hash = "sha256:3abbd2e30b36733fee78f9c7f7308f2d0050e88f0087fd25c2645f63c773e1c7", size = 4793, upload-time = "2025-03-19T20:09:59.721Z" }
 wheels = [
@@ -837,7 +863,8 @@ name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc35312d08ba8bf51fdd999c576889fc2c24cb97f4f10/iniconfig-2.3.0.tar.gz", hash = "sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730", size = 20503, upload-time = "2025-10-18T21:55:43.219Z" }
 wheels = [
@@ -918,8 +945,10 @@ name = "jaraco-context"
 version = "6.1.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "backports-tarfile", marker = "python_full_version < '3.10'" },
@@ -934,7 +963,8 @@ name = "jaraco-context"
 version = "6.1.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "backports-tarfile", marker = "python_full_version >= '3.10' and python_full_version < '3.12'" },
@@ -949,8 +979,10 @@ name = "jaraco-functools"
 version = "4.4.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "more-itertools", version = "10.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -965,7 +997,8 @@ name = "jaraco-functools"
 version = "4.5.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "more-itertools", version = "11.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1011,8 +1044,10 @@ name = "markdown-it-py"
 version = "3.0.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "mdurl", marker = "python_full_version < '3.10'" },
@@ -1027,7 +1062,8 @@ name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "mdurl", marker = "python_full_version >= '3.10'" },
@@ -1053,7 +1089,7 @@ source = { editable = "." }
 dependencies = [
     { name = "cryptography", version = "47.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version <= '3.9'" },
     { name = "cryptography", version = "49.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version > '3.9'" },
-    { name = "isal", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "isal", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
     { name = "zlib-ng" },
 ]
 
@@ -1086,7 +1122,7 @@ dev = [
 requires-dist = [
     { name = "cryptography", specifier = ">=47.0.0" },
     { name = "customtkinter", marker = "extra == 'gui'", specifier = ">=5.2.0" },
-    { name = "isal", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'x86_64'", specifier = ">=1.0.0" },
+    { name = "isal", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'x86_64'", specifier = ">=1.0.0" },
     { name = "pillow", marker = "extra == 'gui'", specifier = ">=9.0.0" },
     { name = "zlib-ng", specifier = ">=0.5.1" },
 ]
@@ -1110,8 +1146,10 @@ name = "more-itertools"
 version = "10.8.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ea/5d/38b681d3fce7a266dd9ab73c66959406d565b3e85f21d5e66e1181d93721/more_itertools-10.8.0.tar.gz", hash = "sha256:f638ddf8a1a0d134181275fb5d58b086ead7c6a72429ad725c67503f13ba30bd", size = 137431, upload-time = "2025-09-02T15:23:11.018Z" }
 wheels = [
@@ -1123,7 +1161,8 @@ name = "more-itertools"
 version = "11.1.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/1d/f4da6f02cdffe04d6362210b807146a26044c88d839208aec273bb0d9184/more_itertools-11.1.0.tar.gz", hash = "sha256:48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d", size = 145772, upload-time = "2026-05-22T14:14:29.909Z" }
 wheels = [
@@ -1187,8 +1226,10 @@ name = "pillow"
 version = "11.3.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/0d/d0d6dea55cd152ce3d6767bb38a8fc10e33796ba4ba210cbab9354b6d238/pillow-11.3.0.tar.gz", hash = "sha256:3828ee7586cd0b2091b6209e5ad53e20d0649bbe87164a459d0676e035e8f523", size = 47113069, upload-time = "2025-07-01T09:16:30.666Z" }
 wheels = [
@@ -1304,7 +1345,8 @@ name = "pillow"
 version = "12.2.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8c/21/c2bcdd5906101a30244eaffc1b6e6ce71a31bd0742a01eb89e660ebfac2d/pillow-12.2.0.tar.gz", hash = "sha256:a830b1a40919539d07806aa58e1b114df53ddd43213d9c8b75847eee6c0182b5", size = 46987819, upload-time = "2026-04-01T14:46:17.687Z" }
 wheels = [
@@ -1405,8 +1447,10 @@ name = "platformdirs"
 version = "4.4.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/23/e8/21db9c9987b0e728855bd57bff6984f67952bea55d6f75e055c46b5383e8/platformdirs-4.4.0.tar.gz", hash = "sha256:ca753cf4d81dc309bc67b0ea38fd15dc97bc30ce419a7f58d13eb3bf14c4febf", size = 21634, upload-time = "2025-08-26T14:32:04.268Z" }
 wheels = [
@@ -1418,7 +1462,8 @@ name = "platformdirs"
 version = "4.10.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d7/47/e4501f49c178ae1d9f4a75073fda4204f52647993f075a9db4d14930e0c5/platformdirs-4.10.0.tar.gz", hash = "sha256:31e761a6a0ca04faf7353ea759bdba55652be214725111e5aac52dfa29d4bef7", size = 31224, upload-time = "2026-05-28T03:32:53.587Z" }
 wheels = [
@@ -1439,8 +1484,10 @@ name = "pre-commit"
 version = "4.3.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "cfgv", version = "3.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1459,7 +1506,8 @@ name = "pre-commit"
 version = "4.6.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "cfgv", version = "3.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1478,8 +1526,10 @@ name = "pycparser"
 version = "2.23"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fe/cf/d2d3b9f5699fb1e4615c8e32ff220203e43b248e1dfcc6736ad9057731ca/pycparser-2.23.tar.gz", hash = "sha256:78816d4f24add8f10a06d6f05b4d424ad9e96cfebf68a4ddc99c65c0720d00c2", size = 173734, upload-time = "2025-09-09T13:23:47.91Z" }
 wheels = [
@@ -1491,7 +1541,8 @@ name = "pycparser"
 version = "3.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1b/7d/92392ff7815c21062bea51aa7b87d45576f649f16458d78b7cf94b9ab2e6/pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29", size = 103492, upload-time = "2026-01-21T14:26:51.89Z" }
 wheels = [
@@ -1521,8 +1572,10 @@ name = "pytest"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "colorama", marker = "python_full_version < '3.10' and sys_platform == 'win32'" },
@@ -1543,7 +1596,8 @@ name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "colorama", marker = "python_full_version >= '3.10' and sys_platform == 'win32'" },
@@ -1677,8 +1731,10 @@ name = "readme-renderer"
 version = "44.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "docutils", marker = "python_full_version < '3.10'" },
@@ -1695,7 +1751,8 @@ name = "readme-renderer"
 version = "45.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "docutils", marker = "python_full_version >= '3.10'" },
@@ -1712,8 +1769,10 @@ name = "requests"
 version = "2.32.5"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "certifi", marker = "python_full_version < '3.10'" },
@@ -1731,7 +1790,8 @@ name = "requests"
 version = "2.34.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "certifi", marker = "python_full_version >= '3.10'" },
@@ -1810,8 +1870,10 @@ name = "secretstorage"
 version = "3.3.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "cryptography", version = "47.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version <= '3.9'" },
@@ -1828,7 +1890,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 dependencies = [
     { name = "cryptography", version = "49.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1931,8 +1994,10 @@ name = "urllib3"
 version = "2.6.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6661c76461e25f024d5a38a46f04aaca912426a2b1d3/urllib3-2.6.3.tar.gz", hash = "sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed", size = 435556, upload-time = "2026-01-07T16:24:43.925Z" }
 wheels = [
@@ -1944,7 +2009,8 @@ name = "urllib3"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
@@ -1974,8 +2040,10 @@ name = "zipp"
 version = "3.23.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version > '3.9' and python_full_version < '3.10'",
-    "python_full_version <= '3.9'",
+    "(python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'AMD64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'aarch64') or (python_full_version > '3.9' and python_full_version < '3.10' and platform_machine == 'x86_64')",
+    "python_full_version > '3.9' and python_full_version < '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "(python_full_version <= '3.9' and platform_machine == 'AMD64') or (python_full_version <= '3.9' and platform_machine == 'aarch64') or (python_full_version <= '3.9' and platform_machine == 'x86_64')",
+    "python_full_version <= '3.9' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/30/21/093488dfc7cc8964ded15ab726fad40f25fd3d788fd741cc1c5a17d78ee8/zipp-3.23.1.tar.gz", hash = "sha256:32120e378d32cd9714ad503c1d024619063ec28aad2248dc6672ad13edfa5110", size = 25965, upload-time = "2026-04-13T23:21:46.6Z" }
 wheels = [
@@ -1987,7 +2055,8 @@ name = "zipp"
 version = "4.1.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.10'",
+    "(python_full_version >= '3.10' and platform_machine == 'AMD64') or (python_full_version >= '3.10' and platform_machine == 'aarch64') or (python_full_version >= '3.10' and platform_machine == 'x86_64')",
+    "python_full_version >= '3.10' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b9/d8/eab98a517c14134c0b2eb4e2387bc5f457334293ec5d2dd3857ec2966802/zipp-4.1.0.tar.gz", hash = "sha256:4cb57381f544315db7688e976e922a2b18cdb513d21cc194eb42232ba2a3e602", size = 26214, upload-time = "2026-05-18T20:08:57.967Z" }
 wheels = [
