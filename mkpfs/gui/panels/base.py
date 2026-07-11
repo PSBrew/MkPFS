@@ -358,12 +358,14 @@ class BasePanel(ctk.CTkFrame):
                         continue
                     lower: str = stripped.lower()
                     tag: str = ""
-                    if "error" in lower:
-                        tag = "error"
-                    elif "warning" in lower:
-                        tag = "warning"
-                    elif any(k in lower for k in ("done", "complete", "success", "\u2713")):
+                    # Match error prefix (❌ / ERROR ) not substring so "Errors: 0"
+                    # doesn't falsely set the failed flag on success.
+                    if lower.startswith(("\u2713", "done:", "complete:", "success:")):
                         tag = "success"
+                    elif lower.startswith("error ") or "\u274c" in stripped:
+                        tag = "error"
+                    elif lower.startswith("warn ") or "\u26a0" in stripped:
+                        tag = "warning"
                     self._tag_fn(stripped, tag)
                 return len(s)
 
