@@ -61,6 +61,8 @@ class BasePanel(ctk.CTkFrame):
         """
         super().__init__(parent, fg_color="transparent")
         self._busy: bool = False
+        self._failed: bool = False
+        self._reset_after_id: str | None = None
         self._log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._accent: str = _PANEL_ACCENT.get(self._panel_key, _NEON_BLUE)
 
@@ -189,6 +191,11 @@ class BasePanel(ctk.CTkFrame):
         """Clear log and launch the background worker thread."""
         if self._busy:
             return
+        # Cancel any pending progress-bar reset from a previous completion
+        if self._reset_after_id is not None:
+            self.after_cancel(self._reset_after_id)
+            self._reset_after_id = None
+        self._failed = False
         self._log.clear()
         self._busy = True
         self._run_btn.configure(state="disabled", text=tr("running"))
@@ -213,13 +220,40 @@ class BasePanel(ctk.CTkFrame):
         try:
             while True:
                 tag, text = self._log_queue.get_nowait()
-                if tag == "__done__":
+                if tag == "error":
+                    self._failed = True
+                    self._log.append(text, tag)
+                elif tag == "__done__":
                     self._busy = False
                     self._run_btn.configure(state="normal", text=tr("run"))
-                    self._progress.stop()
-                    self._progress.configure(mode="indeterminate")
-                    self._progress.set(0)
-                    self._phase_label.configure(text="")
+                    if self._failed:
+                        # On failure, reset immediately — no celebratory 100%
+                        self._progress.stop()
+                        self._progress.configure(mode="indeterminate")
+                        self._progress.set(0)
+                        self._phase_label.configure(text="")
+                    else:
+                        # Freeze progress bar at 100% and show completion label briefly
+                        self._progress.stop()
+                        self._progress.configure(mode="determinate")
+                        self._progress.set(1)
+                        current_label = self._phase_label.cget("text")
+                        if current_label:
+                            self._phase_label.configure(text=f"✓ {current_label}")
+                        else:
+                            self._phase_label.configure(text="✓ " + tr("ok"))
+                        # Reset progress bar after a delay so the final 100% state is visible
+
+                        def _reset_progress() -> None:
+                            try:
+                                self._progress.stop()
+                                self._progress.configure(mode="indeterminate")
+                                self._progress.set(0)
+                                self._phase_label.configure(text="")
+                            except Exception:
+                                pass  # Widget may be destroyed during shutdown
+
+                        self._reset_after_id = self.after(3000, _reset_progress)
                 else:
                     self._log.append(text, tag)
         except queue.Empty:
@@ -232,7 +266,7 @@ class BasePanel(ctk.CTkFrame):
             while True:
                 action, *args = self._progress_queue.get_nowait()
                 if action == "step":
-                    _phase, done, total, _bytes_processed = args
+                    phase_name, done, total, _bytes_processed = args
                     # Switch to determinate mode on first progress event
                     if self._progress.cget("mode") != "determinate":
                         self._progress.stop()
@@ -240,6 +274,9 @@ class BasePanel(ctk.CTkFrame):
                         self._progress.set(0)
                     ratio = done / total if total > 0 else 0
                     self._progress.set(ratio)
+                    # Update phase label with the current operation name
+                    if phase_name:
+                        self._phase_label.configure(text=phase_name)
                 elif action == "status":
                     (message,) = args
                     self._phase_label.configure(text=message.strip())
