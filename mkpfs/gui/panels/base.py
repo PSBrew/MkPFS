@@ -10,6 +10,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ... import pbar as _pbar
 from ..i18n import tr
 from ..theme import (
     _BG_CARD,
@@ -21,9 +22,24 @@ from ..theme import (
 )
 from ..widgets import GlassCard, LogPane, NeonButton, SectionLabel
 
+
 # ---------------------------------------------------------------------------
 # Panel base class
 # ---------------------------------------------------------------------------
+class QueuedProgress:
+    """Adapter that forwards progress events to a queue for UI-thread polling.
+
+    Wired as ``default_listener`` so **every** Progress instance created during
+    an in-process build automatically pushes progress/status tuples to the
+    queue.  The panel's ``_poll_log_queue`` drains the queue and updates the
+    progress bar / phase label on the UI thread.
+    """
+
+    def __init__(self, q: queue.Queue) -> None:
+        self._q = q
+
+    def __call__(self, action: str, *args: Any) -> None:
+        self._q.put_nowait((action, *args))
 
 
 class BasePanel(ctk.CTkFrame):
@@ -85,7 +101,22 @@ class BasePanel(ctk.CTkFrame):
             corner_radius=4,
             height=4,
         )
-        self._progress.pack(fill="x", padx=24)
+        self._progress.pack(fill="x", padx=24, pady=(14, 2))
+
+        # Phase label shown between progress bar and log area
+        self._phase_label: ctk.CTkLabel = ctk.CTkLabel(
+            self,
+            text="",
+            font=_FONT_SMALL,
+            text_color=_NEON_BLUE,
+        )
+        self._phase_label.pack(anchor="w", padx=26, pady=(0, 4))
+
+        # Progress event queue — QueuedProgress is registered as the module-level
+        # listener so every background-phase Progress.step() / status() call
+        # pushes structured tuples here instead of writing \r-delimited stderr.
+        self._progress_queue: queue.Queue = queue.Queue()
+        self._queued_progress: QueuedProgress = QueuedProgress(self._progress_queue)
         self._progress.stop()
         self._progress.set(0)
 
@@ -175,6 +206,10 @@ class BasePanel(ctk.CTkFrame):
 
     def _poll_log_queue(self) -> None:
         """Drain the log queue and update the UI; reschedules itself."""
+        # Drain progress events (pbar listener)
+        self._drain_progress_events()
+
+        # Drain log messages
         try:
             while True:
                 tag, text = self._log_queue.get_nowait()
@@ -182,12 +217,34 @@ class BasePanel(ctk.CTkFrame):
                     self._busy = False
                     self._run_btn.configure(state="normal", text=tr("run"))
                     self._progress.stop()
+                    self._progress.configure(mode="indeterminate")
                     self._progress.set(0)
+                    self._phase_label.configure(text="")
                 else:
                     self._log.append(text, tag)
         except queue.Empty:
             pass
         self.after(80, self._poll_log_queue)
+
+    def _drain_progress_events(self) -> None:
+        """Drain progress events from the progress queue and update widgets."""
+        try:
+            while True:
+                action, *args = self._progress_queue.get_nowait()
+                if action == "step":
+                    _phase, done, total, _bytes_processed = args
+                    # Switch to determinate mode on first progress event
+                    if self._progress.cget("mode") != "determinate":
+                        self._progress.stop()
+                        self._progress.configure(mode="determinate")
+                        self._progress.set(0)
+                    ratio = done / total if total > 0 else 0
+                    self._progress.set(ratio)
+                elif action == "status":
+                    (message,) = args
+                    self._phase_label.configure(text=message.strip())
+        except queue.Empty:
+            pass
 
     def _on_export_log(self) -> None:
         """Open a save dialog and write the current log content to a file."""
@@ -278,8 +335,13 @@ class BasePanel(ctk.CTkFrame):
 
         streamer: _Streamer = _Streamer(emit)
         original_input: Any = builtins.input
+        original_listener: Any = _pbar.default_listener
         exit_code: int = 0
         try:
+            # Register the queue-based listener so every Progress.step() /
+            # status() call inside pfs.py pushes structured data for the UI.
+            _pbar.default_listener = self._queued_progress
+
             # Auto-confirm any "Overwrite? [Y/n]" prompts from the CLI.
             builtins.input = lambda _prompt="": "y"
             with contextlib.redirect_stdout(streamer), contextlib.redirect_stderr(streamer):
@@ -291,6 +353,7 @@ class BasePanel(ctk.CTkFrame):
             return
         finally:
             builtins.input = original_input
+            _pbar.default_listener = original_listener
 
         self._emit("", "")
         if exit_code == 0:

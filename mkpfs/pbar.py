@@ -10,6 +10,11 @@ import time
 
 from .utils import human_readable_size
 
+# Module-level progress listener hook.
+# When set by the GUI, every Progress instance forwards structured
+# ``(action, phase, ...)`` tuples on each ``step()`` / ``status()`` call.
+default_listener: callable | None = None
+
 
 class Progress:
     """Simple terminal progress helper used by CLI build flows.
@@ -22,13 +27,18 @@ class Progress:
         width: Width of the visual progress bar in characters.
     """
 
-    def __init__(self, enabled: bool = True, width: int = 32) -> None:
+    def __init__(self, enabled: bool = True, width: int = 32, listener: callable | None = None) -> None:
         self.enabled: bool = enabled
         self.width: int = width
+        self.listener: callable | None = listener
         self.last_phase: str | None = None
         self.phase_start_time: dict[str, float] = {}
-        self.phase_bytes: dict[str, int] = {}  # Track bytes processed per phase
-        self.phase_last_len: dict[str, int] = {}  # Track last written line length per phase
+        self.phase_bytes: dict[str, int] = {}
+        self.phase_last_len: dict[str, int] = {}
+
+        # Wire module-level listener if present.
+        if default_listener is not None and self.listener is None:
+            self.listener = default_listener
 
     def step(self, phase: str, done: int, total: int, bytes_processed: int = 0) -> None:
         """Update progress for a named phase.
@@ -41,10 +51,19 @@ class Progress:
             bytes_processed: Optional number of bytes processed; when provided
                 the progress will display byte-based throughput and ETA.
         """
+        # Fire structured listener (GUI) before the enabled check so progress
+        # reaches the GUI even when the terminal progress is active.
+        if self.listener:
+            self.listener("step", phase, done, total, bytes_processed)
+
         if not self.enabled:
             return
 
-        # Initialize phase tracking if needed
+        # Suppress \r-delimited terminal writes when a GUI listener is active
+        # so the log pane doesn't accumulate incremental progress lines.
+        if self.listener:
+            return
+
         if phase not in self.phase_start_time:
             self.phase_start_time[phase] = time.time()
             self.phase_bytes[phase] = 0
@@ -99,6 +118,10 @@ class Progress:
         This always writes to stderr so CLI output and progress remain separate
         from normal stdout usage.
         """
+        # Fire structured listener (GUI).
+        if self.listener:
+            self.listener("status", message)
+
         if not self.enabled:
             return
         sys.stderr.write(message + "\n")
