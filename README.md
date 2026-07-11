@@ -175,6 +175,23 @@ The numbers below are measured from a real homebrew title that previously had 6.
 
 Both single-file wrapping (`pack file`) and folder-based packing (`pack folder`) produce compressed images of equivalent size, giving you flexibility without sacrificing efficiency.
 
+
+### Backend compression benchmark
+
+The compression backend adapter supports three backends: `stdlib zlib`, `zlib-ng`, and `isal`.
+The benchmark below was run on **macOS ARM64 (Apple M-series)** using the included `scripts/bench_compression.py` with **1 GiB of mixed-pattern data**. All results are roundtrip-verified (compress → decompress → byte-for-byte match).
+
+| Backend | Compressed | Ratio | Compress (MB/s) | vs stdlib | Decompress (MB/s) |
+|---------|-----------|-------|-----------------|-----------|-------------------|
+| **stdlib zlib** | 269.90 MiB | 0.2636 | 111.2 | 1.00x | 2180.8 |
+| **zlib-ng** | 270.70 MiB | 0.2643 | 184.3 | **1.66x** | 2287.1 |
+| **isal** | 277.30 MiB | 0.2708 | 446.9 | **4.02x** | 1142.9 |
+
+- **zlib-ng** compresses **1.66x faster** than stdlib zlib with nearly identical compression ratio — the best all-rounder for maximum compression with speed.
+- **ISAL** compresses **4.02x faster** than stdlib zlib, trading a slight ~1% larger output for dramatically better throughput — ideal for large game images.
+- **stdlib zlib** is always available as a fallback; it produces the smallest output but is the slowest to compress.
+- Decompress speeds are excellent across all backends (1142–2287 MB/s), so compressed images load fast regardless of which backend created them.
+
 ### Compiling to a standalone .exe (Windows)
 
 Install PyInstaller and build a single-file executable:

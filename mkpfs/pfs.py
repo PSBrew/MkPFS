@@ -19,6 +19,7 @@ import struct
 import subprocess
 import time
 import uuid
+import zlib as _zlib
 from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -30,8 +31,8 @@ from pathlib import Path
 from typing import BinaryIO, Protocol
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from zlib_ng import zlib_ng as zlib
 
+from . import compression as comp
 from . import consts
 from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
 from .exfat_writer import iter_exfat_image
@@ -48,6 +49,8 @@ from .utils import (
     resolve_temp_root,
 )
 
+# Keep a legacy module alias for tests/callers that expect pfs.zlib
+zlib = _zlib
 DEFAULT_MKPFS_PFSC_WINDOW_FACTOR: int = 8
 PFSC_PROGRESS_REPORT_BYTES: int = consts.PFSC_LOGICAL_BLOCK_SIZE * 16
 PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE: int = 256 * 1024 * 1024
@@ -1213,6 +1216,9 @@ def _init_pfsc_block_worker_for_pool(source_path: Path) -> None:
         source_path: Source file path shared by all block jobs in the pool.
     """
     _init_pfsc_block_worker(source_path=source_path)
+    # Ensure compression backend in child process matches the parent selection.
+    with suppress(Exception):
+        comp.init_worker(comp.get_backend_name())
 
 
 def _read_pfsc_block_from_worker_handle(*, block_offset: int, logical_block_size: int) -> bytes:
@@ -1274,7 +1280,7 @@ def _compress_pfsc_block_lengths_worker(args: tuple[int, int, int]) -> tuple[int
         logical_block_size=logical_block_size,
     )
     padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-    compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+    compressed_chunk: bytes = comp.compress_block(padded_chunk, level=zlib_level)
     return len(raw_chunk), len(compressed_chunk)
 
 
@@ -1298,7 +1304,7 @@ def _compress_pfsc_block_payload_worker(
         logical_block_size=logical_block_size,
     )
     padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-    compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+    compressed_chunk: bytes = comp.compress_block(padded_chunk, level=zlib_level)
     return raw_chunk, compressed_chunk
 
 
@@ -1345,7 +1351,7 @@ def _analyze_pfsc_file_storage(
             for _idx in range(block_count):
                 chunk: bytes = source_file.read(logical_block_size)
                 padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
-                compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+                compressed_chunk: bytes = comp.compress_block(padded_chunk, level=zlib_level)
                 all_compressed_size += len(compressed_chunk)
                 gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
                 if _should_store_pfsc_block_compressed(
@@ -1490,7 +1496,7 @@ def _encode_pfsc_stream_into_handle(
 
     def _compress(raw_block: bytes) -> tuple[int, bytes, bytes]:
         padded: bytes = raw_block.ljust(logical_block_size, b"\x00")
-        return len(raw_block), padded, zlib.compress(padded, level=zlib_level)
+        return len(raw_block), padded, comp.compress_block(padded, level=zlib_level)
 
     def _write(result: tuple[int, bytes, bytes]) -> None:
         nonlocal all_compressed_size, emitted_blocks
@@ -1603,7 +1609,7 @@ def _encode_pfsc_into_handle(
             for _idx in range(block_count):
                 chunk: bytes = source_file.read(logical_block_size)
                 padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
-                compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+                compressed_chunk: bytes = comp.compress_block(padded_chunk, level=zlib_level)
                 all_compressed_size += len(compressed_chunk)
                 gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
                 store_compressed: bool = _should_store_pfsc_block_compressed(
@@ -2314,8 +2320,8 @@ def _decode_pfsc_block(stored_block: bytes, logical_block_size: int, idx: int) -
         return stored_block
     if len(stored_block) < logical_block_size:
         try:
-            logical_block: bytes = zlib.decompress(stored_block)
-        except zlib.error as exc:
+            logical_block: bytes = comp.decompress_block(stored_block)
+        except (comp.CompressionError, _zlib.error) as exc:
             raise ValueError(f"PFSC block {idx} failed to decompress: {exc}") from exc
         if len(logical_block) != logical_block_size:
             raise ValueError(
@@ -5764,7 +5770,7 @@ def verify_file_payload_hashes(
         try:
             for chunk in iter_inode_logical_blocks(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt):
                 file_hash.update(chunk)
-                cumulative_crc = zlib.crc32(chunk, cumulative_crc) & 0xFFFFFFFF
+                cumulative_crc = _zlib.crc32(chunk, cumulative_crc) & 0xFFFFFFFF
                 file_len += len(chunk)
                 processed += len(chunk)
                 if progress is not None and processed - last_reported >= update_interval:
@@ -6507,7 +6513,7 @@ class _LogicalFileView:
             return cached
         start: int = self._offsets[index]
         stored: bytes = self._raw(self._base + start, self._offsets[index + 1] - start)
-        block: bytes = stored if len(stored) == self._lbs else zlib.decompress(stored)
+        block: bytes = stored if len(stored) == self._lbs else comp.decompress_block(stored)
         self._cache[index] = block
         self._order.append(index)
         if len(self._order) > self._CACHE_BLOCKS:

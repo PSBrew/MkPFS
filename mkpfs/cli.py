@@ -794,6 +794,13 @@ def cli_mkpfs_add_create_args(
         help="Zlib compression level (0-9, default: 7)",
     )
     parser.add_argument(
+        "--compression-backend",
+        choices=("auto", "zlib-ng", "zlib", "isal"),
+        default="auto",
+        help="Compression backend to use for PFSC block compression (default: auto — isal > zlib-ng > zlib)",
+    )
+
+    parser.add_argument(
         "--max-compressed-ratio",
         type=int,
         default=100,
@@ -2294,6 +2301,18 @@ def cli_mkpfs_main(argv: list[str] | None = None) -> int:
 
     normalized_argv: list[str] | None = normalize_cli_argv_for_pack_compat(argv)
     args = parser.parse_args(normalized_argv)
+
+    # Configure compression backend when supplied by pack subcommands.
+    if hasattr(args, "compression_backend"):
+        # Import locally to avoid top-level circular import with pfs module.
+        from . import compression as comp
+
+        try:
+            comp.set_backend(args.compression_backend)
+        except Exception as exc:
+            error(f"Unable to select compression backend '{getattr(args, 'compression_backend', None)}': {exc}")
+            return 2
+
     return int(args.func(args))
 
 
