@@ -790,8 +790,8 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--compression-level",
         type=int,
-        default=9,
-        help="Zlib compression level (0-9, default: 9)",
+        default=7,
+        help="Zlib compression level (0-9, default: 7)",
     )
     parser.add_argument(
         "--max-compressed-ratio",
