@@ -1475,7 +1475,12 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     # Generate the AMPR emulation index into the source tree before packing so it
     # is included in the image (only when an emulation build marker is present).
     if not args.dry_run:
-        ensure_ampr_index(source_path, enabled=bool(getattr(args, "ampr_index", True)))
+        ensure_ampr_index(
+            source_path,
+            enabled=bool(getattr(args, "ampr_index", True)),
+            create_if_missing=bool(getattr(args, "ampr_skip_regen_if_exists", False)),
+            force_regen=bool(getattr(args, "ampr_force_regen", False)),
+        )
 
     # Default: wrap the folder in an exFAT and compress it into the .ffpfsc in one
     # pass, with no temporary .exfat. Use --raw to pack the folder directly as PFS.
@@ -2053,6 +2058,20 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         action="store_false",
         default=True,
         help="Do not generate ampr_emu.index even when fakelib/libSceAmpr.sprx is present",
+    )
+    folder_parser.add_argument(
+        "--ampr-skip-regen-if-exists",
+        dest="ampr_skip_regen_if_exists",
+        action="store_true",
+        default=False,
+        help="If AMPR generation is enabled, validate and skip regen when a valid index exists",
+    )
+    folder_parser.add_argument(
+        "--ampr-force-regen",
+        dest="ampr_force_regen",
+        action="store_true",
+        default=False,
+        help="Force AMPR index regeneration even when an existing index is present",
     )
     folder_parser.set_defaults(func=cli_mkpfs_create_run)
 

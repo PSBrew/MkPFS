@@ -213,7 +213,110 @@ def build_ampr_index(root: Path, output_path: Path) -> int:
     return len(rows)
 
 
-def ensure_ampr_index(source_root: Path, *, enabled: bool = True) -> Path | None:
+def validate_ampr_index(index_path: Path, source_root: Path) -> bool:
+    """Validate an existing AMPR index file against the current source tree.
+
+    Performs header sanity checks (magic, version, bounds) plus a lightweight
+    row-count comparison against the source tree. The count-only walk is
+    substantially cheaper than :func:`build_ampr_index` because it avoids
+    per-file ``stat`` for size/mtime, sorting, path encoding, and hash-table
+    building.
+
+    Args:
+        index_path: Path to the ``ampr_emu.index`` file.
+        source_root: Source tree the index is expected to represent.
+
+    Returns:
+        ``True`` when the index passes validation, ``False`` otherwise.
+    """
+    if not index_path.is_file():
+        return False
+    try:
+        data: bytes = index_path.read_bytes()
+    except OSError:
+        return False
+
+    if len(data) < HEADER_STRUCT.size:
+        return False
+
+    (magic, version, record_size, num_rows, path_blob_len, hash_offset, hash_slot_size, num_hash_slots) = (
+        HEADER_STRUCT.unpack_from(data, 0)
+    )
+
+    if magic != _AMPR_MAGIC or version != _AMPR_VERSION:
+        return False
+    if record_size != RECORD_STRUCT.size:
+        return False
+    if num_rows <= 0 or path_blob_len <= 0:
+        return False
+    if hash_slot_size != HASH_SLOT_STRUCT.size:
+        return False
+    if num_hash_slots <= 0:
+        return False
+    # Verify hash_offset is past the records+path blob region (structural layout
+    # consistency).  A corrupted header with a hash_offset that falls inside the
+    # records or path-blob area would otherwise pass the bounds check above.
+    records_end: int = HEADER_STRUCT.size + num_rows * record_size
+    path_end: int = records_end + path_blob_len
+    if hash_offset < path_end:
+        return False
+    if hash_offset % hash_slot_size != 0:
+        return False
+    expected_tail: int = hash_offset + num_hash_slots * hash_slot_size
+    if len(data) < expected_tail:
+        return False
+
+    # Count indexable files for a lightweight staleness check against
+    # the recorded row count.  This mirrors what ``build_ampr_index``
+    # indexes without the per-file stat/sort/encoding overhead.
+    live_count: int = 0
+    seen_keys: set[str] = set()
+    try:
+        resolved_index: Path = index_path.resolve()
+        resolved_tmp: Path = index_path.with_suffix(index_path.suffix + ".tmp").resolve()
+        index_name_key: str = ampr_key_for(f"/app0/{AMPR_INDEX_NAME}")
+        index_tmp_key: str = ampr_key_for(f"/app0/{AMPR_INDEX_NAME}.tmp")
+        for dirpath, dirnames, filenames in os.walk(source_root):
+            dirnames[:] = sorted((d for d in dirnames if not is_ignored_name(d)), key=str.lower)
+            for filename in filenames:
+                if is_ignored_name(filename):
+                    continue
+                path: Path = Path(dirpath) / filename
+                try:
+                    resolved: Path = path.resolve()
+                except OSError:
+                    continue
+                if resolved in (resolved_index, resolved_tmp):
+                    continue
+                if not resolved.is_file():
+                    continue
+                # Also skip any file whose indexed path key matches the index
+                # name (mirrors build's ampr_key_for check at L155-156).
+                try:
+                    key_rel: str = path.relative_to(source_root).as_posix()
+                    key_candidate: str = ampr_key_for(f"/app0/{key_rel}")
+                except ValueError:
+                    continue
+                if key_candidate in (index_name_key, index_tmp_key):
+                    continue
+                if key_candidate in seen_keys:
+                    continue  # case-insensitive collision, keep first
+                seen_keys.add(key_candidate)
+                live_count += 1
+    except OSError:
+        return False
+
+    return live_count == num_rows
+
+
+def ensure_ampr_index(
+    source_root: Path,
+    *,
+    enabled: bool = True,
+    create_if_missing: bool = False,
+    force_regen: bool = False,
+    validate: bool = True,
+) -> Path | None:
     """Generate ``ampr_emu.index`` in ``source_root`` when an emulation build needs it.
 
     Regenerates the index whenever enabled and the marker ``fakelib/libSceAmpr.sprx``
@@ -221,9 +324,20 @@ def ensure_ampr_index(source_root: Path, *, enabled: bool = True) -> Path | None
     so it always refreshes the index to match the current tree rather than trusting a
     possibly stale existing file. When disabled, any existing index is left untouched.
 
+    With ``create_if_missing=True``, generation is skipped when a valid index already
+    exists, making repeated builds faster. Pass ``force_regen=True`` to override this
+    and always rebuild. The ``validate`` parameter controls whether an existing index
+    is sanity-checked before skipping.
+
     Args:
         source_root: Source tree to index and write into.
         enabled: When False, do nothing (preserving any existing index).
+        create_if_missing: When True, skip regeneration if a valid index file exists.
+        force_regen: When True, always regenerate even when ``create_if_missing`` is set.
+        validate: When True (default) and ``create_if_missing`` is active, perform a
+            lightweight validation (header sanity + row-count comparison) on the
+            existing index before skipping.
+
 
     Returns:
         The index path when generated, otherwise ``None``.
@@ -233,6 +347,13 @@ def ensure_ampr_index(source_root: Path, *, enabled: bool = True) -> Path | None
     index_path: Path = source_root / AMPR_INDEX_NAME
     if not (source_root / AMPR_FAKELIB_MARKER).exists():
         return None
+
+    # Skip regeneration when an existing index is valid and caller opted in.
+    if create_if_missing and not force_regen and index_path.exists():
+        if not validate or validate_ampr_index(index_path, source_root):
+            info(f"{AMPR_INDEX_NAME} valid and present; skipping generation (create_if_missing)")
+            return None
+        warning(f"{AMPR_INDEX_NAME} failed validation; regenerating...")
 
     info(f"Detected {AMPR_FAKELIB_MARKER.as_posix()}; generating {AMPR_INDEX_NAME}...")
     try:

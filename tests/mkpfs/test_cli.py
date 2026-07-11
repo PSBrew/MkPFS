@@ -2695,6 +2695,59 @@ class TestCliAmprIndex(CliTestCase):
         self.assertFalse((source / "ampr_emu.index").exists())
         self.assertFalse((dest / "ampr_emu.index").exists())
 
+    def test_skip_regen_if_exists_keeps_valid_index(self) -> None:
+        """--ampr-skip-regen-if-exists does not regenerate a valid existing index."""
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        # Pre-generate the index so it already exists and is valid.
+        from mkpfs.ampr import build_ampr_index
+
+        pre_idx: Path = source / "ampr_emu.index"
+        build_ampr_index(source, pre_idx)
+        pre_mtime: int = pre_idx.stat().st_mtime_ns
+        rc: int = self._pack_unpack(source, out, dest, extra=["--ampr-skip-regen-if-exists"])
+        self.assertEqual(rc, 0)
+        # Mtime unchanged means the index was not regenerated.
+        self.assertEqual(pre_idx.stat().st_mtime_ns, pre_mtime)
+
+    def test_skip_regen_does_not_conflict_with_no_ampr_index(self) -> None:
+        """--no-ampr-index overrides --ampr-skip-regen-if-exists."""
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        rc: int = self._pack_unpack(source, out, dest, extra=["--no-ampr-index", "--ampr-skip-regen-if-exists"])
+        self.assertEqual(rc, 0)
+        self.assertFalse((source / "ampr_emu.index").exists())
+
+    def test_force_regen_overrides_skip_regen(self) -> None:
+        """--ampr-force-regen paired with --ampr-skip-regen-if-exists rebuilds."""
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        from mkpfs.ampr import build_ampr_index
+
+        pre_idx: Path = source / "ampr_emu.index"
+        build_ampr_index(source, pre_idx)
+        pre_bytes: bytes = pre_idx.read_bytes()
+        # Change file content (not count) so the validator still passes.
+        # Without --force-regen, --skip-regen keeps the old index since
+        # row count matches.  With --force-regen, the index is rebuilt
+        # and content differs because the mtime changed.
+        (source / "data.bin").write_bytes(b"PAYLOAD" * 2000)
+        rc: int = self._pack_unpack(
+            source,
+            out,
+            dest,
+            extra=["--ampr-skip-regen-if-exists", "--ampr-force-regen"],
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(pre_idx.exists())
+        self.assertNotEqual(pre_idx.read_bytes(), pre_bytes)
+
 
 class TestCliPackExfat(CliTestCase):
     """`pack exfat` builds a raw exFAT image from a folder, cross-platform."""

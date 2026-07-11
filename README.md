@@ -285,6 +285,8 @@ mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 | `--ekpfs-key EKPFS_KEY`                       | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key.                                                                                                                                                       |
 | `--require-game-files`                        | Require `sce_sys/param.json` and `eboot.bin` before packing.                                                                                                                                                                                  |
 | `--no-ampr-index`                             | Do not generate `ampr_emu.index` even when `fakelib/libSceAmpr.sprx` is present.                                                                                                                                                              |
+| `--ampr-force-regen`                          | Force AMPR index regeneration even when a valid index already exists. Overrides `--ampr-skip-regen-if-exists`.                                                                |
+| `--ampr-skip-regen-if-exists`                 | If AMPR generation is enabled, validate and skip regeneration when a valid `ampr_emu.index` already exists.                                                                    |
 | `--temp-folder TEMP_FOLDER`                   | Directory used for temporary pack artifacts, including the one-file staging tree and PFSC spool files. Default: the system temp folder.                                                                                                       |
 | `--verbose`                                   | Print verbose per-file decisions during packing.                                                                                                                                                                                              |
 | `--dry-run`                                   | Scan, layout, and report only. Do not write an image file.                                                                                                                                                                                    |
@@ -294,7 +296,7 @@ Notes:
 
 - Folder output names are adjusted automatically by default.
 - MkPFS chooses `.ffpfs` when `sce_sys/param.json` exposes a title ID, otherwise it falls back to `.ffpfsc`.
-- When the source folder contains `fakelib/libSceAmpr.sprx`, MkPFS regenerates an `ampr_emu.index` in the folder before packing so it is included in the image and stays in sync with the current files. The rebuild is metadata-only and inexpensive. Use `--no-ampr-index` to skip it and preserve any existing index.
+- When the source folder contains `fakelib/libSceAmpr.sprx`, MkPFS generates an `ampr_emu.index` in the folder before packing so it is included in the image and stays in sync with the current files. The rebuild is metadata-only and inexpensive. Use `--no-ampr-index` to skip it entirely. Use `--ampr-skip-regen-if-exists` to validate a pre-existing index and skip regeneration when it is still current. Use `--ampr-force-regen` to force regeneration even when a valid index exists.
 - OS-generated metadata is never packed: macOS entries (`.DS_Store`, `._*`, `__MACOSX`, `.Spotlight-V100`, ...) and Windows entries (`Thumbs.db`, `desktop.ini`, `$RECYCLE.BIN`, ...) are skipped during scanning and excluded from the AMPR index.
 - `--ekpfs-key` is only meaningful when used with `--encrypted`.
 

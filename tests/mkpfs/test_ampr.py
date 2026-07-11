@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -169,8 +170,168 @@ class TestEnsureAmprIndex(AmprTestCase):
         self.assertEqual(index.read_bytes(), b"keep-me")
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestValidateAmprIndex(AmprTestCase):
+    """validate_ampr_index must detect stale, truncated, and mangled indices."""
+
+    def _make_tree(self, root: Path) -> None:
+        (root / "sub").mkdir(parents=True)
+        (root / "a.txt").write_bytes(b"hello")
+        (root / "sub" / "b.bin").write_bytes(b"x" * 1000)
+
+    def _seed(self, root: Path) -> None:
+        self._make_tree(root)
+        (root / "fakelib").mkdir(parents=True)
+        (root / "fakelib" / "libSceAmpr.sprx").write_bytes(b"\x00")
+
+    def test_valid_index_passes(self) -> None:
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        self.assertTrue(ampr.validate_ampr_index(idx, root))
+
+    def test_missing_index_fails(self) -> None:
+        root = self.make_temp_path()
+        idx: Path = root / "ampr_emu.index"
+        self.assertFalse(ampr.validate_ampr_index(idx, root))
+
+    def test_truncated_index_fails(self) -> None:
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        truncated: bytes = idx.read_bytes()[:32]
+        idx.write_bytes(truncated)
+        self.assertFalse(ampr.validate_ampr_index(idx, root))
+
+    def test_bad_magic_fails(self) -> None:
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        data: bytearray = bytearray(idx.read_bytes())
+        data[:4] = b"BAD\x00"
+        idx.write_bytes(data)
+        self.assertFalse(ampr.validate_ampr_index(idx, root))
+
+    def test_missing_file_fails(self) -> None:
+        """Row count mismatch when a previously-indexed file is removed."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        (root / "sub" / "b.bin").unlink()
+        self.assertFalse(ampr.validate_ampr_index(idx, root))
+
+    def test_new_file_fails(self) -> None:
+        """Row count mismatch when a file is added after the index was built."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        (root / "c.dat").write_bytes(b"new")
+        self.assertFalse(ampr.validate_ampr_index(idx, root))
+
+    def test_excludes_index_self_from_count(self) -> None:
+        """Live count must exclude the index file itself, even when inside the tree."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        # The index lives inside source_root at its default location.
+        # Validator walks the tree, finds the index, but excludes it from counting.
+        # If it didn't exclude it, live_count would be 3 instead of 2 (num_rows).
+        self.assertTrue(ampr.validate_ampr_index(idx, root))
+        # Now add a new file that changes the live count; validator should catch it.
+        (root / "extra.dat").write_bytes(b"more")
+        self.assertFalse(ampr.validate_ampr_index(idx, root))
+
+    def test_case_collision_dedup(self) -> None:
+        """Files differing only in case are counted once, matching build."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        # Add a case-colliding file — build would skip it, so index still
+        # has 2 rows; validate must count 2 as well.
+        (root / "A.txt").write_bytes(b"COLLISION")
+        self.assertTrue(ampr.validate_ampr_index(idx, root))
+
+    def test_corrupt_hash_offset_too_small(self) -> None:
+        """hash_offset inside records+path blob fails validation."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        data: bytearray = bytearray(idx.read_bytes())
+        # hash_offset is the 6th field (Q) in the 48-byte header, at offset 32.
+        # Set it inside the records region to trigger the structural check.
+        struct.pack_into("<Q", data, 32, 48)  # 48 = end of header, before any records
+        idx.write_bytes(bytes(data))
+        self.assertFalse(ampr.validate_ampr_index(idx, root))
+
+
+class TestEnsureAmprIndexCreateIfMissing(AmprTestCase):
+    """create_if_missing and force_regen control skip vs. rebuild."""
+
+    def _seed(self, root: Path) -> None:
+        (root / "a.txt").write_bytes(b"data")
+        (root / "fakelib").mkdir(parents=True)
+        (root / "fakelib" / "libSceAmpr.sprx").write_bytes(b"\x00")
+
+    def test_create_if_missing_skips_when_valid(self) -> None:
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)  # fresh valid index
+        # With create_if_missing=True and a valid index, ensure_ampr_index
+        # should skip regeneration and return None.
+        original: bytes = idx.read_bytes()
+        result = ampr.ensure_ampr_index(root, create_if_missing=True)
+        self.assertIsNone(result)
+        self.assertEqual(idx.read_bytes(), original)  # untouched
+
+    def test_force_regen_overrides_create_if_missing(self) -> None:
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)  # existing valid index
+        result = ampr.ensure_ampr_index(root, create_if_missing=True, force_regen=True)
+        self.assertEqual(result, idx)  # regenerated, not None
+        # The new index may differ (mtime changes), so just check it's a valid AMPRIDX3
+        self.assertEqual(idx.read_bytes()[:8], b"AMPRIDX3")
+
+    def test_stale_index_rebuilds(self) -> None:
+        """A stale index (file removed) is regenerated even with create_if_missing."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        (root / "a.txt").unlink()  # index is now stale
+        result = ampr.ensure_ampr_index(root, create_if_missing=True)
+        self.assertEqual(result, idx)  # regenerated
+
+    def test_validate_false_skips_check(self) -> None:
+        """With validate=False, a corrupt index is not validated and skip proceeds."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        # Corrupt the index
+        idx.write_bytes(b"garbage")
+        # With validate=False and create_if_missing=True, skip without checking
+        result = ampr.ensure_ampr_index(root, create_if_missing=True, validate=False)
+        self.assertIsNone(result)
+        self.assertEqual(idx.read_bytes(), b"garbage")  # untouched
+
+    def test_create_if_missing_no_index_builds(self) -> None:
+        """With create_if_missing=True and no existing index, always build."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        result = ampr.ensure_ampr_index(root, create_if_missing=True)
+        self.assertEqual(result, idx)
+        self.assertTrue(idx.exists())
 
 
 class TestAmprExcludesOsMetadata(AmprTestCase):
@@ -190,3 +351,7 @@ class TestAmprExcludesOsMetadata(AmprTestCase):
         self.assertNotIn(b"DS_Store", blob)
         self.assertNotIn(b"MACOSX", blob)
         self.assertNotIn(b"._data", blob)
+
+
+if __name__ == "__main__":
+    unittest.main()
