@@ -15,7 +15,7 @@ def make_icon(src: Path, out: Path, sizes: Sequence[tuple[int, int]]) -> None:
     """Read PNG from src and write an ICO file to out containing the sizes."""
     try:
         from PIL import Image
-    except Exception as exc:  # pragma: no cover - runtime dependency
+    except ImportError as exc:  # pragma: no cover - runtime dependency
         print("Pillow not available:", exc, file=sys.stderr)
         raise
 
