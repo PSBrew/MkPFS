@@ -116,7 +116,9 @@ class Progress:
         """Print a status message without progress bar.
 
         This always writes to stderr so CLI output and progress remain separate
-        from normal stdout usage.
+        from normal stdout usage.  When a GUI listener is active the terminal
+        write is suppressed — the listener already routes the message to the
+        UI thread via ``_progress_queue``.
         """
         # Fire structured listener (GUI).
         if self.listener:
@@ -124,5 +126,11 @@ class Progress:
 
         if not self.enabled:
             return
+
+        # Suppress terminal write when a GUI listener is active so the log
+        # pane doesn't get a duplicate of every status line.
+        if self.listener:
+            return
+
         sys.stderr.write(message + "\n")
         sys.stderr.flush()
