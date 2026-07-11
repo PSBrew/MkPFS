@@ -2722,8 +2722,8 @@ class TestCliAmprIndex(CliTestCase):
         self.assertEqual(rc, 0)
         self.assertFalse((source / "ampr_emu.index").exists())
 
-    def test_force_regen_regenerates_existing_index(self) -> None:
-        """--ampr-force-regen replaces a pre-existing valid index."""
+    def test_force_regen_overrides_skip_regen(self) -> None:
+        """--ampr-force-regen paired with --ampr-skip-regen-if-exists rebuilds."""
         tmp_path: Path = self.make_temp_path()
         source: Path = self._make_emu_source(tmp_path)
         out: Path = tmp_path / "game.ffpfs"
@@ -2732,11 +2732,21 @@ class TestCliAmprIndex(CliTestCase):
 
         pre_idx: Path = source / "ampr_emu.index"
         build_ampr_index(source, pre_idx)
-        pre_mtime: float = pre_idx.stat().st_mtime_ns
-        rc: int = self._pack_unpack(source, out, dest, extra=["--ampr-force-regen"])
+        pre_bytes: bytes = pre_idx.read_bytes()
+        # Change file content (not count) so the validator still passes.
+        # Without --force-regen, --skip-regen keeps the old index since
+        # row count matches.  With --force-regen, the index is rebuilt
+        # and content differs because the mtime changed.
+        (source / "data.bin").write_bytes(b"PAYLOAD" * 2000)
+        rc: int = self._pack_unpack(
+            source,
+            out,
+            dest,
+            extra=["--ampr-skip-regen-if-exists", "--ampr-force-regen"],
+        )
         self.assertEqual(rc, 0)
         self.assertTrue(pre_idx.exists())
-        self.assertNotEqual(pre_idx.stat().st_mtime_ns, pre_mtime)
+        self.assertNotEqual(pre_idx.read_bytes(), pre_bytes)
 
 
 class TestCliPackExfat(CliTestCase):

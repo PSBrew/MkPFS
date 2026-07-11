@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -255,6 +256,19 @@ class TestValidateAmprIndex(AmprTestCase):
         # has 2 rows; validate must count 2 as well.
         (root / "A.txt").write_bytes(b"COLLISION")
         self.assertTrue(ampr.validate_ampr_index(idx, root))
+
+    def test_corrupt_hash_offset_too_small(self) -> None:
+        """hash_offset inside records+path blob fails validation."""
+        root = self.make_temp_path()
+        self._seed(root)
+        idx: Path = root / "ampr_emu.index"
+        ampr.build_ampr_index(root, idx)
+        data: bytearray = bytearray(idx.read_bytes())
+        # hash_offset is the 6th field (Q) in the 48-byte header, at offset 32.
+        # Set it inside the records region to trigger the structural check.
+        struct.pack_into("<Q", data, 32, 48)  # 48 = end of header, before any records
+        idx.write_bytes(bytes(data))
+        self.assertFalse(ampr.validate_ampr_index(idx, root))
 
 
 class TestEnsureAmprIndexCreateIfMissing(AmprTestCase):

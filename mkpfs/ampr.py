@@ -253,7 +253,14 @@ def validate_ampr_index(index_path: Path, source_root: Path) -> bool:
         return False
     if num_hash_slots <= 0:
         return False
-    if hash_offset < HEADER_STRUCT.size or hash_offset > len(data):
+    # Verify hash_offset is past the records+path blob region (structural layout
+    # consistency).  A corrupted header with a hash_offset that falls inside the
+    # records or path-blob area would otherwise pass the bounds check above.
+    records_end: int = HEADER_STRUCT.size + num_rows * record_size
+    path_end: int = records_end + path_blob_len
+    if hash_offset < path_end:
+        return False
+    if hash_offset % hash_slot_size != 0:
         return False
     expected_tail: int = hash_offset + num_hash_slots * hash_slot_size
     if len(data) < expected_tail:
