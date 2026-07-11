@@ -143,7 +143,7 @@ class TestCompressionWorkerInit:
         comp._backend_name = "nonexistent"  # type: ignore[union-attribute]
         comp._backend = None  # type: ignore[union-attribute]
         comp.init_worker(None)  # no name passed — should try fallbacks.
-        assert comp.get_backend_name() in ("zlib-ng", "zlib")
+        assert comp.get_backend_name() in ("isal", "zlib-ng", "zlib")
 
 
 def _reset_comp_at_exit() -> None:
