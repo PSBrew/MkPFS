@@ -74,7 +74,7 @@ def _load_isal() -> object:
 def set_backend(name: str) -> None:
     """Select the compression backend.
 
-    Supported names (case-insensitive): ``"zlib-ng"``, ``"isal"``, ``"zlib"``.
+    Supported names (case-insensitive): ``"auto"``, ``"zlib-ng"``, ``"isal"``, ``"zlib"``.
 
     Raises:
         ValueError: *name* is not a recognised backend name.
@@ -83,6 +83,16 @@ def set_backend(name: str) -> None:
     global _backend_name, _backend
 
     normalised = name.lower()
+    # Auto-selection tries backends in preferred order: isal > zlib-ng > zlib
+    if normalised == "auto":
+        for candidate in ("isal", "zlib-ng", "zlib"):
+            try:
+                set_backend(candidate)
+                return
+            except ImportError:
+                continue
+        raise ImportError("no available compression backend (isal, zlib-ng, zlib)")
+
     if normalised == "zlib-ng":
         loader = _load_zlib_ng
     elif normalised in ("zlib",):
@@ -115,20 +125,21 @@ def init_worker(backend_name: str | None = None) -> None:
     Args:
         backend_name: Name of the backend to load (e.g. ``"zlib-ng"``).  If
             *None*, re-uses whatever was last set on the parent side or falls
-            back to ``"zlib-ng"`` / ``"zlib"`` in that order.
+            back to ``"isal"`` / ``"zlib-ng"`` / ``"zlib"`` in that order.
     """
     global _backend, _backend_name
 
     if backend_name is not None:
         try:
             set_backend(backend_name)
-        except ImportError:
-            pass  # worker won't be able to compress; caller will get an error.
             return
+        except ImportError:
+            # Explicit request failed; fall through and try auto selection below.
+            pass
 
-    # If nothing was passed and default wasn't loaded, attempt fallbacks.
+    # If nothing was passed (or explicit load failed) and default wasn't loaded, attempt preferred fallbacks.
     if _backend is None:
-        for fallback in ("zlib-ng", "zlib"):
+        for fallback in ("isal", "zlib-ng", "zlib"):
             try:
                 set_backend(fallback)
                 break
@@ -257,7 +268,7 @@ def decompress_block(data: bytes) -> bytes:
 # ---------------------------------------------------------------------------
 
 try:
-    set_backend("zlib-ng")
+    set_backend("auto")
 except ImportError:
     try:
         set_backend("zlib")
