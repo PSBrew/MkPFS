@@ -415,15 +415,15 @@ class BasePanel(ctk.CTkFrame):
 
         streamer: _Streamer = _Streamer(emit)
         original_input: Any = builtins.input
-        original_listener: Any = _pbar.default_listener
         exit_code: int = 0
-        try:
-            # Register the queue-based listener so every Progress.step() /
-            # status() call inside pfs.py pushes structured data for the UI.
-            _pbar.default_listener = self._queued_progress
 
-            # Auto-confirm any "Overwrite? [Y/n]" prompts from the CLI.
-            builtins.input = lambda _prompt="": "y"
+        # Install a context-local default listener for this execution.
+        # Using a ContextVar avoids a global swap race between threads.
+        token = _pbar.default_listener.set(self._queued_progress)
+
+        # Auto-confirm any "Overwrite? [Y/n]" prompts from the CLI.
+        builtins.input = lambda _prompt="": "y"
+        try:
             with contextlib.redirect_stdout(streamer), contextlib.redirect_stderr(streamer):
                 exit_code = int(cli_mkpfs_main(args))
         except SystemExit as exc:
@@ -433,8 +433,7 @@ class BasePanel(ctk.CTkFrame):
             return
         finally:
             builtins.input = original_input
-            _pbar.default_listener = original_listener
-
+            _pbar.default_listener.reset(token)
         self._emit("", "")
         if exit_code == 0:
             self._emit(tr("ok"), "success")

@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import sys
 import time
+
+# Module-level progress listener hook.
+# When set by the GUI, every Progress instance forwards structured
+# ``(action, phase, ...)`` tuples on each ``step()`` / ``status()`` call.
+from contextvars import ContextVar
 from typing import Any, Callable
 
 from .utils import human_readable_size
 
-# When set by the GUI, every Progress instance forwards structured
-# ``(action, phase, ...)`` tuples on each ``step()`` / ``status()`` call.
-# Use a typing Callable for static checking.
-default_listener: Callable[..., Any] | None = None
+default_listener: ContextVar[Callable[..., Any] | None] = ContextVar("default_listener", default=None)
 
 
 class Progress:
@@ -37,9 +39,11 @@ class Progress:
         self.phase_bytes: dict[str, int] = {}
         self.phase_last_len: dict[str, int] = {}
 
-        # Wire module-level listener if present.
-        if default_listener is not None and self.listener is None:
-            self.listener = default_listener
+        # Wire module-level listener if present (context-local). Use the
+        # ContextVar.get() API to retrieve the per-context default listener.
+        dl = default_listener.get(None)
+        if dl is not None and self.listener is None:
+            self.listener = dl
 
     def step(self, phase: str, done: int, total: int, bytes_processed: int = 0) -> None:
         """Update progress for a named phase.

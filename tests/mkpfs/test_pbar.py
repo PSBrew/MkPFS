@@ -56,12 +56,9 @@ class TestProgressListener(unittest.TestCase):
 
     def tearDown(self) -> None:
         # Reset module-level hook in case a test touched it.
-        from mkpfs.pbar import default_listener as _dl
+        import mkpfs.pbar as _pbar
 
-        if _dl is not None:
-            import mkpfs.pbar as _pbar
-
-            _pbar.default_listener = None
+        _pbar.default_listener.set(None)
 
     def test_listener_via_constructor_receives_step_events(self) -> None:
         """A listener passed to Progress.__init__ should be called on each step()."""
@@ -159,12 +156,12 @@ class TestProgressListener(unittest.TestCase):
         def listener(*args: object) -> None:
             events.append(args)
 
-        _pbar.default_listener = listener
+        token = _pbar.default_listener.set(listener)
         try:
             progress: Progress = Progress(enabled=True)
             progress.step("walk", 5, 10, bytes_processed=500)
         finally:
-            _pbar.default_listener = None
+            _pbar.default_listener.reset(token)
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0], ("step", "walk", 5, 10, 500))
@@ -182,12 +179,12 @@ class TestProgressListener(unittest.TestCase):
         def default_listener_fn(*args: object) -> None:
             default_events.append(args)
 
-        _pbar.default_listener = default_listener_fn
+        token = _pbar.default_listener.set(default_listener_fn)
         try:
             progress: Progress = Progress(enabled=True, listener=explicit_listener)
             progress.step("copy", 1, 3, bytes_processed=100)
         finally:
-            _pbar.default_listener = None
+            _pbar.default_listener.reset(token)
 
         self.assertEqual(len(explicit_events), 1)
         self.assertEqual(len(default_events), 0)
