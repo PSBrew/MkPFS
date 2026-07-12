@@ -9,6 +9,7 @@ before calling this script.
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 
 def make_icon(src: Path, out: Path, sizes: Sequence[tuple[int, int]]) -> None:
@@ -23,8 +24,30 @@ def make_icon(src: Path, out: Path, sizes: Sequence[tuple[int, int]]) -> None:
         raise FileNotFoundError(f"source icon not found: {src}")
 
     img = Image.open(src).convert("RGBA")
+
+    # Explicitly create each icon resolution to ensure multi-size ICO output.
+    # Some Pillow/ICO combinations do not reliably embed multiple sizes when
+    # only `sizes=` is provided without append_images.
+    normalized_sizes: list[tuple[int, int]] = sorted(
+        {(int(width), int(height)) for (width, height) in sizes},
+        key=lambda size: (size[0], size[1]),
+    )
+    if not normalized_sizes:
+        raise ValueError("at least one icon size must be provided")
+
+    try:
+        resample: Any = Image.Resampling.LANCZOS
+    except AttributeError:  # pragma: no cover - Pillow compatibility
+        resample = Image.LANCZOS
+
+    resized_images: list[Image.Image] = [img.resize(size, resample=resample) for size in normalized_sizes]
+    # Keep the largest image as the primary frame; Pillow's ICO writer may
+    # only emit one frame when the base image is smallest.
+    base_image: Image.Image = resized_images[-1]
+    extra_images: list[Image.Image] = resized_images[:-1]
+
     out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, sizes=list(sizes))
+    base_image.save(out, sizes=normalized_sizes, append_images=extra_images)
     print("Wrote", out)
 
 
