@@ -2037,6 +2037,71 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
+    """Batch convert multiple items in a source directory into .ffpfsc images."""
+    source_dir: Path = Path(args.source_dir).expanduser().resolve()
+    output_dir: Path = Path(args.output_dir).expanduser().resolve()
+
+    # Resolve a shared pack config so we can pass a flat dict to the batch
+    # orchestrator.  We never actually pack through the normal pack function
+    # here, so block_size is a "representative" value used to validate
+    # user-provided CLI flags.
+    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=65536)
+
+    pack_flags: dict = {
+        "block_size": config.block_size,
+        "pfs_version": config.pfs_version,
+        "case_insensitive": config.case_insensitive,
+        "zlib_level": config.zlib_level,
+        "threshold_gain": config.threshold_gain,
+        "min_file_gain": config.min_file_gain,
+        "min_compress_size": config.min_compress_size,
+        "cpu_count": config.cpu_count,
+        "compress": config.compress,
+        "skip_executable_compression": config.skip_executable_compression,
+        "encrypted": config.encrypted,
+        "new_crypt": config.new_crypt,
+        "ekpfs": config.ekpfs_key,
+        "verbose": bool(getattr(args, "verbose", False)),
+        "dry_run": bool(getattr(args, "dry_run", False)),
+    }
+
+    from .batch import (
+        BatchItem,
+        BatchSummary,
+        discover_batch_items,
+        print_batch_pre_stats,
+        print_batch_summary,
+        run_batch,
+    )
+
+    items: list[BatchItem] = discover_batch_items(source_dir)
+    if not items:
+        info(f"No packable items found in {source_dir}")
+        return 0
+
+    print_batch_pre_stats(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        items=items,
+        pack_flags=pack_flags,
+    )
+
+    summary: BatchSummary = run_batch(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        overwrite=bool(getattr(args, "overwrite", False)),
+        pack_flags=pack_flags,
+    )
+
+    print_batch_summary(summary)
+
+    info(f"Total elapsed: {summary.elapsed_seconds:.1f}s")
+    info(f"Output directory: {output_dir}")
+
+    return 0 if summary.errors == 0 else 1
+
+
 def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     parser = MkPFSArgumentParser(
         prog="mkpfs",
@@ -2238,6 +2303,111 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         help="Disable the extraction progress bar on stderr",
     )
     extract_parser.set_defaults(func=cli_mkpfs_extract_run)
+
+    batch_parser = sub.add_parser(
+        "batch",
+        help="Batch convert multiple items in a directory into .ffpfsc images",
+    )
+    batch_parser.epilog = "Examples:\r\n   mkpfs batch ./games/ ./output/\r\n"
+    batch_parser.add_argument("source_dir", help="Directory containing items to convert")
+    batch_parser.add_argument("output_dir", help="Directory where .ffpfsc images are written")
+    batch_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing output files (default: skip)",
+    )
+    batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be done without writing",
+    )
+
+    # Shared pack flags (mirrors cli_mkpfs_add_create_args minus positionals)
+    comp_grp = batch_parser.add_mutually_exclusive_group()
+    comp_grp.add_argument(
+        "--compress",
+        action="store_true",
+        default=True,
+        help="Enable PFSC block compression (default)",
+    )
+    comp_grp.add_argument("--no-compress", action="store_true", help="Disable PFSC block compression")
+
+    batch_parser.add_argument(
+        "--threshold-gain",
+        type=int,
+        default=0,
+        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 0)",
+    )
+    batch_parser.add_argument(
+        "--block-size",
+        default="auto",
+        help="PFS block size in bytes, 'auto' (65536), or 'auto-fit'",
+    )
+    batch_parser.add_argument(
+        "--temp-folder",
+        help="Directory for temporary pack artifacts",
+    )
+    batch_parser.add_argument(
+        "--version",
+        choices=("PS4", "PS5"),
+        default="PS5",
+        help="PFS profile version (default: PS5)",
+    )
+    batch_parser.add_argument(
+        "--inode-bits",
+        type=int,
+        choices=[32, 64],
+        default=32,
+        help="Inode width mode bit (32 or 64, default: 32)",
+    )
+
+    case_grp = batch_parser.add_mutually_exclusive_group()
+    case_grp.add_argument("--case-sensitive", action="store_true", help="Build a case-sensitive image")
+    case_grp.add_argument(
+        "--case-insensitive",
+        action="store_true",
+        help="Set case-insensitive mode bit (default)",
+    )
+
+    batch_parser.add_argument(
+        "--cpu-count",
+        type=int,
+        default=0,
+        help="Number of CPU cores for PFSC compression (0 = auto)",
+    )
+    batch_parser.add_argument(
+        "--compression-level",
+        type=int,
+        default=7,
+        help="Zlib compression level (0-9, default: 7)",
+    )
+    batch_parser.add_argument(
+        "--compression-backend",
+        choices=("auto", "zlib-ng", "zlib", "isal"),
+        default="auto",
+        help="Compression backend (default: auto)",
+    )
+    batch_parser.add_argument(
+        "--max-compressed-ratio",
+        type=int,
+        default=100,
+        help="Maximum PFSC size as percent of raw file (0-100, default: 100)",
+    )
+    batch_parser.add_argument(
+        "--min-compress-size",
+        type=int,
+        default=0,
+        help="Store files smaller than N bytes raw (default: resolved --block-size)",
+    )
+    batch_parser.add_argument(
+        "--skip-executable-compression",
+        action="store_true",
+        default=True,
+        help="Skip compression in executable files",
+    )
+    batch_parser.add_argument("--verbose", action="store_true", help="Verbose per-file decisions")
+
+    batch_parser.set_defaults(func=cli_mkpfs_batch_run)
 
     return parser
 

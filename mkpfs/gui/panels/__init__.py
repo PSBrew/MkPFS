@@ -1,6 +1,7 @@
 """Panel package for the mkpfs GUI - hosts the base panel and operation panels."""
 
 from .base import BasePanel
+from .batch import BatchPanel
 from .exfat_panel import ExfatPanel
 from .inspect import InspectPanel
 from .pack_file import PackFilePanel
@@ -10,7 +11,7 @@ from .unpack import UnpackPanel
 from .verify import VerifyPanel
 
 __all__ = [
-    "BasePanel",
+    "BatchPanel",
     "ExfatPanel",
     "InspectPanel",
     "PackFilePanel",

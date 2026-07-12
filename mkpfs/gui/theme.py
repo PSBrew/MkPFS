@@ -18,6 +18,7 @@ _NEON_GREEN = "#39FF8A"  # Verify, success messages
 _NEON_PURPLE = "#B560FF"  # Inspect
 _NEON_AMBER = "#FFB800"  # Tree, warnings
 _NEON_PINK = "#FF5CAA"  # Unpack
+_NEON_TEAL = "#00E5A0"  # Batch Convert
 _NEON_ORANGE = "#FF6B3D"  # Pack exFAT
 
 _SUCCESS = _NEON_GREEN
@@ -45,4 +46,5 @@ _PANEL_ACCENT: dict[str, str] = {
     "tree": _NEON_AMBER,
     "unpack": _NEON_PINK,
     "pack_exfat": _NEON_ORANGE,
+    "batch": _NEON_TEAL,
 }
