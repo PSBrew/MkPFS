@@ -491,6 +491,50 @@ class TestRunBatch(unittest.TestCase):
         self.assertEqual(summary.total_raw_size, 1000)
         self.assertEqual(summary.total_compressed_size, 800)
 
+    def test_run_batch_handles_plain_exception(self) -> None:
+        """Plain RuntimeError raised by the builder is recorded as an error and does not abort the batch."""
+        src = self._make_temp_dir()
+        (src / "Good").mkdir()
+        (src / "Good" / "f.txt").write_text("ok")
+        (src / "Bad").mkdir()
+        (src / "Bad" / "f.txt").write_text("trouble")
+
+        out = self._make_temp_dir()
+
+        # Builder raises plain RuntimeError for first item then succeeds for others
+        def raising_build(**kw: object) -> BuildStats:
+            raise RuntimeError("unexpected crash")
+
+        with patch(
+            "mkpfs.pfs.build_pfs_stream_from_exfat",
+            side_effect=raising_build,
+        ):
+            summary = run_batch(
+                source_dir=src,
+                output_dir=out,
+                pack_flags=self._default_pack_flags(),
+            )
+
+        self.assertEqual(summary.errors, 2)
+        # Ensure batch attempted two items
+        self.assertEqual(summary.total_items, 2)
+
+    def test__estimate_raw_size_file_kind_returns_file_size(self) -> None:
+        """For items with kind 'file', _estimate_raw_size must return the file's st_size."""
+        import tempfile
+
+        from mkpfs import batch as batch_module
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        p = Path(td.name) / "image.exfat"
+        data = b"X" * 1234
+        p.write_bytes(data)
+
+        item = batch_module.BatchItem(name="image.exfat", source=p, kind="file")
+        size = batch_module._estimate_raw_size(item)
+        self.assertEqual(size, p.stat().st_size)
+
     def test_run_batch_converts_exfat_files(self) -> None:
         """File items (.exfat, .ffpkg) use build_pfs_stream_single_file."""
         src = self._make_temp_dir()
@@ -525,3 +569,119 @@ class TestRunBatch(unittest.TestCase):
                 output_dir=out,
                 pack_flags=self._default_pack_flags(),
             )
+
+
+class TestBatchReporting(unittest.TestCase):
+    def test_print_batch_pre_stats_calls_info(self) -> None:
+        import tempfile
+
+        from mkpfs import batch as batch_module
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        base = Path(td.name)
+        src = base / "src"
+        out = base / "out"
+        src.mkdir()
+        out.mkdir()
+
+        items = [
+            batch_module.BatchItem(name="GameA", source=src / "GameA", kind="folder"),
+            batch_module.BatchItem(name="Image.exfat", source=src / "Image.exfat", kind="file"),
+        ]
+        pack_flags = {"pfs_version": 0x5000000, "cpu_count": 4, "compress": True, "zlib_level": 9}
+
+        with patch("mkpfs.batch.info") as mock_info:
+            batch_module.print_batch_pre_stats(source_dir=src, output_dir=out, items=items, pack_flags=pack_flags)
+
+        called = " ".join(c.args[0] for c in mock_info.call_args_list)
+        self.assertIn("Source", called)
+        self.assertIn("Output", called)
+        self.assertIn("Items", called)
+        self.assertIn("Version", called)
+        self.assertIn("Compress", called)
+
+    def test_print_item_status_variants_and_truncation(self) -> None:
+        from mkpfs import batch as batch_module
+
+        # Converted
+        r_conv = batch_module.BatchItemResult(
+            name="GameA",
+            kind="folder",
+            status="converted",
+            output_path=Path("/out/GameA.ffpfsc"),
+            raw_size=1000,
+            compressed_size=800,
+            elapsed_seconds=1.2,
+        )
+
+        # Skipped
+        r_skip = batch_module.BatchItemResult(name="GameB", kind="folder", status="skipped")
+
+        # Error with long message (to trigger truncation)
+        long_msg = "E" * 200
+        r_err = batch_module.BatchItemResult(name="GameC", kind="folder", status="error", error_message=long_msg)
+
+        with patch("mkpfs.batch.info") as mock_info:
+            batch_module.print_item_status(index=1, total=3, result=r_conv)
+            batch_module.print_item_status(index=2, total=3, result=r_skip)
+            batch_module.print_item_status(index=3, total=3, result=r_err)
+
+        msgs = [c.args[0] for c in mock_info.call_args_list]
+        combined = " ".join(msgs)
+        self.assertIn("[1/3]", combined)
+        self.assertIn("→", combined)
+        # Savings percentage formatted
+        self.assertIn("saved", combined)
+        # Skipped text
+        self.assertIn("skipped", combined)
+        # Ensure long error got truncated (ends with '...')
+        self.assertIn("...", combined)
+
+    def test_print_batch_summary_outputs_table_and_rows(self) -> None:
+        from mkpfs import batch as batch_module
+
+        results = [
+            batch_module.BatchItemResult(
+                name="Short",
+                kind="folder",
+                status="converted",
+                raw_size=1000,
+                compressed_size=800,
+            ),
+            batch_module.BatchItemResult(
+                name="SkippedLongNameExceedingTwentyChars",
+                kind="folder",
+                status="skipped",
+                raw_size=500,
+                compressed_size=400,
+            ),
+            batch_module.BatchItemResult(
+                name="Planned",
+                kind="folder",
+                status="dry_run",
+                raw_size=300,
+                compressed_size=0,
+            ),
+            batch_module.BatchItemResult(name="Err", kind="folder", status="error", error_message="oops"),
+        ]
+
+        summary = batch_module.BatchSummary(results=results, elapsed_seconds=5.0)
+
+        with patch("mkpfs.batch.info") as mock_info:
+            batch_module.print_batch_summary(summary)
+
+        called = " ".join(c.args[0] for c in mock_info.call_args_list)
+        self.assertIn("Name", called)
+        self.assertIn("Status", called)
+        # All names should appear somewhere in the output
+        for r in results:
+            self.assertIn(r.name, called)
+
+    def test_print_batch_summary_empty_returns_quietly(self) -> None:
+        from mkpfs import batch as batch_module
+
+        summary = batch_module.BatchSummary(results=[], elapsed_seconds=0.0)
+        with patch("mkpfs.batch.info") as mock_info:
+            batch_module.print_batch_summary(summary)
+            mock_info.assert_not_called()

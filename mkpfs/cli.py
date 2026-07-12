@@ -2415,6 +2415,10 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         help="Skip compression in executable files",
     )
     batch_parser.add_argument("--verbose", action="store_true", help="Verbose per-file decisions")
+    # Encryption/signing flags (match pack command so batch can build signed/encrypted images)
+    batch_parser.add_argument("--encrypted", action="store_true", help="Encrypt filesystem blocks with AES-XTS")
+    batch_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
+    batch_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
 
     batch_parser.set_defaults(func=cli_mkpfs_batch_run)
 

@@ -229,7 +229,7 @@ The CLI currently supports `pack`, `verify`, `inspect`, `tree`, and `unpack`.
 ### Top-level CLI
 
 ```text
-mkpfs [-h] {pack,verify,inspect,tree,unpack} ...
+mkpfs [-h] {pack,batch,verify,inspect,tree,unpack} ...
 ```
 
 | Parameter | Description |
@@ -240,6 +240,7 @@ mkpfs [-h] {pack,verify,inspect,tree,unpack} ...
 | `inspect` | Inspect image metadata and integrity summary. |
 | `tree` | Print the image tree representation. |
 | `unpack` | Extract files from an image into a destination directory. |
+| `batch` | Batch convert multiple game folders in a directory into `.ffpfsc` images. |
 
 ### `pack`
 
@@ -418,6 +419,52 @@ Notes:
 
 - OS-generated metadata is excluded from the image (see the `pack folder` notes for the full list).
 - The resulting `.exfat` can be packed straight into a `.ffpfsc` with `mkpfs pack file ./BREW1234.exfat ./BREW1234.ffpfsc`.
+
+### `batch`
+
+```text
+mkpfs batch [-h] [--overwrite] [--dry-run] [--compress | --no-compress]
+            [--threshold-gain THRESHOLD_GAIN]
+            [--block-size BLOCK_SIZE] [--temp-folder TEMP_FOLDER]
+            [--version {PS4,PS5}] [--inode-bits {32,64}]
+            [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
+            [--compression-level COMPRESSION_LEVEL]
+            [--compression-backend {auto,zlib-ng,zlib,isal}]
+            [--max-compressed-ratio MAX_COMPRESSED_RATIO]
+            [--min-compress-size MIN_COMPRESS_SIZE]
+            [--skip-executable-compression] [--verbose]
+            [--encrypted] [--ekpfs-key EKPFS_KEY] [--new-crypt]
+            source_dir output_dir
+```
+
+Examples:
+
+```bash
+# Convert all game folders found in ./games/ and write images to ./out/
+mkpfs batch ./games/ ./out/ --compression-level 7
+
+# Dry-run preview (no files written)
+mkpfs batch ./games/ ./out/ --dry-run
+
+# Overwrite existing images
+mkpfs batch ./games/ ./out/ --overwrite --compression-level 9
+```
+
+| Parameter | Description |
+| --- | --- |
+| `source_dir` | Directory containing items (folders or compatible single-file trees) to convert. |
+| `output_dir` | Directory where `.ffpfsc` images are written. |
+| `--overwrite` | Overwrite existing output files (default: skip). |
+| `--dry-run` | Scan, layout, and report only. Do not write image files. |
+| `--block-size` | PFS block size in bytes, `auto`, or `auto-fit` (see `pack folder`). |
+| `--compression-level` | Zlib compression level (0-9, default: 7). |
+| `--encrypted` | Encrypt filesystem blocks with AES-XTS. Use `--ekpfs-key` to provide a 64-hex key. |
+| `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation (when encrypting). |
+
+Notes:
+
+- Batch conversion discovers folder-level items and single-file trees in `source_dir`, converts each item to an image, and writes the resulting `.ffpfsc` alongside `output_dir` using the item name. See `mkpfs pack` options for details on compression, signing, and encryption behavior.
+- Dry-run items are excluded from summary savings and total compressed size so overall savings remain representative.
 
 ### `verify`
 
