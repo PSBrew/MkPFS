@@ -2042,6 +2042,15 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
     source_dir: Path = Path(args.source_dir).expanduser().resolve()
     output_dir: Path = Path(args.output_dir).expanduser().resolve()
 
+    # Validate source and output directories early so CLI errors are consistent
+    # with run_batch and present user-friendly messages.
+    if not source_dir.exists() or not source_dir.is_dir():
+        error(f"Source directory does not exist or is not a directory: {source_dir}")
+        return 1
+    if output_dir == source_dir or source_dir in output_dir.parents:
+        error("Output directory cannot be inside the source directory")
+        return 1
+
     # Resolve --block-size the same way as the pack-folder command so the
     # user-supplied value is honoured.  Batch does not support auto-fit
     # (which requires a full tree walk), so only "auto" and a literal
@@ -2054,9 +2063,7 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
             block_size = int(args.block_size)
         except (TypeError, ValueError) as exc:
             raise BuildError("--block-size must be an integer value or 'auto' for batch conversion") from exc
-
     config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
-
     pack_flags: dict = {
         "block_size": config.block_size,
         "pfs_version": config.pfs_version,
@@ -2074,7 +2081,6 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
         "verbose": bool(getattr(args, "verbose", False)),
         "dry_run": bool(getattr(args, "dry_run", False)),
     }
-
     from .batch import (
         BatchItem,
         BatchSummary,
@@ -2088,26 +2094,21 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
     if not items:
         info(f"No packable items found in {source_dir}")
         return 0
-
     print_batch_pre_stats(
         source_dir=source_dir,
         output_dir=output_dir,
         items=items,
         pack_flags=pack_flags,
     )
-
     summary: BatchSummary = run_batch(
         source_dir=source_dir,
         output_dir=output_dir,
         overwrite=bool(getattr(args, "overwrite", False)),
         pack_flags=pack_flags,
     )
-
     print_batch_summary(summary)
-
     info(f"Total elapsed: {summary.elapsed_seconds:.1f}s")
     info(f"Output directory: {output_dir}")
-
     return 0 if summary.errors == 0 else 1
 
 
@@ -2350,11 +2351,7 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     batch_parser.add_argument(
         "--block-size",
         default="auto",
-        help="PFS block size in bytes, 'auto' (65536), or 'auto-fit'",
-    )
-    batch_parser.add_argument(
-        "--temp-folder",
-        help="Directory for temporary pack artifacts",
+        help="PFS block size in bytes or 'auto' (default: 65536)",
     )
     batch_parser.add_argument(
         "--version",
@@ -2415,7 +2412,7 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         help="Skip compression in executable files",
     )
     batch_parser.add_argument("--verbose", action="store_true", help="Verbose per-file decisions")
-    # Encryption/signing flags (match pack command so batch can build signed/encrypted images)
+    # Encryption flags (match pack command so batch can build encrypted images)
     batch_parser.add_argument("--encrypted", action="store_true", help="Encrypt filesystem blocks with AES-XTS")
     batch_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     batch_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")

@@ -492,7 +492,7 @@ class TestRunBatch(unittest.TestCase):
         self.assertEqual(summary.total_compressed_size, 800)
 
     def test_run_batch_handles_plain_exception(self) -> None:
-        """Plain RuntimeError raised by the builder is recorded as an error and does not abort the batch."""
+        """A plain RuntimeError on the first item is recorded as an error and the batch continues."""
         src = self._make_temp_dir()
         (src / "Good").mkdir()
         (src / "Good" / "f.txt").write_text("ok")
@@ -501,9 +501,15 @@ class TestRunBatch(unittest.TestCase):
 
         out = self._make_temp_dir()
 
-        # Builder raises plain RuntimeError for first item then succeeds for others
+        call_count = 0
+
         def raising_build(**kw: object) -> BuildStats:
-            raise RuntimeError("unexpected crash")
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # "Bad" sorts before "Good" → first call raises a plain RuntimeError
+                raise RuntimeError("unexpected crash")
+            return _mock_build(Path(str(kw["output_path"])), 1000, 800)
 
         with patch(
             "mkpfs.pfs.build_pfs_stream_from_exfat",
@@ -515,8 +521,8 @@ class TestRunBatch(unittest.TestCase):
                 pack_flags=self._default_pack_flags(),
             )
 
-        self.assertEqual(summary.errors, 2)
-        # Ensure batch attempted two items
+        self.assertEqual(summary.errors, 1)
+        self.assertEqual(summary.converted, 1)
         self.assertEqual(summary.total_items, 2)
 
     def test__estimate_raw_size_file_kind_returns_file_size(self) -> None:
@@ -601,6 +607,82 @@ class TestBatchReporting(unittest.TestCase):
         self.assertIn("Version", called)
         self.assertIn("Compress", called)
 
+    def test_print_batch_pre_stats_no_compress_folders_only(self) -> None:
+        """When --no-compress and only folder items, banner notes folders always compress."""
+        import tempfile
+
+        from mkpfs import batch as batch_module
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        base = Path(td.name)
+        src = base / "src"
+        out = base / "out"
+        src.mkdir()
+        out.mkdir()
+
+        items = [
+            batch_module.BatchItem(name="GameA", source=src / "GameA", kind="folder"),
+        ]
+        pack_flags = {"pfs_version": 0x5000000, "cpu_count": 0, "compress": False, "zlib_level": 7}
+
+        with patch("mkpfs.batch.info") as mock_info:
+            batch_module.print_batch_pre_stats(source_dir=src, output_dir=out, items=items, pack_flags=pack_flags)
+
+        called = " ".join(c.args[0] for c in mock_info.call_args_list)
+        self.assertIn("folders always compressed", called)
+
+    def test_print_batch_pre_stats_no_compress_mixed_items(self) -> None:
+        """When --no-compress with both folders and files, banner shows mixed."""
+        import tempfile
+
+        from mkpfs import batch as batch_module
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        base = Path(td.name)
+        src = base / "src"
+        out = base / "out"
+        src.mkdir()
+        out.mkdir()
+
+        items = [
+            batch_module.BatchItem(name="GameA", source=src / "GameA", kind="folder"),
+            batch_module.BatchItem(name="Image.exfat", source=src / "Image.exfat", kind="file"),
+        ]
+        pack_flags = {"pfs_version": 0x5000000, "cpu_count": 0, "compress": False, "zlib_level": 7}
+
+        with patch("mkpfs.batch.info") as mock_info:
+            batch_module.print_batch_pre_stats(source_dir=src, output_dir=out, items=items, pack_flags=pack_flags)
+
+        called = " ".join(c.args[0] for c in mock_info.call_args_list)
+        self.assertIn("mixed", called)
+
+    def test_print_batch_pre_stats_no_compress_files_only(self) -> None:
+        """When --no-compress and only file items, banner shows 'no'."""
+        import tempfile
+
+        from mkpfs import batch as batch_module
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        base = Path(td.name)
+        src = base / "src"
+        out = base / "out"
+        src.mkdir()
+        out.mkdir()
+
+        items = [
+            batch_module.BatchItem(name="Image.exfat", source=src / "Image.exfat", kind="file"),
+        ]
+        pack_flags = {"pfs_version": 0x5000000, "cpu_count": 0, "compress": False, "zlib_level": 7}
+
+        with patch("mkpfs.batch.info") as mock_info:
+            batch_module.print_batch_pre_stats(source_dir=src, output_dir=out, items=items, pack_flags=pack_flags)
+
+        called = " ".join(c.args[0] for c in mock_info.call_args_list)
+        self.assertIn("Compress: no", called)
+
     def test_print_item_status_variants_and_truncation(self) -> None:
         from mkpfs import batch as batch_module
 
@@ -677,6 +759,31 @@ class TestBatchReporting(unittest.TestCase):
         # All names should appear somewhere in the output
         for r in results:
             self.assertIn(r.name, called)
+        # The totals row should include all status counts without overflowing
+        self.assertIn("TOTALS", called)
+        self.assertIn("1 done", called)
+        self.assertIn("1 planned", called)
+        self.assertIn("1 skipped", called)
+        self.assertIn("1 error", called)
+
+    def test_print_batch_summary_totals_inline_when_short(self) -> None:
+        from mkpfs import batch as batch_module
+
+        results = [
+            batch_module.BatchItemResult(
+                name="A", kind="folder", status="converted", raw_size=1000, compressed_size=800
+            ),
+            batch_module.BatchItemResult(name="B", kind="folder", status="skipped", raw_size=500, compressed_size=400),
+        ]
+
+        summary = batch_module.BatchSummary(results=results, elapsed_seconds=2.0)
+        with patch("mkpfs.batch.info") as mock_info:
+            batch_module.print_batch_summary(summary)
+
+        called = " ".join(c.args[0] for c in mock_info.call_args_list)
+        # Totals should appear inline (not on a separate line) for short totals_label
+        self.assertIn("TOTALS (2 items)", called)
+        self.assertIn("1 done, 1 skipped", called)
 
     def test_print_batch_summary_empty_returns_quietly(self) -> None:
         from mkpfs import batch as batch_module

@@ -224,7 +224,7 @@ Notes:
 ## Command Reference
 
 MkPFS keeps the command surface focused on the image lifecycle. 
-The CLI currently supports `pack`, `verify`, `inspect`, `tree`, and `unpack`.
+The CLI currently supports `pack`, `batch`, `verify`, `inspect`, `tree`, and `unpack`.
 
 ### Top-level CLI
 
@@ -425,7 +425,7 @@ Notes:
 ```text
 mkpfs batch [-h] [--overwrite] [--dry-run] [--compress | --no-compress]
             [--threshold-gain THRESHOLD_GAIN]
-            [--block-size BLOCK_SIZE] [--temp-folder TEMP_FOLDER]
+            [--block-size BLOCK_SIZE]
             [--version {PS4,PS5}] [--inode-bits {32,64}]
             [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
             [--compression-level COMPRESSION_LEVEL]
@@ -456,14 +456,14 @@ mkpfs batch ./games/ ./out/ --overwrite --compression-level 9
 | `output_dir` | Directory where `.ffpfsc` images are written. |
 | `--overwrite` | Overwrite existing output files (default: skip). |
 | `--dry-run` | Scan, layout, and report only. Do not write image files. |
-| `--block-size` | PFS block size in bytes, `auto`, or `auto-fit` (see `pack folder`). |
+| `--block-size` | PFS block size in bytes or `auto` (resolves to 65536). |
 | `--compression-level` | Zlib compression level (0-9, default: 7). |
 | `--encrypted` | Encrypt filesystem blocks with AES-XTS. Use `--ekpfs-key` to provide a 64-hex key. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation (when encrypting). |
 
 Notes:
 
-- Batch conversion discovers folder-level items and single-file trees in `source_dir`, converts each item to an image, and writes the resulting `.ffpfsc` alongside `output_dir` using the item name. See `mkpfs pack` options for details on compression, signing, and encryption behavior.
+- Batch conversion discovers folder-level items and single-file trees in `source_dir`, converts each item to an image, and writes each `.ffpfsc` inside `output_dir` using the item name. See `mkpfs pack` options for details on compression, signing, and encryption behavior.
 - Dry-run items are excluded from summary savings and total compressed size so overall savings remain representative.
 
 ### `verify`

@@ -167,7 +167,17 @@ def print_batch_pre_stats(
     cpu_val: int | None = pack_flags.get("cpu_count", 0)
     cpu_label: str = str(cpu_val) if cpu_val else "auto"
     comp_enabled: bool = pack_flags.get("compress", True)
-    comp_label: str = f"yes  (level {pack_flags.get('zlib_level', 7)})" if comp_enabled else "no"
+    has_folders: bool = any(i.kind == "folder" for i in items)
+    has_files: bool = any(i.kind == "file" for i in items)
+    if comp_enabled:
+        comp_label: str = f"yes  (level {pack_flags.get('zlib_level', 7)})"
+    elif has_folders and not has_files:
+        # Folders always compress via build_pfs_stream_from_exfat (no compress toggle).
+        comp_label = "yes  (folders always compressed)"
+    elif has_folders and has_files:
+        comp_label = "mixed  (folders compressed, files raw)"
+    else:
+        comp_label = "no"
     info(f"  Version : {version_label}")
     info(f"  Compress: {comp_label}")
     info(f"  CPUs    : {cpu_label}")
@@ -268,14 +278,28 @@ def print_batch_summary(summary: BatchSummary) -> None:
     )
     overall_str: str = f"{overall_savings:.1f}%" if overall_savings > 0 else "—"
 
-    info(
-        f"│ {'TOTALS (' + str(total) + ' items)'.ljust(name_w - 2)}"
-        f"│ {done_str.ljust(8)}"
-        f"│ {total_raw_str.rjust(size_w - 2)}"
-        f"│ {total_comp_str.rjust(size_w - 2)}"
-        f"│ {overall_str.rjust(7)}│"
-    )
-    info(f"└{'─' * name_w}┴{'─' * 10}┴{'─' * size_w}┴{'─' * size_w}┴{'─' * 9}┘")
+    # The totals row spans the Name + Status columns to avoid column overflow.
+    combined_w: int = name_w + 10  # name_w + status column width
+    totals_label: str = f"TOTALS ({total} items) — {done_str}"
+    if len(totals_label) > combined_w - 2:
+        # Truncate the combined label and print full counts on a line below the table.
+        totals_label = f"TOTALS ({total} items)".ljust(combined_w - 2)
+        info(
+            f"│ {totals_label}"
+            f"│ {total_raw_str.rjust(size_w - 2)}"
+            f"│ {total_comp_str.rjust(size_w - 2)}"
+            f"│ {overall_str.rjust(7)}│"
+        )
+        info(f"└{'─' * name_w}┴{'─' * 10}┴{'─' * size_w}┴{'─' * size_w}┴{'─' * 9}┘")
+        info(f"  {done_str}")
+    else:
+        info(
+            f"│ {totals_label.ljust(combined_w - 2)}"
+            f"│ {total_raw_str.rjust(size_w - 2)}"
+            f"│ {total_comp_str.rjust(size_w - 2)}"
+            f"│ {overall_str.rjust(7)}│"
+        )
+        info(f"└{'─' * name_w}┴{'─' * 10}┴{'─' * size_w}┴{'─' * size_w}┴{'─' * 9}┘")
 
 
 # ---------------------------------------------------------------------------
