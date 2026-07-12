@@ -17,13 +17,16 @@ from .theme import (
     _BG_PANEL,
     _BORDER_BRIGHT,
     _CORNER,
+    _ERROR,
     _FONT_LABEL,
     _FONT_MONO,
     _FONT_UI,
     _NEON_BLUE,
+    _SUCCESS,
     _TEXT_MUTED,
     _TEXT_PRIMARY,
     _TEXT_SECONDARY,
+    _WARNING,
 )
 
 # ---------------------------------------------------------------------------
@@ -236,6 +239,15 @@ class LogPane(ctk.CTkFrame):
         )
         self._text.pack(fill="both", expand=True, padx=6, pady=6)
 
+        # Set up colour tags for log levels — uses public CTkTextbox API.
+        self._text.tag_config("error", foreground=_ERROR)
+        self._text.tag_config("warning", foreground=_WARNING)
+        self._text.tag_config("success", foreground=_SUCCESS)
+        self._text.tag_config("muted", foreground=_TEXT_MUTED)
+        self._text.configure(state="normal")
+        self._text.delete("0.0", "end")
+        self._text.configure(state="disabled")
+
     def clear(self) -> None:
         """Remove all content from the log pane."""
         self._text.configure(state="normal")
@@ -250,7 +262,10 @@ class LogPane(ctk.CTkFrame):
             tag: Colour tag ('error', 'warning', 'success', 'muted').
         """
         self._text.configure(state="normal")
-        self._text.insert("end", text + "\n")
+        if tag:
+            self._text.insert("end", text + "\n", tag)
+        else:
+            self._text.insert("end", text + "\n")
         self._text.configure(state="disabled")
         self._text.see("end")
 
