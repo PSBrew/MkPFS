@@ -11,6 +11,7 @@ from .unpack import UnpackPanel
 from .verify import VerifyPanel
 
 __all__ = [
+    "BasePanel",
     "BatchPanel",
     "ExfatPanel",
     "InspectPanel",
