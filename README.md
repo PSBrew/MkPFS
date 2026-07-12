@@ -705,8 +705,20 @@ Users are responsible for complying with all applicable laws and regulations in 
 
 ## 🔗 Related projects
 
-- [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus): Practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility
-- [PSDevWiki PFS](https://www.psdevwiki.com/ps4/PFS): Community reference for PFS on-disk structures
-- [PSDevWiki PKG files](https://www.psdevwiki.com/ps4/PKG_files): PKG format reference and tooling pointers
-- [ShadPKG HOWWORKS](https://github.com/seregonwar/ShadPKG/blob/main/docs/HOWWORKS.md): Implementation-focused PKG/PFS decryption walkthrough
-- [Wololo: PS4 FPKG writeup by Flatz](https://wololo.net/ps4-fpkg-writeup-by-flatz/): Historical writeup on FPKG/PKG techniques
+The projects listed below are community resources that are related to, have informed, or may be useful when researching PFS / PKG / exFAT tooling. They may have inspired MkPFS or help new developers exploring these topics, but their code or contents were not necessarily used in MkPFS - these entries are indexed for context.
+
+- [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus): Practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility. [AI Summary](.claude/skills/related-projects-index/references/shadowmountplus.md)
+- [PS5 Game Compressor](https://github.com/juma-sayeh/PS5-Game-Compressor): PS5 payload + web UI for compressing and validating game images. [AI Summary](.claude/skills/related-projects-index/references/ps5-game-compressor.md)
+- [PKGTool](https://github.com/thesupersonic16/PKGTool): `.pkg` parser/extractor with a partial repack path. [AI Summary](.claude/skills/related-projects-index/references/pkgtool.md)
+- [LibOrbisPkg](https://github.com/maxton/LibOrbisPkg): Full PKG/PFS toolkit (library, tools, tests). [AI Summary](.claude/skills/related-projects-index/references/liborbispkg.md)
+- [LibOrbisPkg Wiki](https://github.com/maxton/LibOrbisPkg/wiki): Orientation wiki for LibOrbisPkg and PKG crypto notes. [AI Summary](.claude/skills/related-projects-index/references/liborbispkg-wiki.md)
+- [kstuff-lite](https://github.com/EchoStretch/kstuff-lite): PS5 payload bundle with mount automation and crypto helpers. [AI Summary](.claude/skills/related-projects-index/references/kstuff-lite.md)
+- [PSDevWiki - PFS](https://www.psdevwiki.com/ps4/PFS): Community reference for PFS on-disk structures. [AI Summary](.claude/skills/related-projects-index/references/psdevwiki-pfs.md)
+- [PSDevWiki - PKG files](https://www.psdevwiki.com/ps4/PKG_files): PKG container structure and validation notes. [AI Summary](.claude/skills/related-projects-index/references/psdevwiki-pkg-files.md)
+- [ShadPKG - HOWWORKS](https://github.com/seregonwar/ShadPKG/blob/main/docs/HOWWORKS.md): Step-by-step PKG->PFS implementation walkthrough. [AI Summary](.claude/skills/related-projects-index/references/shadpkg-howworks.md)
+- [Wololo: PS4 FPKG writeup by Flatz](https://wololo.net/ps4-fpkg-writeup-by-flatz/): Deep-dive on FPKG/FPKG toolchain and keys. [AI Summary](.claude/skills/related-projects-index/references/wololo-fpkg-flatz.md)
+- [goodle](https://github.com/oriath-net/goodle): Thin Go cgo wrapper for OodleLZ decompression. [AI Summary](.claude/skills/related-projects-index/references/goodle.md)
+- [TLOU PSARC Tool](https://github.com/amrshaheen61/TLOU_PSARC_Tool): Utility for reading/extracting Naughty Dog `.psarc` archives. [AI Summary](.claude/skills/related-projects-index/references/tlou-psarc-tool.md)
+- [PKG Passcode Finder](https://github.com/bobg-github/PS5PKGPasscodeFinder): Brute-force research UI for PS5 PKG passcodes. [AI Summary](.claude/skills/related-projects-index/references/pkg-passcode-finder.md)
+- [Oodle / Kraken decompression tools](https://github.com/lvlvllvlvllvlvl/oozextract): Open decoders and shims for Oodle codecs. [AI Summary](.claude/skills/related-projects-index/references/oodle-kraken-tools.md)
+- [LibProsperoPkg](https://github.com/SvenGDK/LibProsperoPKG): .NET library for building & reading PS5 packages and PFSC heuristics. [AI Summary](.claude/skills/related-projects-index/references/libprospero-pkg.md)

@@ -3,7 +3,8 @@ name: related-projects-index
 description: >
   Compact index of upstream projects and reference sources relevant to PKG/PFS/exFAT research.
   Each entry gives an executive summary, upstream links, and a pointer to our internal
-  reference file with deeper notes and citations.
+  reference file with deeper notes and citations. Always use this skill when you are performin a research 
+  related to MkPFS, PFS, compression, kraken, PKGs, etc.
 context: fork
 ---
 
@@ -113,6 +114,13 @@ linked internal reference file under `references/` in this skill folder, or go u
 - Gotchas: Official Oodle libraries are proprietary; prebuilt .so/.dll distribution may have licensing constraints.
 - Upstream: https://github.com/lvlvllvlvllvlvl/oozextract
 - Internal: references/oodle-kraken-tools.md
+
+## LibProsperoPkg
+- What: .NET 10 library for building & reading PS5 packages: inner/outer PFS, PFSC (Kraken/Zlib), AES-XTS encryption, RSA-3072 metadata signing, and debug/image finalization.
+- Relevance: Source of engineering details for EKPFS key schedule, inner-vs-outer PFS boundaries, Kraken PFSC implementation & heuristics, digest/icv computation, and packaging workflows that MkPFS should either match or reimplement.
+- Gotchas: GPL-3.0-or-later license; retail finalization and sealed `rif` key blobs are console-gated and not producible off-console. Use code as reference and prefer reimplementation for non-GPL integration.
+- Upstream: https://github.com/SvenGDK/LibProsperoPKG
+- Internal: references/libprospero-pkg.md
 
 ---
 
