@@ -244,9 +244,6 @@ class LogPane(ctk.CTkFrame):
         self._text.tag_config("warning", foreground=_WARNING)
         self._text.tag_config("success", foreground=_SUCCESS)
         self._text.tag_config("muted", foreground=_TEXT_MUTED)
-        self._text.configure(state="normal")
-        self._text.delete("0.0", "end")
-        self._text.configure(state="disabled")
 
     def clear(self) -> None:
         """Remove all content from the log pane."""
