@@ -185,7 +185,7 @@ jobs:
             --clean \
             --windowed \
             --onedir \
-            --additional-hooks-dir pyinstaller-hooks \
+            --additional-hooks-dir scripts \
             --paths "$SITE_PACKAGES" \
             --name MkPFS \
             --icon dist/MkPFS.icns \

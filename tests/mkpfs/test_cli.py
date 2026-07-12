@@ -284,7 +284,7 @@ class TestCliArgumentHelpers(CliTestCase):
         parsed_args: argparse.Namespace = parser.parse_args(["pack", "file", "src.bin", "out.ffpfsc"])
         self.assertEqual(parsed_args.inode_bits, 32)
 
-    def test_pack_parser_uses_ps4_as_default_version(self) -> None:
+    def test_pack_parser_uses_ps5_as_default_version(self) -> None:
         """The pack parser should expose PS5 as the default pack profile version."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
@@ -1633,6 +1633,8 @@ class TestCliCreateRun(CliTestCase):
 
         self.assertFalse(mocked_check.call_args.kwargs["require_game_files"])
 
+    def test_stage_single_file_source_root_falls_back_to_copyfile_when_links_unavailable(self) -> None:
+        """Single-file staging should copy when hard links and symlinks are unavailable."""
         tmp_path: Path = self.make_temp_path()
         source_file: Path = tmp_path / "sample.bin"
         source_file.write_bytes(b"payload")
@@ -2375,8 +2377,6 @@ class TestRunImageCheck(CliTestCase):
         self.assertEqual(uroot, 0)
         mocked_hashes.assert_called_once()
         mocked_match.assert_called_once()
-
-    """Tests for the spool-free streaming flag on the file pack path."""
 
     def test_pack_file_stream_auto_block_size_defaults_min_compress_size_to_65536(self) -> None:
         """Streaming single-file mode should map min_compress_size=0 to the auto block-size value."""
