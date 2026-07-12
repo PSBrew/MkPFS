@@ -368,6 +368,9 @@ def run_batch(
                     zlib_level=pack_flags["zlib_level"],
                     threshold_gain=pack_flags["threshold_gain"],
                     cpu_count=pack_flags["cpu_count"],
+                    encrypted=pack_flags.get("encrypted", False),
+                    new_crypt=pack_flags.get("new_crypt", False),
+                    ekpfs=pack_flags.get("ekpfs"),
                     verbose=pack_flags.get("verbose", False),
                 )
             else:
@@ -383,6 +386,9 @@ def run_batch(
                     min_compress_size=pack_flags["min_compress_size"],
                     cpu_count=pack_flags["cpu_count"],
                     compress=pack_flags["compress"],
+                    encrypted=pack_flags.get("encrypted", False),
+                    new_crypt=pack_flags.get("new_crypt", False),
+                    ekpfs=pack_flags.get("ekpfs"),
                     verbose=pack_flags.get("verbose", False),
                     skip_executable_compression=pack_flags.get("skip_executable_compression", False),
                     inner_file_name=None,

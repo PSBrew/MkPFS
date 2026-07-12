@@ -2042,11 +2042,20 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
     source_dir: Path = Path(args.source_dir).expanduser().resolve()
     output_dir: Path = Path(args.output_dir).expanduser().resolve()
 
-    # Resolve a shared pack config so we can pass a flat dict to the batch
-    # orchestrator.  We never actually pack through the normal pack function
-    # here, so block_size is a "representative" value used to validate
-    # user-provided CLI flags.
-    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=65536)
+    # Resolve --block-size the same way as the pack-folder command so the
+    # user-supplied value is honoured.  Batch does not support auto-fit
+    # (which requires a full tree walk), so only "auto" and a literal
+    # integer are accepted.
+    block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
+    if block_size_arg == "auto":
+        block_size: int = 65536
+    else:
+        try:
+            block_size = int(args.block_size)
+        except (TypeError, ValueError) as exc:
+            raise BuildError("--block-size must be an integer value or 'auto' for batch conversion") from exc
+
+    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
 
     pack_flags: dict = {
         "block_size": config.block_size,
