@@ -231,7 +231,7 @@ class TestCliArgumentHelpers(CliTestCase):
         choices: dict[str, argparse.ArgumentParser] = next(
             action.choices for action in parser._actions if isinstance(action, argparse._SubParsersAction)
         )
-        self.assertEqual(set(choices), {"pack", "verify", "inspect", "tree", "unpack"})
+        self.assertEqual(set(choices), {"pack", "verify", "batch", "inspect", "tree", "unpack"})
 
     def test_pack_parser_uses_default_compression_level_of_seven(self) -> None:
         """The pack parser should expose 7 as the default compression level."""

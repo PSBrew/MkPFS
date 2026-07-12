@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 from .i18n import _LANG_NAMES, set_locale, tr
 from .panels import (
     BasePanel,
+    BatchPanel,
     ExfatPanel,
     InspectPanel,
     PackFilePanel,
@@ -29,6 +30,7 @@ from .theme import (
     _NEON_ORANGE,
     _NEON_PINK,
     _NEON_PURPLE,
+    _NEON_TEAL,
     _SIDEBAR_W,
     _TEXT_MUTED,
     _TEXT_PRIMARY,
@@ -52,6 +54,7 @@ class MkPFSApp(ctk.CTk):
     """Main application window with neon sidebar and language selector."""
 
     _PAGES: ClassVar[list[tuple[str, str, type, str]]] = [
+        ("nav_batch", "nav_batch", BatchPanel, _NEON_TEAL),
         ("nav_pack_folder", "nav_pack_folder", PackFolderPanel, _NEON_BLUE),
         ("nav_pack_exfat", "nav_pack_exfat", ExfatPanel, _NEON_ORANGE),
         ("nav_pack_file", "nav_pack_file", PackFilePanel, _NEON_CYAN),
