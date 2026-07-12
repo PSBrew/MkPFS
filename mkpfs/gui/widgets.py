@@ -17,16 +17,13 @@ from .theme import (
     _BG_PANEL,
     _BORDER_BRIGHT,
     _CORNER,
-    _ERROR,
     _FONT_LABEL,
     _FONT_MONO,
     _FONT_UI,
     _NEON_BLUE,
-    _SUCCESS,
     _TEXT_MUTED,
     _TEXT_PRIMARY,
     _TEXT_SECONDARY,
-    _WARNING,
 )
 
 # ---------------------------------------------------------------------------

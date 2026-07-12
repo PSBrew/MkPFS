@@ -2378,8 +2378,6 @@ class TestRunImageCheck(CliTestCase):
         mocked_hashes.assert_called_once()
         mocked_match.assert_called_once()
 
-    # Tests for the spool-free streaming flag on the file pack path.
-
     def test_pack_file_stream_auto_block_size_defaults_min_compress_size_to_65536(self) -> None:
         """Streaming single-file mode should map min_compress_size=0 to the auto block-size value."""
         tmp_path: Path = self.make_temp_path()
