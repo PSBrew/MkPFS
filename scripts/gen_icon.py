@@ -23,8 +23,25 @@ def make_icon(src: Path, out: Path, sizes: Sequence[tuple[int, int]]) -> None:
         raise FileNotFoundError(f"source icon not found: {src}")
 
     img = Image.open(src).convert("RGBA")
+
+    # Explicitly create each icon resolution to ensure multi-size ICO output.
+    # Some Pillow/ICO combinations do not reliably embed multiple sizes when
+    # only `sizes=` is provided without append_images.
+    normalized_sizes = sorted({(int(w), int(h)) for (w, h) in sizes}, key=lambda s: (s[0], s[1]))
+    if not normalized_sizes:
+        raise ValueError("at least one icon size must be provided")
+
+    try:
+        resample = Image.Resampling.LANCZOS
+    except AttributeError:  # pragma: no cover - Pillow compatibility
+        resample = Image.LANCZOS
+
+    resized_images = [img.resize(size, resample=resample) for size in normalized_sizes]
+    base_image = resized_images[0]
+    extra_images = resized_images[1:]
+
     out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, sizes=list(sizes))
+    base_image.save(out, sizes=normalized_sizes, append_images=extra_images)
     print("Wrote", out)
 
 

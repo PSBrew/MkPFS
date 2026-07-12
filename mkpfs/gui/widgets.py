@@ -31,6 +31,28 @@ from .theme import (
 
 # ---------------------------------------------------------------------------
 # Utility helpers
+
+
+def _dim_hex_color(color: str, factor: float = 0.85) -> str:
+    """Return a darker shade for a ``#RRGGBB`` color.
+
+    If parsing fails (for example a named color), return the original value.
+    """
+    if not isinstance(color, str) or not color.startswith("#") or len(color) != 7:
+        return color
+    try:
+        r = int(color[1:3], 16)
+        g = int(color[3:5], 16)
+        b = int(color[5:7], 16)
+    except ValueError:
+        return color
+
+    r = max(0, min(255, int(r * factor)))
+    g = max(0, min(255, int(g * factor)))
+    b = max(0, min(255, int(b * factor)))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -182,8 +204,10 @@ class PathRow(ctk.CTkFrame):
             _browse_folder(self._var)
         elif self._mode == "open":
             _browse_file(self._var, self._filetypes)
-        else:
+        elif self._mode == "save":
             _browse_save(self._var, self._filetypes)
+        else:
+            raise ValueError(f"Unsupported PathRow mode: {self._mode!r}")
 
 
 class LogPane(ctk.CTkFrame):
@@ -215,11 +239,6 @@ class LogPane(ctk.CTkFrame):
         )
         self._text.pack(fill="both", expand=True, padx=6, pady=6)
 
-        self._text._textbox.tag_config("error", foreground=_ERROR)
-        self._text._textbox.tag_config("warning", foreground=_WARNING)
-        self._text._textbox.tag_config("success", foreground=_SUCCESS)
-        self._text._textbox.tag_config("muted", foreground=_TEXT_MUTED)
-
     def clear(self) -> None:
         """Remove all content from the log pane."""
         self._text.configure(state="normal")
@@ -234,16 +253,13 @@ class LogPane(ctk.CTkFrame):
             tag: Colour tag ('error', 'warning', 'success', 'muted').
         """
         self._text.configure(state="normal")
-        if tag:
-            self._text._textbox.insert("end", text + "\n", tag)
-        else:
-            self._text.insert("end", text + "\n")
+        self._text.insert("end", text + "\n")
         self._text.configure(state="disabled")
         self._text.see("end")
 
     def get_text(self) -> str:
         """Return the full text content of the log pane."""
-        return self._text._textbox.get("1.0", "end-1c")
+        return self._text.get("1.0", "end-1c")
 
 
 class NeonButton(ctk.CTkButton):
@@ -265,7 +281,7 @@ class NeonButton(ctk.CTkButton):
             text=text,
             command=command,
             fg_color=color,
-            hover_color=color,
+            hover_color=_dim_hex_color(color),
             corner_radius=10,
             font=("Segoe UI", 13, "bold"),
             text_color=_BG_DEEP,
