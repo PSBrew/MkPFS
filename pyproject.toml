@@ -33,7 +33,7 @@ mkpfs = "mkpfs.cli:main"
 mkpfs-gui = "mkpfs.gui:main"
 
 [build-system]
-requires = ["hatchling<1.30"]
+requires = ["hatchling<1.32"]
 build-backend = "hatchling.build"
 
 [project.urls]
