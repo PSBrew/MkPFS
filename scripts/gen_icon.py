@@ -22,10 +22,16 @@ def make_icon(src: Path, out: Path, sizes: Sequence[tuple[int, int]]) -> None:
     if not src.exists():
         raise FileNotFoundError(f"source icon not found: {src}")
 
-    img = Image.open(src).convert("RGBA")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, sizes=list(sizes))
-    print("Wrote", out)
+    with Image.open(src) as img_raw:
+        img = img_raw.convert("RGBA")
+
+        normalized_sizes = sorted({(w, h) for (w, h) in sizes})
+        if not normalized_sizes:
+            raise ValueError("at least one icon size must be provided")
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out, format="ICO", sizes=normalized_sizes)
+        print("Wrote", out)
 
 
 def main() -> int:
