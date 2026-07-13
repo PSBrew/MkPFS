@@ -25,18 +25,21 @@ import hashlib
 import os
 import platform
 import urllib.request
-from ctypes import c_int, c_void_p, c_longlong, c_size_t
+from ctypes import c_int, c_longlong, c_size_t, c_ssize_t, c_void_p
 from pathlib import Path
-from typing import Optional
 
-# --- Constants (match go-oodle) ---------------------------------------------
+# Constants
 
 KRAKEN_COMPRESSOR_ID = 8
+# Compression levels
 
-# Compression levels (go-oodle)
 COMPRESSION_LEVEL_NORMAL = 4
+COMPRESSION_LEVEL_OPTIMAL1 = 5
 COMPRESSION_LEVEL_OPTIMAL2 = 6
 COMPRESSION_LEVEL_OPTIMAL3 = 7
+COMPRESSION_LEVEL_OPTIMAL4 = 8
+COMPRESSION_LEVEL_OPTIMAL5 = 9
+
 
 # Decompress flags (go-oodle uses No/0)
 FUZZ_SAFE_NO = 0
@@ -51,23 +54,21 @@ _PLATFORM_INFO = {
     "windows": {
         "lib_name": "oo2core_9_win64.dll",
         "download_url": (
-            "https://github.com/new-world-tools/go-oodle/releases/download/"
-            "v0.2.3-files/oo2core_9_win64.dll"
+            "https://github.com/new-world-tools/go-oodle/releases/download/v0.2.3-files/oo2core_9_win64.dll"
         ),
         "sha256": "6f5d41a7892ea6b2db420f2458dad2f84a63901c9a93ce9497337b16c195f457",
     },
     "linux": {
         "lib_name": "liboo2corelinux64.so.9",
         "download_url": (
-            "https://github.com/new-world-tools/go-oodle/releases/download/"
-            "v0.2.3-files/liboo2corelinux64.so.9"
+            "https://github.com/new-world-tools/go-oodle/releases/download/v0.2.3-files/liboo2corelinux64.so.9"
         ),
         "sha256": "7354655eb25b587dc34cbf98696b91e30e6d7a3f0eefad3872e6c1b76ef86a6e",
     },
 }
 
 
-def _get_platform_key() -> Optional[str]:
+def _get_platform_key() -> str | None:
     """Return 'windows', 'linux', or None (unsupported like macOS)."""
     system = platform.system().lower()
     if system == "windows":
@@ -126,7 +127,7 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _find_oodle_lib() -> Optional[str]:
+def _find_oodle_lib() -> str | None:
     """Locate the Oodle library using the search order.
 
     1. OODLE_LIB env var
@@ -194,7 +195,7 @@ class OodleWrapper:
                    uintptr decoderMemorySize, uintptr threadPhase) -> uintptr
     """
 
-    def __init__(self, lib_path: Optional[str] = None) -> None:
+    def __init__(self, lib_path: str | None = None) -> None:
         if lib_path is None:
             lib_path = _find_oodle_lib()
         if not lib_path:
@@ -213,9 +214,7 @@ class OodleWrapper:
                 try:
                     self._lib = ctypes.WinDLL(lib_path)
                 except Exception as exc:
-                    raise ImportError(
-                        f"Failed to load Oodle library '{lib_path}': {exc}"
-                    ) from exc
+                    raise ImportError(f"Failed to load Oodle library '{lib_path}': {exc}") from exc
             else:
                 raise
 
@@ -223,10 +222,7 @@ class OodleWrapper:
         try:
             self._compress_fn = self._lib.OodleLZ_Compress
         except AttributeError as exc:
-            raise ImportError(
-                f"Oodle library loaded from {lib_path} but "
-                f"OodleLZ_Compress symbol is missing"
-            ) from exc
+            raise ImportError(f"Oodle library loaded from {lib_path} but OodleLZ_Compress symbol is missing") from exc
 
         self._decompress_fn = getattr(self._lib, "OodleLZ_Decompress", None)
 
@@ -236,44 +232,38 @@ class OodleWrapper:
             self._decompress_fn.restype = c_size_t
 
         # Set argtypes to match go-oodle exactly
-        # compress: 10 args (NO compBufSize — go-oodle omits it)
-        try:
-            self._compress_fn.argtypes = [
-                c_int,      # compressor
-                c_void_p,   # rawBuf
-                c_ssize_t,  # rawSize (Go int → pointer-sized on x64)
-                c_void_p,   # compBuf
-                c_int,      # level (Go int → C int)
-                c_void_p,   # options (uintptr)
-                c_void_p,   # dictionaryBase (uintptr)
-                c_void_p,   # lrm (uintptr)
-                c_void_p,   # scratchMem (uintptr)
-                c_void_p,   # scratchSize (uintptr)
-            ]
-        except Exception:
-            pass
+        # compress: 10 args (NO compBufSize -- go-oodle omits it)
+        self._compress_fn.argtypes = [
+            c_int,  # compressor
+            c_void_p,  # rawBuf
+            c_ssize_t,  # rawSize (Go int -> pointer-sized on x64)
+            c_void_p,  # compBuf
+            c_int,  # level (Go int -> C int)
+            c_void_p,  # options (uintptr)
+            c_void_p,  # dictionaryBase (uintptr)
+            c_void_p,  # lrm (uintptr)
+            c_void_p,  # scratchMem (uintptr)
+            c_void_p,  # scratchSize (uintptr)
+        ]
 
         if self._decompress_fn is not None:
             # decompress: 14 args
-            try:
-                self._decompress_fn.argtypes = [
-                    c_void_p,    # compBuf
-                    c_int,       # compBufSize (Go int → C int)
-                    c_void_p,    # rawBuf
-                    c_longlong,  # rawBufSize (Go int64 → C int64)
-                    c_void_p,    # fuzzSafe (uintptr)
-                    c_void_p,    # checkCRC (uintptr)
-                    c_void_p,    # verbosity (uintptr)
-                    c_void_p,    # decBufBase (uintptr)
-                    c_void_p,    # decBufSize (uintptr)
-                    c_void_p,    # fpCallback (uintptr)
-                    c_void_p,    # callbackUserData (uintptr)
-                    c_void_p,    # decoderMemory (uintptr)
-                    c_void_p,    # decoderMemorySize (uintptr)
-                    c_void_p,    # threadPhase (uintptr)
-                ]
-            except Exception:
-                pass
+            self._decompress_fn.argtypes = [
+                c_void_p,  # compBuf
+                c_int,  # compBufSize (Go int -> C int)
+                c_void_p,  # rawBuf
+                c_longlong,  # rawBufSize (Go int64 -> C int64)
+                c_void_p,  # fuzzSafe (uintptr)
+                c_void_p,  # checkCRC (uintptr)
+                c_void_p,  # verbosity (uintptr)
+                c_void_p,  # decBufBase (uintptr)
+                c_void_p,  # decBufSize (uintptr)
+                c_void_p,  # fpCallback (uintptr)
+                c_void_p,  # callbackUserData (uintptr)
+                c_void_p,  # decoderMemory (uintptr)
+                c_void_p,  # decoderMemorySize (uintptr)
+                c_void_p,  # threadPhase (uintptr)
+            ]
 
     def compress_kraken(self, data: bytes, level: int = 7) -> bytes:
         """Compress bytes with Kraken via Oodle.
@@ -337,12 +327,12 @@ class OodleWrapper:
             c_void_p(FUZZ_SAFE_NO),
             c_void_p(CHECK_CRC_NO),
             c_void_p(VERBOSITY_NONE),
-            c_void_p(0),              # decBufBase
-            c_void_p(0),              # decBufSize
-            c_void_p(0),              # fpCallback
-            c_void_p(0),              # callbackUserData
-            c_void_p(0),              # decoderMemory
-            c_void_p(0),              # decoderMemorySize
+            c_void_p(0),  # decBufBase
+            c_void_p(0),  # decBufSize
+            c_void_p(0),  # fpCallback
+            c_void_p(0),  # callbackUserData
+            c_void_p(0),  # decoderMemory
+            c_void_p(0),  # decoderMemorySize
             c_void_p(DECODE_THREAD_PHASE_ALL),
         )
 
@@ -354,7 +344,7 @@ class OodleWrapper:
 
 
 # Module-level cache
-_oodle: Optional[OodleWrapper] = None
+_oodle: OodleWrapper | None = None
 
 
 def has_oodle() -> bool:

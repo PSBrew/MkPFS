@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+
 try:
     from enum import StrEnum
 except Exception:
@@ -22,6 +23,8 @@ except Exception:
 
         def __str__(self) -> str:
             return str(self.value)
+
+
 from pathlib import Path
 
 from . import __version__, consts
@@ -271,9 +274,10 @@ def print_build_parameters(
     info(f"  Compression:       {'enabled' if compress else 'disabled'}")
     if compress:
         if kraken:
-            info(f"    Method:           Kraken (Oodle)")
+            info("    Method:           Kraken (Oodle)")
         else:
             from . import compression as comp
+
             info(f"    Method:           zlib ({comp.get_backend_name()})")
         info(f"    Skip executables: {'yes' if skip_executable_compression else 'no'}")
     info(f"  Game-file checks:  {'required' if require_game_files else 'disabled'}")
@@ -986,10 +990,11 @@ def _resolve_pack_build_config(args: argparse.Namespace, *, block_size: int) -> 
     if bool(getattr(args, "kraken", False)):
         try:
             from .oodle import has_oodle
+
             if not has_oodle():
                 raise BuildError("--kraken requires the Oodle Kraken library; it could not be loaded")
         except ImportError:
-            raise BuildError("--kraken requires the Oodle Kraken library; it could not be loaded")
+            raise BuildError("--kraken requires the Oodle Kraken library; it could not be loaded") from None
 
     return PackBuildConfig(
         block_size=block_size,

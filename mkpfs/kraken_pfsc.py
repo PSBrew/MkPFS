@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import hashlib
 import struct
-from typing import Callable, Optional
+from typing import Callable
+
 from .logging import warning
 
 # Constants matching LibProsperoPKG's writer
@@ -188,7 +189,7 @@ def encode_pfsc_kraken_payload(
     payload: bytes,
     level: int = 7,
     block_size: int = 0x40000,
-    encode_block_fn: Optional[Callable[[bytes, int], bytes]] = None,
+    encode_block_fn: Callable[[bytes, int], bytes] | None = None,
 ) -> bytes:
     """Build a PFSv3 PFSC container for `payload`.
 
@@ -376,7 +377,7 @@ def decode_pfsc_kraken_payload(container: bytes) -> bytes:
 
     if 3 not in sections or 4 not in sections:
         raise ValueError("PFSC container missing required id=3 (boundary) or id=4 (hash) sections")
-    off3, sec3_size = sections[3]
+    off3, _sec3_size = sections[3]
     off4, sec4_size = sections[4]
 
     if sec4_size % DIGEST_LENGTH != 0:
@@ -420,19 +421,14 @@ def decode_pfsc_kraken_payload(container: bytes) -> bytes:
         comp_block = container[off7 + comp_off : off7 + comp_off + comp_size]
         flags = flags_arr[i]
 
-        if (flags & STORED_FLAG_BASE) != 0:
-            # stored
-            if len(comp_block) < uncomp_size:
-                raise ValueError("stored block truncated")
-            out[uncomp_off : uncomp_off + uncomp_size] = comp_block[:uncomp_size]
-            decompressed_block = bytes(out[uncomp_off : uncomp_off + uncomp_size])
-        else:
-            # compressed — require Oodle
+        if (flags & COMPRESSED_FLAG) == COMPRESSED_FLAG:
+            # compressed -- require Oodle
             try:
                 from . import oodle as _oodle
             except Exception as exc:  # pragma: no cover - environment dependent
                 raise ImportError(
-                    "PFSC contains Kraken-compressed blocks but the Oodle native library is not available. Set OODLE_LIB or install liboo2core.*"
+                    "PFSC contains Kraken-compressed blocks but the Oodle native"
+                    " library is not available. Set OODLE_LIB or install liboo2core.*"
                 ) from exc
 
             decompressed_block = _oodle.decompress_kraken_block(comp_block, uncomp_size)
@@ -441,6 +437,12 @@ def decode_pfsc_kraken_payload(container: bytes) -> bytes:
                     f"decompressed block size mismatch (got {len(decompressed_block)}, expected {uncomp_size})"
                 )
             out[uncomp_off : uncomp_off + uncomp_size] = decompressed_block
+        else:
+            # stored
+            if len(comp_block) < uncomp_size:
+                raise ValueError("stored block truncated")
+            out[uncomp_off : uncomp_off + uncomp_size] = comp_block[:uncomp_size]
+            decompressed_block = bytes(out[uncomp_off : uncomp_off + uncomp_size])
 
         # validate digest
         digest_pos = off4 + i * DIGEST_LENGTH
