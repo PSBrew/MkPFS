@@ -33,7 +33,7 @@ from typing import BinaryIO, Protocol
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from . import compression as comp
-from . import consts
+from . import consts, kraken_pfsc
 from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
 from .exfat_writer import iter_exfat_image
 from .gather import gather_files_scandir
@@ -2085,6 +2085,7 @@ def _compress_files_in_process(
     total_bytes_to_process: int,
     progress: Progress,
     temp_folder: Path | None,
+    kraken: bool = False,
 ) -> None:
     """Compress files in-process while streaming progress updates.
 
@@ -2174,16 +2175,48 @@ def _compress_files_in_process(
                 is_compressed = False
                 gain_pct = 0.0
                 hypothetical_compressed_size = 0
-                stored_size, is_compressed, gain_pct, hypothetical_compressed_size = _encode_pfsc_file_to_spool(
-                    abs_path=file_node.abs_path,
-                    spool_path=spool_path,
-                    threshold_gain=threshold_gain,
-                    min_file_gain=min_file_gain,
-                    zlib_level=zlib_level,
-                    logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
-                    block_worker_count=block_worker_count,
-                    progress_callback=report_progress,
-                )
+                if kraken:
+                    # Build a Kraken PFSC v3 container (stored path handled by writer)
+                    try:
+                        with file_node.abs_path.open("rb") as _src:
+                            payload_bytes = _src.read()
+                        # Attempt to use Oodle encoder if available; fallback to stored path
+                        try:
+                            from .oodle import compress_kraken_block
+
+                            encode_fn = compress_kraken_block
+                        except ImportError:
+                            encode_fn = None
+                        container = kraken_pfsc.encode_pfsc_kraken_payload(
+                            payload_bytes,
+                            level=zlib_level,
+                            block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                            encode_block_fn=encode_fn,
+                        )
+                        stored_size = len(container)
+                        # Consider compressed when we used an encoder and saved space.
+                        is_compressed = encode_fn is not None and stored_size < file_node.raw_size
+                        gain_pct = (
+                            ((file_node.raw_size - stored_size) / file_node.raw_size) * 100.0
+                            if file_node.raw_size > 0
+                            else 0.0
+                        )
+                        hypothetical_compressed_size = stored_size
+                    except Exception:
+                        with suppress(OSError):
+                            spool_path.unlink()
+                        raise
+                else:
+                    stored_size, is_compressed, gain_pct, hypothetical_compressed_size = _encode_pfsc_file_to_spool(
+                        abs_path=file_node.abs_path,
+                        spool_path=spool_path,
+                        threshold_gain=threshold_gain,
+                        min_file_gain=min_file_gain,
+                        zlib_level=zlib_level,
+                        logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                        block_worker_count=block_worker_count,
+                        progress_callback=report_progress,
+                    )
                 if is_compressed:
                     file_node.stored_source_path = spool_path
                     file_node.stored_source_is_temp = True
@@ -3168,6 +3201,7 @@ def build_pfs(
     min_file_gain: int = 0,
     min_compress_size: int = 0,
     temp_folder: Path | None = None,
+    kraken: bool = False,
 ) -> BuildStats:
     """Build a PFS image from a source tree.
 
@@ -3265,6 +3299,7 @@ def build_pfs(
                     total_bytes_to_process=total_bytes_to_process,
                     progress=progress,
                     temp_folder=temp_root,
+                    kraken=kraken,
                 )
             except OSError:
                 cleanup_temporary_file_node_payloads(file_nodes=compression_file_nodes)

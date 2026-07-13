@@ -753,6 +753,12 @@ def cli_mkpfs_add_create_args(
         "--compress", action="store_true", default=True, help="Enable PFSC block compression (default)"
     )
     comp_group.add_argument("--no-compress", action="store_true", help="Disable PFSC block compression")
+    comp_group.add_argument(
+        "--kraken",
+        action="store_true",
+        default=False,
+        help="Use Kraken/PFSC v3 compression for inner PFS (produces .ffpfsc images, requires Oodle SDK for compressed blocks)",
+    )
 
     parser.add_argument(
         "--threshold-gain",
@@ -924,6 +930,7 @@ class PackBuildConfig:
     cpu_count: int
     skip_executable_compression: bool
     inode_bits: int
+    kraken: bool
 
 
 def _resolve_pack_build_config(args: argparse.Namespace, *, block_size: int) -> PackBuildConfig:
@@ -977,6 +984,7 @@ def _resolve_pack_build_config(args: argparse.Namespace, *, block_size: int) -> 
         cpu_count=args.cpu_count,
         skip_executable_compression=bool(getattr(args, "skip_executable_compression", False)),
         inode_bits=args.inode_bits,
+        kraken=bool(getattr(args, "kraken", False)),
     )
 
 
@@ -1190,6 +1198,7 @@ def _run_pack_build(
             raise BuildError("--block-size must be an integer value, 'auto', or 'auto-fit'") from exc
 
     config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
+    # Propagate kraken selection into pfs module for downstream decisions
 
     _title_id: str | None
     warnings: list[str]
@@ -1254,8 +1263,8 @@ def _run_pack_build(
         min_file_gain=config.min_file_gain,
         min_compress_size=config.min_compress_size,
         temp_folder=temp_folder,
+        kraken=config.kraken,
     )
-
     stats.input_path = display_source_path
     print_summary(stats)
     verification_mode: PackVerificationMode = _resolve_pack_verification_mode(args)
@@ -1559,6 +1568,7 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
             ) from exc
 
     config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
+    # Propagate kraken selection into pfs module for downstream decisions
     temp_folder: Path = _resolve_pack_temp_folder(args)
     rename_inner_image: bool = bool(getattr(args, "rename_inner_image", True))
     internal_file_name: str = _resolve_single_file_internal_name(
@@ -2064,6 +2074,7 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
         except (TypeError, ValueError) as exc:
             raise BuildError("--block-size must be an integer value or 'auto' for batch conversion") from exc
     config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
+    # Propagate kraken selection into pfs module for downstream decisions
     pack_flags: dict = {
         "block_size": config.block_size,
         "pfs_version": config.pfs_version,
