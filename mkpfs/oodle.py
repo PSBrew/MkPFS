@@ -241,7 +241,7 @@ class OodleWrapper:
             self._compress_fn.argtypes = [
                 c_int,      # compressor
                 c_void_p,   # rawBuf
-                c_int,      # rawSize (Go int → C int)
+                c_ssize_t,  # rawSize (Go int → pointer-sized on x64)
                 c_void_p,   # compBuf
                 c_int,      # level (Go int → C int)
                 c_void_p,   # options (uintptr)
@@ -296,7 +296,7 @@ class OodleWrapper:
         ret = self._compress_fn(
             c_int(KRAKEN_COMPRESSOR_ID),
             src_ptr,
-            c_int(src_len),
+            c_ssize_t(src_len),
             dst_ptr,
             c_int(level),
             c_void_p(0),  # options
