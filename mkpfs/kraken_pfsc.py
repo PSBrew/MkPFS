@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import struct
 from typing import Callable, Optional
-import warnings
+from .logging import warning
 
 # Constants matching LibProsperoPKG's writer
 MAGIC = 0x43534650  # 'PFSC' little-endian bytes == b'PFSC'
@@ -316,8 +316,9 @@ def encode_pfsc_kraken_payload(
         cumulative_comp += comp_write_size
         cumulative += size
     if encode_block_fn is not None and compressed_count == 0 and block_count > 0:
-        warnings.warn(
-            "Kraken encode_block_fn was provided but all blocks fell back to stored "
+        warning(
+            "Oodle Kraken library loaded but all "
+            f"{block_count} block(s) stored uncompressed "
             "(compression failed or was not beneficial)"
         )
 

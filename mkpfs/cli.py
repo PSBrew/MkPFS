@@ -215,6 +215,7 @@ def print_build_parameters(
     min_compress_size: int,
     dry_run: bool,
     require_game_files: bool,
+    kraken: bool = False,
     skip_executable_compression: bool = True,
 ) -> None:
     """Print build configuration at the start.
@@ -238,6 +239,7 @@ def print_build_parameters(
         min_compress_size: Minimum file size eligible for compression.
         dry_run: Whether the build is a dry run.
         require_game_files: Whether strict game-file validation is enabled.
+        kraken: Whether Kraken (Oodle) PFSC compression is enabled.
         skip_executable_compression: Whether executable-like files are stored raw.
     """
     print_version_header()
@@ -268,6 +270,11 @@ def print_build_parameters(
     info(f"    Case insensitive: {'yes' if mode & consts.PFS_MODE_CASE_INSENSITIVE else 'no'}")
     info(f"  Compression:       {'enabled' if compress else 'disabled'}")
     if compress:
+        if kraken:
+            info(f"    Method:           Kraken (Oodle)")
+        else:
+            from . import compression as comp
+            info(f"    Method:           zlib ({comp.get_backend_name()})")
         info(f"    Skip executables: {'yes' if skip_executable_compression else 'no'}")
     info(f"  Game-file checks:  {'required' if require_game_files else 'disabled'}")
     if compress:
@@ -976,6 +983,13 @@ def _resolve_pack_build_config(args: argparse.Namespace, *, block_size: int) -> 
     ekpfs_key: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
     if getattr(args, "ekpfs_key", None) and not encrypted:
         raise BuildError("--ekpfs-key requires --encrypted")
+    if bool(getattr(args, "kraken", False)):
+        try:
+            from .oodle import has_oodle
+            if not has_oodle():
+                raise BuildError("--kraken requires the Oodle Kraken library; it could not be loaded")
+        except ImportError:
+            raise BuildError("--kraken requires the Oodle Kraken library; it could not be loaded")
 
     return PackBuildConfig(
         block_size=block_size,
@@ -1037,6 +1051,7 @@ def _print_pack_parameters(
         config.min_compress_size,
         dry_run,
         require_game_files,
+        config.kraken,
         config.skip_executable_compression,
     )
 
