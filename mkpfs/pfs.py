@@ -25,20 +25,26 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except Exception:
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        """Compatibility shim for Python < 3.11 where StrEnum is not available."""
+
+        def __str__(self) -> str:
+            return str(self.value)
 from multiprocessing.pool import AsyncResult
 from pathlib import Path
 from typing import BinaryIO, Protocol
-
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-from . import compression as comp
-from . import consts, kraken_pfsc
-from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
 from .exfat_writer import iter_exfat_image
 from .gather import gather_files_scandir
 from .logging import info, warning
 from .pbar import Progress
+from . import compression as comp
+from . import consts, kraken_pfsc
 from .utils import (
     _read_exact,
     ceil_div,

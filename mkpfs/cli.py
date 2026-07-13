@@ -12,7 +12,16 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except Exception:
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        """Compatibility shim for Python < 3.11 where StrEnum is not available."""
+
+        def __str__(self) -> str:
+            return str(self.value)
 from pathlib import Path
 
 from . import __version__, consts
