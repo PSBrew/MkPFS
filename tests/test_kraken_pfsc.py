@@ -3,7 +3,7 @@ import struct
 import mkpfs.kraken_pfsc as kf
 
 
-def test_encode_decode_stored():
+def test_encode_decode_stored() -> None:
     raw = b"Hello PFSC!" * 500  # ~6000 bytes, smaller than default 256 KiB block
     container = kf.encode_pfsc_kraken_payload(raw)
     assert container[:4] == b"PFSC"
@@ -15,7 +15,7 @@ def test_encode_decode_stored():
     assert extracted == raw
 
 
-def test_encode_decode_empty():
+def test_encode_decode_empty() -> None:
     raw = b""
     container = kf.encode_pfsc_kraken_payload(raw)
     assert container[:4] == b"PFSC"
