@@ -278,6 +278,7 @@ def encode_pfsc_kraken_payload(
                         comp_bytes = bytes(comp_candidate)
                         compressed_count += 1
             except Exception:
+                # TODO: Log the error so we can see that something was wrong while compression.
                 # Compressor error -> fall back to stored path silently
                 compressed = False
                 comp_bytes = None
