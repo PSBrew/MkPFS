@@ -258,35 +258,70 @@ def encode_pfsc_kraken_payload(
     cumulative_comp = 0  # compressed-section running offset
 
     compressed_count = 0
+    CHUNK_SIZE = 0x20000  # 128 KiB — newLZ chunk decode limit
     for i in range(block_count):
         size = 0 if payload_len == 0 else min(block_size, payload_len - cumulative)
 
         # Extract the source bytes for this logical block
         block_bytes = b"" if size == 0 else payload[cumulative : cumulative + size]
 
-        # Try compression if requested
+        # Try compression if requested. We compress per 128 KiB chunk to
+        # match LibProsperoPKG's framing so the kernel's frame-rebuilder can
+        # split the block if needed. If any chunk fails the keep-rule we fall
+        # back to stored (all-or-nothing per block).
         compressed = False
         comp_bytes = None
+        first_chunk_comp_size = 0
         if encode_block_fn is not None and size > 0:
             try:
-                comp_candidate = encode_block_fn(block_bytes, level)
-                # Accept only when compressor returned bytes and they satisfy keep rule
-                if isinstance(comp_candidate, (bytes, bytearray)):
-                    comp_len = len(comp_candidate)
-                    if comp_len <= ((size * 15) >> 4):
-                        compressed = True
-                        comp_bytes = bytes(comp_candidate)
-                        compressed_count += 1
+                if size <= CHUNK_SIZE:
+                    # Single-chunk path
+                    comp_candidate = encode_block_fn(block_bytes, level)
+                    if isinstance(comp_candidate, (bytes, bytearray)):
+                        comp_len = len(comp_candidate)
+                        if comp_len <= ((size * 15) >> 4):
+                            compressed = True
+                            comp_bytes = bytes(comp_candidate)
+                            first_chunk_comp_size = comp_len
+                            compressed_count += 1
+                else:
+                    # Multi-chunk: compress each 128 KiB piece independently
+                    pieces = []
+                    chunk_off = 0
+                    while chunk_off < size:
+                        chunk_raw = block_bytes[chunk_off : chunk_off + CHUNK_SIZE]
+                        c = encode_block_fn(chunk_raw, level)
+                        if not isinstance(c, (bytes, bytearray)):
+                            raise TypeError("encoder returned non-bytes")
+                        chunk_comp = bytes(c)
+                        # Enforce the same keep-rule per chunk; if any chunk fails
+                        # we abort compression for the whole block to keep the
+                        # on-disk format simple (all-or-nothing).
+                        if len(chunk_comp) > ((len(chunk_raw) * 15) >> 4):
+                            raise ValueError("chunk did not compress enough")
+                        pieces.append(chunk_comp)
+                        if chunk_off == 0:
+                            first_chunk_comp_size = len(chunk_comp)
+                        chunk_off += CHUNK_SIZE
+                    comp_bytes = b"".join(pieces)
+                    compressed = True
+                    compressed_count += 1
             except Exception:
                 # Compressor error -> fall back to stored path silently
                 compressed = False
                 comp_bytes = None
+                first_chunk_comp_size = 0
 
         # Decide flags and size hint based on chosen path
         if compressed and comp_bytes is not None:
             flags = COMPRESSED_FLAG
             comp_write_size = len(comp_bytes)
-            size_hint = min(max(comp_write_size - 1, 0), SIZE_HINT_MAX)
+            if first_chunk_comp_size < comp_write_size:
+                # More than one chunk encoded
+                flags |= MULTICHUNK_FLAG
+                size_hint = min(max(first_chunk_comp_size - 1, 0), SIZE_HINT_MAX)
+            else:
+                size_hint = min(max(comp_write_size - 1, 0), SIZE_HINT_MAX)
         else:
             flags = STORED_FLAG_BASE | (STORED_FLAG_LARGE_HALF if size > half_block else 0)
             comp_write_size = size
@@ -323,9 +358,9 @@ def encode_pfsc_kraken_payload(
             "(compression failed or was not beneficial)"
         )
 
-    # Sentinel boundary entry
+    # Sentinel boundary entry (field0=cumulative compressed-section size, field1=payload_len)
     sentinel = off3 + block_count * DIRECTORY_ENTRY_SIZE
-    struct.pack_into("<Q", buf, sentinel, payload_len)
+    struct.pack_into("<Q", buf, sentinel, cumulative_comp)
     struct.pack_into("<Q", buf, sentinel + 8, payload_len)
 
     # Now that we know the real id=7 size, update the directory entry and header total_size
