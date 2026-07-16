@@ -46,6 +46,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from . import compression as comp
 from . import consts, kraken_pfsc
+from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
 from .exfat_writer import iter_exfat_image
 from .gather import gather_files_scandir
 from .logging import info, warning
@@ -2112,6 +2113,7 @@ def _compress_files_in_process(
         total_bytes_to_process: Total raw bytes represented by ``file_nodes_sorted``.
         progress: Progress reporter to update.
         temp_folder: Temporary folder used for PFSC spool files.
+        kraken: Flag that specify if we will use the kraken compressor or not.
     """
     progress_total_units: int = total_bytes_to_process if total_bytes_to_process > 0 else len(file_nodes_sorted)
     displayed_progress_units: int = 0
@@ -2187,11 +2189,12 @@ def _compress_files_in_process(
                 gain_pct = 0.0
                 hypothetical_compressed_size = 0
                 if kraken:
-                    # Build a Kraken PFSC v3 container (stored path handled by writer)
+                    # Build a Kraken PFSC v3 container. Write the resulting
+                    # container to the spool file when compression produced a
+                    # saved payload so the writer can later open the temp file.
                     try:
                         with file_node.abs_path.open("rb") as _src:
                             payload_bytes = _src.read()
-                        # Attempt to use Oodle encoder if available; fallback to stored path
                         try:
                             from .oodle import compress_kraken_block
 
@@ -2204,15 +2207,37 @@ def _compress_files_in_process(
                             block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
                             encode_block_fn=encode_fn,
                         )
-                        stored_size = len(container)
-                        # Consider compressed when we used an encoder and saved space.
-                        is_compressed = encode_fn is not None and stored_size < file_node.raw_size
+                        container_len = len(container)
+                        hypothetical_compressed_size = container_len
+                        # Consider compressed only when an actual encoder was used and
+                        # the container is smaller than the raw payload.
+                        encode_used = encode_fn is not None
+                        is_compressed = encode_used and (container_len < file_node.raw_size)
                         gain_pct = (
-                            ((file_node.raw_size - stored_size) / file_node.raw_size) * 100.0
+                            ((file_node.raw_size - container_len) / file_node.raw_size) * 100.0
                             if file_node.raw_size > 0
                             else 0.0
                         )
-                        hypothetical_compressed_size = stored_size
+
+                        if is_compressed:
+                            stored_size = container_len
+                            # Persist the compressed container to the spool path so
+                            # the later write phase can open it. Use atomic write
+                            # semantics for safety and cleanup on error.
+                            try:
+                                with spool_path.open("w+b") as sp:
+                                    sp.write(container)
+                                    sp.truncate(container_len)
+                            except OSError:
+                                with suppress(OSError):
+                                    spool_path.unlink()
+                                raise
+                        else:
+                            # Not beneficial or no encoder: don't use the spool and
+                            # treat the stored payload as the original raw file.
+                            stored_size = file_node.raw_size
+                            with suppress(FileNotFoundError):
+                                spool_path.unlink()
                     except Exception:
                         with suppress(OSError):
                             spool_path.unlink()
@@ -3237,6 +3262,7 @@ def build_pfs(
         min_file_gain: Minimum whole-file gain required to store PFSC.
         min_compress_size: Minimum raw file size eligible for PFSC.
         temp_folder: Optional temporary folder for PFSC spool files.
+        kraken: True if it should use the kraken compression algorithm.
 
     Returns:
         Build statistics for the completed image.
@@ -3295,7 +3321,9 @@ def build_pfs(
             f"\nCompressing {len(compression_file_nodes)} files ({human_readable_size(total_bytes_to_process)}) "
             f"using {worker_count} CPU core{'s' if worker_count != 1 else ''}..."
         )
-        if worker_count == 1 or len(compression_file_nodes) == 1:
+        if (
+            worker_count == 1 or len(compression_file_nodes) == 1
+        ):  # TODO: BUG Kraken only works with one worker for some reason
             # Single-worker or single-file path uses in-process flow so a large file
             # can leverage block-level multiprocessing inside one file.
             try:

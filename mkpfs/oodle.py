@@ -265,7 +265,7 @@ class OodleWrapper:
                 c_void_p,  # threadPhase (uintptr)
             ]
 
-    def compress_kraken(self, data: bytes, level: int = 7) -> bytes:
+    def compress_kraken(self, data: bytes, level: int = COMPRESSION_LEVEL_OPTIMAL5) -> bytes:
         """Compress bytes with Kraken via Oodle.
 
         Matches go-oodle Compress(): output buffer = inputSize * 2, 10 args
@@ -300,6 +300,8 @@ class OodleWrapper:
         if ret == 0:
             raise RuntimeError("Oodle compression failed (return=0)")
 
+        # TODO: Add a Debug level logging to show that Kraken was used.  Code below is just for tests
+        # print("" f"[oodle] Compressed {src_len} bytes to {ret} bytes (level={level})")
         return bytes(dst_buf.raw[: int(ret)])
 
     def decompress_kraken(self, comp: bytes, expected_size: int) -> bytes:
@@ -356,7 +358,7 @@ def has_oodle() -> bool:
         return False
 
 
-def compress_kraken_block(data: bytes, level: int = 7) -> bytes:
+def compress_kraken_block(data: bytes, level: int = COMPRESSION_LEVEL_OPTIMAL5) -> bytes:
     """Compress a block using Kraken. Raises ImportError if no library."""
     global _oodle
     if _oodle is None:
