@@ -2193,8 +2193,8 @@ def _compress_files_in_process(
                     # container to the spool file when compression produced a
                     # saved payload so the writer can later open the temp file.
                     try:
-                        with file_node.abs_path.open("rb") as _src:
-                            payload_bytes = _src.read()
+                        with file_node.abs_path.open("rb") as src:
+                            payload_bytes = src.read()
                         try:
                             from .oodle import compress_kraken_block
 

@@ -777,7 +777,7 @@ def cli_mkpfs_add_create_args(
         "--kraken",
         action="store_true",
         default=False,
-        help="Use Kraken/PFSC v3 compression for inner PFS (produces .ffpfsc images, requires Oodle SDK for compressed blocks)",
+        help="Use Kraken/PFSC v3 compression for inner PFS (produces .ffpfsc images; requires Oodle SDK)",
     )
 
     parser.add_argument(

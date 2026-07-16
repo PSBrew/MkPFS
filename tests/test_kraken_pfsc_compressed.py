@@ -1,10 +1,11 @@
 import zlib
+from typing import Any
 
 import mkpfs.kraken_pfsc as kf
 import mkpfs.oodle as oodle
 
 
-def test_encode_decode_compressed(monkeypatch) -> None:
+def test_encode_decode_compressed(monkeypatch: Any) -> None:
     # Create a predictable compressible payload of 2 * 128KiB = 256KiB
     CHUNK_SIZE = 0x20000
     payload = b"A" * (CHUNK_SIZE * 2)
