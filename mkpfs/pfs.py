@@ -2204,15 +2204,14 @@ def _compress_files_in_process(
                         container = kraken_pfsc.encode_pfsc_kraken_payload(
                             payload_bytes,
                             level=zlib_level,
-                            block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                            block_size=consts.PFSC_KRAKEN_LOGICAL_BLOCK_SIZE,
                             encode_block_fn=encode_fn,
                         )
                         container_len = len(container)
                         hypothetical_compressed_size = container_len
                         # Consider compressed only when an actual encoder was used and
                         # the container is smaller than the raw payload.
-                        encode_used = encode_fn is not None
-                        is_compressed = encode_used and (container_len < file_node.raw_size)
+                        is_compressed = (encode_fn is not None) and (container_len < file_node.raw_size)
                         gain_pct = (
                             ((file_node.raw_size - container_len) / file_node.raw_size) * 100.0
                             if file_node.raw_size > 0
@@ -2466,6 +2465,10 @@ def decode_inode_payload(
     """
     if not inode.is_compressed:
         return payload
+    # PFSC v3 (Kraken) uses a different container/layout than the legacy zlib PFSC.
+    # Detect version==3 at header offset 0x04 and dispatch to the Kraken decoder when present.
+    if len(payload) >= 6 and payload[:4] == b"PFSC" and struct.unpack_from("<H", payload, 0x04)[0] == 3:
+        return kraken_pfsc.decode_pfsc_kraken_payload(payload)
     return decode_pfsc_payload(payload=payload, expected_logical_size=inode.logical_size)
 
 
@@ -4183,6 +4186,7 @@ def build_pfs_stream_single_file(
     skip_executable_compression: bool = False,
     dry_run: bool = False,
     inner_file_name: str | None = None,
+    kraken: bool = False,
 ) -> BuildStats:
     """Build an unsigned PFS container from one file, streaming the payload with no spool.
 
@@ -4211,6 +4215,7 @@ def build_pfs_stream_single_file(
         dry_run: When True, report the layout and stats without writing an image.
         inner_file_name: Optional explicit internal file name to use for the
             synthetic single-file tree instead of ``source_file.name``.
+        kraken: Whether to use Kraken/Oodle PFSC v3 compression.
 
     Returns:
         Build statistics for the completed image.
@@ -4461,21 +4466,43 @@ def build_pfs_stream_single_file(
                 )
 
             if should_compress:
-                progress.status(
-                    f"\nCompressing 1 file ({human_readable_size(raw_size)}) "
-                    f"using {block_workers} CPU core{'s' if block_workers != 1 else ''}..."
-                )
-                stored_size, is_compressed, gain_pct, hypothetical_size = _encode_pfsc_into_handle(
-                    out=out,
-                    base_offset=payload_base,
-                    source_path=source_file,
-                    threshold_gain=threshold_gain,
-                    min_file_gain=min_file_gain,
-                    zlib_level=zlib_level,
-                    logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
-                    block_worker_count=block_workers,
-                    progress_callback=report,
-                )
+                info("Compressing 1 file")
+                if kraken:
+                    progress.status(f"\nCompressing 1 file (Kraken PFSC v3) {human_readable_size(raw_size)}...")
+                    with source_file.open("rb") as src:
+                        payload_bytes = src.read()
+                    try:
+                        from .oodle import compress_kraken_block
+
+                        encode_fn = compress_kraken_block
+                    except ImportError:
+                        encode_fn = None
+
+                    container = kraken_pfsc.encode_pfsc_kraken_payload(
+                        payload_bytes,
+                        level=zlib_level,
+                        block_size=consts.PFSC_KRAKEN_LOGICAL_BLOCK_SIZE,
+                        encode_block_fn=encode_fn,
+                    )
+                    container_len = len(container)
+                    hypothetical_size = container_len
+                    is_compressed = (encode_fn is not None) and (container_len < raw_size)
+                    if is_compressed:
+                        out.seek(payload_base)
+                        out.write(container)
+                        stored_size = container_len
+                else:
+                    stored_size, is_compressed, gain_pct, hypothetical_size = _encode_pfsc_into_handle(
+                        out=out,
+                        base_offset=payload_base,
+                        source_path=source_file,
+                        threshold_gain=threshold_gain,
+                        min_file_gain=min_file_gain,
+                        zlib_level=zlib_level,
+                        logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                        block_worker_count=block_workers,
+                        progress_callback=report,
+                    )
 
             # Disabled, too small, or not worth compressing: store raw over the same region.
             if not is_compressed:
@@ -4584,6 +4611,7 @@ def build_pfs_stream_from_exfat(
     new_crypt: bool = False,
     ekpfs: bytes | None = None,
     verbose: bool = False,
+    kraken: bool = False,
 ) -> BuildStats:
     """Pack a folder into a compressed PFS image with an inner exFAT, in one pass.
 
@@ -4606,6 +4634,7 @@ def build_pfs_stream_from_exfat(
         new_crypt: Whether to use the alternate EKPFS derivation.
         ekpfs: Optional EKPFS key bytes.
         verbose: Whether to emit a verbose per-file decision line.
+        kraken: Whether to use Kraken/Oodle PFSC v3 compression.
 
     Returns:
         Build statistics for the completed image.
@@ -4787,23 +4816,58 @@ def build_pfs_stream_from_exfat(
                     bytes_processed=processed,
                 )
 
-            progress.status(f"\nCompressing inner exFAT ({human_readable_size(raw_size)})...")
-            stored_size, hypothetical_size = _encode_pfsc_stream_into_handle(
-                out=out,
-                base_offset=payload_base,
-                source_blocks=payload_stream,
-                raw_size=raw_size,
-                threshold_gain=threshold_gain,
-                zlib_level=zlib_level,
-                logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
-                cpu_count=cpu_count,
-                progress_callback=report,
-            )
+            if kraken:
+                info("Compressing 1 file")
+                progress.status(
+                    f"\nCompressing 1 file (inner exFAT, Kraken PFSC v3) {human_readable_size(raw_size)}..."
+                )
+                # Buffer the streaming inner exFAT payload into memory for Kraken encoding.
+                payload_bytes = b"".join(payload_stream)
+                try:
+                    from .oodle import compress_kraken_block
+
+                    encode_fn = compress_kraken_block
+                except ImportError:
+                    encode_fn = None
+
+                container = kraken_pfsc.encode_pfsc_kraken_payload(
+                    payload_bytes,
+                    level=zlib_level,
+                    block_size=consts.PFSC_KRAKEN_LOGICAL_BLOCK_SIZE,
+                    encode_block_fn=encode_fn,
+                )
+                container_len = len(container)
+                hypothetical_size = container_len
+                is_compressed = (encode_fn is not None) and (container_len < raw_size)
+                if is_compressed:
+                    out.seek(payload_base)
+                    out.write(container)
+                    stored_size = container_len
+                else:
+                    out.seek(payload_base)
+                    out.write(payload_bytes)
+                    stored_size = raw_size
+            else:
+                info("Compressing 1 file")
+                progress.status(f"\nCompressing 1 file (inner exFAT) {human_readable_size(raw_size)}...")
+                stored_size, hypothetical_size = _encode_pfsc_stream_into_handle(
+                    out=out,
+                    base_offset=payload_base,
+                    source_blocks=payload_stream,
+                    raw_size=raw_size,
+                    threshold_gain=threshold_gain,
+                    zlib_level=zlib_level,
+                    logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                    cpu_count=cpu_count,
+                    progress_callback=report,
+                )
+                # For the non-Kraken streaming path, mark compressed when the stored output is smaller.
+                is_compressed = stored_size < raw_size
 
             file_inode.blocks = max(1, ceil_div(stored_size, block_size))
             file_inode.size = stored_size
-            file_inode.flags = consts.INODE_FLAG_READONLY | consts.INODE_FLAG_COMPRESSED
-            file_inode.size_compressed = raw_size
+            file_inode.flags = consts.INODE_FLAG_READONLY | (consts.INODE_FLAG_COMPRESSED if is_compressed else 0)
+            file_inode.size_compressed = raw_size if is_compressed else stored_size
             final_ndblock: int = file_inode.db[0] + file_inode.blocks
 
             validate_d32_ranges(inodes, final_ndblock)
@@ -4867,7 +4931,7 @@ def build_pfs_stream_from_exfat(
         output_path=output_path,
         raw_size=raw_size,
         stored_size=stored_size,
-        is_compressed=True,
+        is_compressed=is_compressed,
         hypothetical_size=hypothetical_size,
         block_size=block_size,
         gain_pct=((raw_size - stored_size) / raw_size * 100.0) if raw_size else 0.0,
@@ -5555,7 +5619,23 @@ def iter_inode_logical_blocks(
 
     # Compressed PFSC payload stored contiguously from ``base``.
     stored_size: int = inode.stored_size
+    # Read minimal header to detect PFSC container version. PFSC v3 (Kraken)
+    # uses a larger header/layout and requires the Kraken decoder; detect it
+    # early and fallback to a buffered decode path that yields chunks.
     head: bytes = read_image_bytes(fh, header, base, consts.PFSC_HEADER_SIZE, ekpfs=ekpfs, new_crypt=new_crypt)
+    if len(head) >= 6 and head[:4] == b"PFSC" and struct.unpack_from("<H", head, 0x04)[0] == 3:
+        # Full buffered decode for PFSC v3 containers (Kraken).
+        payload = read_image_inode_payload(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
+        decoded = kraken_pfsc.decode_pfsc_kraken_payload(payload)
+        # Yield decoded payload in bounded chunks.
+        emitted = 0
+        while emitted < len(decoded):
+            take = min(chunk_size, len(decoded) - emitted)
+            yield decoded[emitted : emitted + take]
+            emitted += take
+        return
+    # Legacy PFSC parsing (zlib-based v0 layout)
+    head: bytes = head
     (
         logical_block_size,
         block_count,
@@ -6567,11 +6647,26 @@ class _LogicalFileView:
         self._order: list[int] = []
         if self._compressed:
             head: bytes = self._raw(self._base, consts.PFSC_HEADER_SIZE)
+            # Detect PFSC v3 (Kraken) containers and buffer/decode them for random-access.
+            if len(head) >= 6 and head[:4] == b"PFSC" and struct.unpack_from("<H", head, 0x04)[0] == 3:
+                # Full buffered decode for PFSC v3 containers (Kraken).
+                payload = read_image_inode_payload(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
+                decoded = kraken_pfsc.decode_pfsc_kraken_payload(payload)
+                self._decoded_bytes: bytes = decoded
+                # Emulate an uncompressed contiguous payload for random-access reads.
+                self._compressed = False
+                self._size = len(decoded)
+                self._base = 0
+                return
             self._lbs, block_count, block_offsets_offset, _data_offset, _logical = _parse_pfsc_header(head)
             offsets_blob: bytes = self._raw(self._base + block_offsets_offset, (block_count + 1) * 8)
             self._offsets: list[int] = list(struct.unpack_from(f"<{block_count + 1}Q", offsets_blob, 0))
 
     def _raw(self, offset: int, size: int) -> bytes:
+        # When we buffered a PFSC v3 decoded payload, read from the in-memory decoded bytes.
+        if hasattr(self, "_decoded_bytes"):
+            end = offset + size
+            return self._decoded_bytes[offset:end]
         return read_image_bytes(
             self._fh,
             self._header,

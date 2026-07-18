@@ -396,6 +396,7 @@ def run_batch(
                     new_crypt=pack_flags.get("new_crypt", False),
                     ekpfs=pack_flags.get("ekpfs"),
                     verbose=pack_flags.get("verbose", False),
+                    kraken=pack_flags.get("kraken", False),
                 )
             else:
                 stats = build_pfs_stream_single_file(
@@ -415,6 +416,7 @@ def run_batch(
                     ekpfs=pack_flags.get("ekpfs"),
                     verbose=pack_flags.get("verbose", False),
                     skip_executable_compression=pack_flags.get("skip_executable_compression", False),
+                    kraken=pack_flags.get("kraken", False),
                     inner_file_name=None,
                 )
 

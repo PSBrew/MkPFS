@@ -1489,6 +1489,7 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
         new_crypt=config.new_crypt,
         ekpfs=config.ekpfs_key,
         verbose=args.verbose,
+        kraken=config.kraken,
     )
     stats.input_path = source_path
     print_summary(stats)
@@ -1649,6 +1650,7 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
         skip_executable_compression=config.skip_executable_compression,
         dry_run=args.dry_run,
         inner_file_name=internal_file_name,
+        kraken=config.kraken,
     )
     stats.input_path = source_file
     print_summary(stats)
@@ -2120,6 +2122,7 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
         "ekpfs": config.ekpfs_key,
         "verbose": bool(getattr(args, "verbose", False)),
         "dry_run": bool(getattr(args, "dry_run", False)),
+        "kraken": config.kraken,
     }
     from .batch import (
         BatchItem,
