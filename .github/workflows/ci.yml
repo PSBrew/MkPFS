@@ -151,13 +151,22 @@ jobs:
         if: startsWith(matrix.os, 'windows')
         shell: bash
         run: |
+          SITE_PACKAGES="$PWD/.venv/Lib/site-packages"
+
           uvx pyinstaller \
             --noconfirm \
             --clean \
             --onefile \
             --windowed \
+            --paths "$SITE_PACKAGES" \
             --name MkPFS \
             --icon dist/icon.ico \
+            --collect-all customtkinter \
+            --collect-submodules customtkinter \
+            --collect-all PIL \
+            --add-data "assets;assets" \
+            --hidden-import cryptography \
+            --hidden-import customtkinter \
             mkpfs/gui/__main__.py
           mv "dist/MkPFS.exe" "dist/mkpfs-${ART_VERSION}-windows-${ARCH}.exe"
       - name: Build macOS app and pkg
@@ -244,13 +253,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y tk libfuse2
+          SITE_PACKAGES="$PWD/.venv/lib/python3.11/site-packages"
+
           uvx pyinstaller \
             --noconfirm \
             --clean \
             --onefile \
             --windowed \
+            --paths "$SITE_PACKAGES" \
             --name MkPFS \
             --icon dist/icon.ico \
+            --collect-all customtkinter \
+            --collect-submodules customtkinter \
+            --collect-all PIL \
+            --add-data "assets:assets" \
+            --hidden-import cryptography \
+            --hidden-import customtkinter \
             mkpfs/gui/__main__.py
           mv "dist/MkPFS" "dist/mkpfs-${ART_VERSION}-linux-${ARCH}"
           # create a tar.gz for linux artifact for easy distribution
