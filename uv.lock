@@ -1089,15 +1089,11 @@ source = { editable = "." }
 dependencies = [
     { name = "cryptography", version = "47.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version <= '3.9'" },
     { name = "cryptography", version = "49.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version > '3.9'" },
-    { name = "isal", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
-    { name = "zlib-ng" },
-]
-
-[package.optional-dependencies]
-gui = [
     { name = "customtkinter" },
+    { name = "isal", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
     { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pillow", version = "12.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "zlib-ng" },
 ]
 
 [package.dev-dependencies]
@@ -1121,12 +1117,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=47.0.0" },
-    { name = "customtkinter", marker = "extra == 'gui'", specifier = ">=5.2.0" },
+    { name = "customtkinter", specifier = ">=5.2.0" },
     { name = "isal", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'x86_64'", specifier = ">=1.0.0" },
-    { name = "pillow", marker = "extra == 'gui'", specifier = ">=9.0.0" },
+    { name = "pillow", specifier = ">=9.0.0" },
     { name = "zlib-ng", specifier = ">=0.5.1" },
 ]
-provides-extras = ["gui"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1137,7 +1132,7 @@ dev = [
     { name = "pre-commit", specifier = ">=3.5.0" },
     { name = "pytest", specifier = ">=8.3.5" },
     { name = "pytest-cov", specifier = ">=5.0.0" },
-    { name = "ruff", specifier = ">=0.11.12" },
+    { name = "ruff", specifier = ">=0.16.0" },
     { name = "twine", specifier = ">=6.1.0" },
 ]
 
