@@ -158,6 +158,7 @@ jobs:
             --clean \
             --onefile \
             --windowed \
+            --additional-hooks-dir scripts \
             --paths "$SITE_PACKAGES" \
             --name MkPFS \
             --icon dist/icon.ico \
@@ -259,6 +260,7 @@ jobs:
             --noconfirm \
             --clean \
             --onefile \
+            --additional-hooks-dir scripts \
             --windowed \
             --paths "$SITE_PACKAGES" \
             --name MkPFS \
