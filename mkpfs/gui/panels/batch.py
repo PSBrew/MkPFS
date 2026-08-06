@@ -31,7 +31,7 @@ class BatchPanel(BasePanel):
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         super().__init__(parent)
 
-    def _build_controls(self, card: "GlassCard") -> None:  # noqa: F821
+    def _build_controls(self, card: "GlassCard") -> None:  # ruff: ignore[undefined-name]
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=1)
 

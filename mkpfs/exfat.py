@@ -303,5 +303,5 @@ def open_exfat(path: str) -> ExfatReader:
         An :class:`ExfatReader` over the opened file. The caller is responsible
         for the process lifetime; the handle stays open for the reader's use.
     """
-    fh: BinaryIO = open(path, "rb")  # noqa: SIM115 - reader holds the handle for its lifetime
+    fh: BinaryIO = open(path, "rb")  # ruff: ignore[open-file-with-context-handler] - reader holds the handle for its lifetime
     return ExfatReader(fh)
