@@ -1,6 +1,5 @@
 """EXFAT image creation panel for the mkpfs GUI."""
 
-from pathlib import Path
 from typing import Any
 
 import customtkinter as ctk
@@ -34,25 +33,6 @@ class ExfatPanel(BasePanel):
         # paths are never overwritten.
         self._src.trace_add("write", self._on_src_changed)
 
-    def _on_src_changed(self, *_args: Any) -> None:
-        """Auto-populate output path when the user selects a source folder.
-
-        Computes the output as ``<source_dir>/<source_name>.img`` in the
-        same parent directory.  Only fires when the output field is empty
-        so a manually-typed path is preserved.
-        """
-        if self._out.get().strip():
-            return
-        src_path: str = self._src.get().strip()
-        if not src_path:
-            return
-        p: Path = Path(src_path)
-        # Only auto-populate when the source is an existing directory;
-        # avoids disk I/O on partial paths during manual typing.
-        if not p.is_dir():
-            return
-        self._out.set(str(p.parent / (p.name + ".img")))
-
     def _build_controls(self, card: GlassCard) -> None:
         """Build the panel controls."""
         card.columnconfigure(0, weight=1)
@@ -76,7 +56,7 @@ class ExfatPanel(BasePanel):
             tr("exf_out_label"),
             self._out,
             mode="save",
-            filetypes=[("EXFAT image", "*.img")],
+            filetypes=[("EXFAT image", "*.exfat")],
             placeholder=tr("exf_out_ph"),
             browse_label=tr("browse"),
         ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))

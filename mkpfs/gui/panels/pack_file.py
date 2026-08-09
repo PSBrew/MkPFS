@@ -1,12 +1,14 @@
 """Pack File operation panel for mkpfs GUI."""
 
+from pathlib import Path
 from typing import Any
 
 import customtkinter as ctk
 
+from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..theme import _BORDER_BRIGHT
-from ..widgets import GlassCard, NeonCheckbox, OptionRow, PathRow, SectionLabel
+from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
 from .base import BasePanel
 
 
@@ -25,10 +27,12 @@ class PackFilePanel(BasePanel):
         """
         self._src: ctk.StringVar = ctk.StringVar()
         self._out: ctk.StringVar = ctk.StringVar()
-        self._version: ctk.StringVar = ctk.StringVar(value="PS4")
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
         super().__init__(parent)
+
+        # Auto-populate output path from source file selection when empty.
+        self._src.trace_add("write", self._on_src_changed)
 
     def _build_controls(self, card: GlassCard) -> None:
         card.columnconfigure(0, weight=1)
@@ -67,10 +71,6 @@ class PackFilePanel(BasePanel):
         opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
 
-        OptionRow(opt, tr("pkf_version"), self._version, ["PS4", "PS5"], accent=self._accent).grid(
-            row=0, column=0, sticky="ew", padx=(0, 12)
-        )
-
         chk: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
         chk.grid(row=0, column=1, sticky="nw", padx=(8, 0))
 
@@ -87,13 +87,31 @@ class PackFilePanel(BasePanel):
             browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
+    def _on_src_changed(self, *_args: Any) -> None:
+        """Auto-populate sensible output filename when user selects a source file.
+
+        Uses the source file stem, sanitized using ui_sanitize_basename, with
+        the .ffpfsc extension. Only fills the output when the output field is
+        currently empty.
+        """
+        if self._out.get().strip():
+            return
+        src_path: str = self._src.get().strip()
+        if not src_path:
+            return
+        p: Path = Path(src_path)
+        # Only when the source is a file
+        if not p.is_file():
+            return
+        self._out.set(str(p.parent / (ui_sanitize_basename(p.stem) + ".ffpfsc")))
+
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
         out: str = self._out.get().strip()
         if not src or not out:
             self._emit(tr("pkf_err"), "error")
             return
-        args: list[str] = ["pack", "file", src, out, "--version", self._version.get()]
+        args: list[str] = ["pack", "file", src, out]
         if not self._compress.get():
             args.append("--no-compress")
         if temp := self._temp_folder.get().strip():
