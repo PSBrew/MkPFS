@@ -5,6 +5,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..theme import _BORDER_BRIGHT
 from ..widgets import GlassCard, NeonCheckbox, OptionRow, PathRow, SectionLabel
@@ -51,7 +52,7 @@ class ExfatPanel(BasePanel):
         # avoids disk I/O on partial paths during manual typing.
         if not p.is_dir():
             return
-        self._out.set(str(p.parent / (p.name + ".img")))
+        self._out.set(str(p.parent / (ui_sanitize_basename(p.name) + ".exfat")))
 
     def _build_controls(self, card: GlassCard) -> None:
         """Build the panel controls."""

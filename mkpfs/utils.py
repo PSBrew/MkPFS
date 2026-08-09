@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import BinaryIO
@@ -35,6 +36,22 @@ IGNORED_NAMES: frozenset[str] = frozenset(
 def _sanitize_name_component(name: str) -> str:
     """Replace filesystem-unsafe characters in a single name component with ``_``."""
     return "".join(c if (c.isalnum() or c in "._-") else "_" for c in name)
+
+
+def ui_sanitize_basename(name: str) -> str:
+    """Sanitize a name for UI-generated output basenames.
+
+    Replaces a specific set of problematic characters with a single space,
+    collapses consecutive spaces into one, and strips leading/trailing space.
+    This follows the GUI requirement exactly (do NOT convert spaces to
+    underscores).
+    """
+    if not name:
+        return ""
+    # Replace problematic characters with a space.
+    sanitized: str = re.sub(r"[()\[\]\{\}\*\&\^\%\$\#\@!\u00B1\u00A7\|\\\/:;\"'<>,\?]", " ", name)
+    # Collapse runs of whitespace and trim.
+    return " ".join(sanitized.split()).strip()
 
 
 def title_id_from_source(source_root: Path) -> str | None:

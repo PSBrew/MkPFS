@@ -5,6 +5,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..theme import _BG_INPUT, _BORDER_BRIGHT, _FONT_LABEL, _FONT_MONO, _TEXT_PRIMARY, _TEXT_SECONDARY
 from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
@@ -30,6 +31,8 @@ class UnpackPanel(BasePanel):
         self._ekpfs: ctk.StringVar = ctk.StringVar()
         self._new_crypt: ctk.BooleanVar = ctk.BooleanVar(value=False)
         super().__init__(parent)
+        # Auto-populate output folder from selected image when empty.
+        self._image.trace_add("write", self._on_image_changed)
 
     def _build_controls(self, card: GlassCard) -> None:
         card.columnconfigure(0, weight=1)
@@ -89,6 +92,23 @@ class UnpackPanel(BasePanel):
         NeonCheckbox(opt, text=tr("u_newcrypt"), variable=self._new_crypt, accent=self._accent).grid(
             row=1, column=1, sticky="w", padx=(8, 0)
         )
+
+    def _on_image_changed(self, *_args: Any) -> None:
+        """Auto-populate output folder when an image is selected.
+
+        Uses the image filename stem (sanitized) as a folder name under the
+        image's parent directory. Only fills when the output is currently empty
+        and the selected path exists as a file.
+        """
+        if self._output.get().strip():
+            return
+        img_path: str = self._image.get().strip()
+        if not img_path:
+            return
+        p: Path = Path(img_path)
+        if not p.exists() or not p.is_file():
+            return
+        self._output.set(str(p.parent / ui_sanitize_basename(p.stem)))
 
     def _run_command(self) -> None:
         image: str = self._image.get().strip()

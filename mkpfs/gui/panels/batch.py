@@ -1,4 +1,7 @@
+
 """Batch Convert operation panel for the mkpfs GUI."""
+from pathlib import Path
+
 
 from typing import Any
 
@@ -6,7 +9,7 @@ import customtkinter as ctk
 
 from ..i18n import tr
 from ..theme import _BORDER_BRIGHT
-from ..widgets import NeonCheckbox, OptionRow, PathRow, SectionLabel
+from ..widgets import NeonCheckbox, PathRow, SectionLabel
 from .base import BasePanel
 
 
@@ -25,11 +28,12 @@ class BatchPanel(BasePanel):
         """
         self._src: ctk.StringVar = ctk.StringVar()
         self._out: ctk.StringVar = ctk.StringVar()
-        self._version: ctk.StringVar = ctk.StringVar(value="PS5")
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
         self._overwrite: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         super().__init__(parent)
+        # Auto-populate output folder from source selection when empty.
+        self._src.trace_add("write", self._on_src_changed)
 
     def _build_controls(self, card: "GlassCard") -> None:  # ruff: ignore[undefined-name]
         card.columnconfigure(0, weight=1)
@@ -65,10 +69,6 @@ class BatchPanel(BasePanel):
         opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
 
-        OptionRow(opt, tr("bt_version"), self._version, ["PS4", "PS5"], accent=self._accent).grid(
-            row=0, column=0, sticky="ew", padx=(0, 12)
-        )
-
         chk: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
         chk.grid(row=0, column=1, sticky="nw", padx=(8, 0))
 
@@ -94,8 +94,6 @@ class BatchPanel(BasePanel):
             "batch",
             src,
             out,
-            "--version",
-            self._version.get(),
         ]
 
         if not self._compress.get():
@@ -106,3 +104,21 @@ class BatchPanel(BasePanel):
             args.append("--dry-run")
 
         self._run_mkpfs(args)
+
+    def _on_src_changed(self, *_args: Any) -> None:
+        """Auto-populate an output folder inside the selected source directory.
+
+        Only runs when the output field is currently empty and the source
+        resolves to an existing directory to avoid interfering with manual
+        typing.
+        """
+        if self._out.get().strip():
+            return
+        src_path: str = self._src.get().strip()
+        if not src_path:
+            return
+        p: Path = Path(src_path)
+        if not p.is_dir():
+            return
+        # Place converted output as a subdirectory of the source folder.
+        self._out.set(str(p / "converted"))

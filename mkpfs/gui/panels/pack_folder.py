@@ -1,12 +1,15 @@
 """Pack Folder operation panel for mkpfs GUI."""
 
+from pathlib import Path
+
 from typing import Any
 
 import customtkinter as ctk
 
+from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..theme import _BORDER_BRIGHT
-from ..widgets import GlassCard, NeonCheckbox, OptionRow, PathRow, SectionLabel
+from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
 from .base import BasePanel
 
 
@@ -25,13 +28,14 @@ class PackFolderPanel(BasePanel):
         """
         self._src: ctk.StringVar = ctk.StringVar()
         self._out: ctk.StringVar = ctk.StringVar()
-        self._version: ctk.StringVar = ctk.StringVar(value="PS4")
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
         self._signed: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
         super().__init__(parent)
+        # Auto-populate output filename from source when empty.
+        self._src.trace_add("write", self._on_src_changed)
 
     def _build_controls(self, card: GlassCard) -> None:
         card.columnconfigure(0, weight=1)
@@ -69,11 +73,6 @@ class PackFolderPanel(BasePanel):
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
         opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
-
-        OptionRow(opt, tr("pf_version"), self._version, ["PS4", "PS5"], accent=self._accent).grid(
-            row=0, column=0, sticky="ew", padx=(0, 12)
-        )
-
         chk: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
         chk.grid(row=0, column=1, sticky="nw", padx=(8, 0))
 
@@ -95,6 +94,24 @@ class PackFolderPanel(BasePanel):
             browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
+    def _on_src_changed(self, *_args: Any) -> None:
+        """Auto-populate an output basename for pack-folder when the source is chosen.
+
+        Applies ui_sanitize_basename to the source folder name, and uses the
+        canonical .ffpfsc extension. Only triggers when the output field is
+        currently empty and the source resolves to an existing directory.
+        """
+        if self._out.get().strip():
+            return
+        src_path: str = self._src.get().strip()
+        if not src_path:
+            return
+
+        p: Path = Path(src_path)
+        if not p.is_dir():
+            return
+        self._out.set(str(p.parent / (ui_sanitize_basename(p.name) + ".ffpfsc")))
+
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
         out: str = self._out.get().strip()
@@ -104,7 +121,7 @@ class PackFolderPanel(BasePanel):
         if not out:
             self._emit(tr("pf_err_out"), "error")
             return
-        args: list[str] = ["pack", "folder", src, out, "--version", self._version.get()]
+        args: list[str] = ["pack", "folder", src, out]
         if not self._compress.get():
             args.append("--no-compress")
         if self._signed.get():
