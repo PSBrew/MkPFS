@@ -1,12 +1,14 @@
 """EXFAT image creation panel for the mkpfs GUI."""
 
+from pathlib import Path
 from typing import Any
 
 import customtkinter as ctk
 
+from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..theme import _BORDER_BRIGHT
-from ..widgets import GlassCard, NeonCheckbox, OptionRow, PathRow, SectionLabel
+from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
 from .base import BasePanel
 
 
@@ -25,13 +27,31 @@ class ExfatPanel(BasePanel):
         """
         self._src: ctk.StringVar = ctk.StringVar()
         self._out: ctk.StringVar = ctk.StringVar()
-        self._cluster_size: ctk.StringVar = ctk.StringVar(value="65536")
         self._overwrite: ctk.BooleanVar = ctk.BooleanVar(value=False)
         super().__init__(parent)
         # Auto-populate output path from source folder selection.
         # Only fills when output is currently empty so manually-typed
         # paths are never overwritten.
         self._src.trace_add("write", self._on_src_changed)
+
+    def _on_src_changed(self, *_args: Any) -> None:
+        """Auto-populate output path when the user selects a source folder.
+
+        Computes the output as ``<source_dir>/<source_name>.exfat`` in the
+        same parent directory. Only fires when the output field is empty so a
+        manually-typed path is preserved.
+        """
+        if self._out.get().strip():
+            return
+        src_path: str = self._src.get().strip()
+        if not src_path:
+            return
+        p: Path = Path(src_path)
+        # Only auto-populate when the source is an existing directory;
+        # avoids disk I/O on partial paths during manual typing.
+        if not p.is_dir():
+            return
+        self._out.set(str(p.parent / (ui_sanitize_basename(p.name) + ".exfat")))
 
     def _build_controls(self, card: GlassCard) -> None:
         """Build the panel controls."""
@@ -69,18 +89,9 @@ class ExfatPanel(BasePanel):
 
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
         opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
-        opt.columnconfigure((0, 1), weight=1)
-
-        OptionRow(
-            opt,
-            tr("exf_cluster_size"),
-            self._cluster_size,
-            ["auto", "32768", "65536", "131072", "262144", "524288", "1048576"],
-            accent=self._accent,
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 12))
-
-        NeonCheckbox(opt, text=tr("exf_overwrite"), variable=self._overwrite, accent=self._accent).grid(
-            row=0, column=1, sticky="e", pady=3
+        opt.columnconfigure(0, weight=1)
+        NeonCheckbox(opt, text=tr("exf_overwrite"), variable=self._overwrite, accent=self._accent).pack(
+            anchor="w", pady=3
         )
 
     def _run_command(self) -> None:
@@ -96,11 +107,6 @@ class ExfatPanel(BasePanel):
         out_path: str = self._out.get().strip()
         if out_path:
             args.append(out_path)
-
-        # Cluster size selection
-        cluster_size_val: str = self._cluster_size.get()
-        if cluster_size_val != "auto":
-            args.extend(["--cluster-size", cluster_size_val])
 
         # Overwrite flag
         if self._overwrite.get():

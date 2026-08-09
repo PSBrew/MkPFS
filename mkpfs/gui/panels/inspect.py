@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 from ..i18n import tr
 from ..theme import _BG_INPUT, _BORDER_BRIGHT, _FONT_LABEL, _FONT_MONO, _TEXT_PRIMARY, _TEXT_SECONDARY
-from ..widgets import GlassCard, OptionRow, PathRow, SectionLabel
+from ..widgets import GlassCard, PathRow, SectionLabel
 from .base import BasePanel
 
 
@@ -24,7 +24,6 @@ class InspectPanel(BasePanel):
             parent: Parent widget.
         """
         self._image: ctk.StringVar = ctk.StringVar()
-        self._fmt: ctk.StringVar = ctk.StringVar(value="text")
         self._ekpfs: ctk.StringVar = ctk.StringVar()
         super().__init__(parent)
 
@@ -52,14 +51,9 @@ class InspectPanel(BasePanel):
 
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
         opt.grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
-        opt.columnconfigure((0, 1), weight=1)
-
-        OptionRow(opt, tr("i_format"), self._fmt, ["text", "json"], accent=self._accent).grid(
-            row=0, column=0, sticky="ew", padx=(0, 12)
-        )
-
+        opt.columnconfigure(0, weight=1)
         ekpfs_col: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
-        ekpfs_col.grid(row=0, column=1, sticky="ew")
+        ekpfs_col.grid(row=0, column=0, sticky="ew")
         ctk.CTkLabel(ekpfs_col, text=tr("i_ekpfs"), font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(
             anchor="w", pady=(0, 3)
         )
@@ -79,7 +73,7 @@ class InspectPanel(BasePanel):
         if not image:
             self._emit(tr("i_err"), "error")
             return
-        args: list[str] = ["inspect", image, "--format", self._fmt.get()]
+        args: list[str] = ["inspect", image]
         if ekpfs := self._ekpfs.get().strip():
             args += ["--ekpfs-key", ekpfs]
         self._run_mkpfs(args)

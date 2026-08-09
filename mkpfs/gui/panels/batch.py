@@ -29,8 +29,8 @@ class BatchPanel(BasePanel):
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
         self._overwrite: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
+        self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
         super().__init__(parent)
-        # Auto-populate output folder from source selection when empty.
         self._src.trace_add("write", self._on_src_changed)
 
     def _build_controls(self, card: "GlassCard") -> None:  # ruff: ignore[undefined-name]
@@ -59,23 +59,31 @@ class BatchPanel(BasePanel):
 
         ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
 
-        SectionLabel(card, tr("options"), color=self._accent).grid(
-            row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
-        )
-
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
         opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
 
-        chk: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
-        chk.grid(row=0, column=1, sticky="nw", padx=(8, 0))
+        chk_left: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
+        chk_left.grid(row=0, column=0, sticky="nw")
 
-        for text, var in [
-            (tr("bt_compress"), self._compress),
-            (tr("bt_overwrite"), self._overwrite),
-            (tr("bt_dry"), self._dry_run),
-        ]:
-            NeonCheckbox(chk, text=text, variable=var, accent=self._accent).pack(anchor="w", pady=3)
+        chk_right: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
+        chk_right.grid(row=0, column=1, sticky="nw", padx=(8, 0))
+
+        # Left column: Compression, Overwrite
+        NeonCheckbox(chk_left, text=tr("bt_compress"), variable=self._compress, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
+        NeonCheckbox(chk_left, text=tr("bt_overwrite"), variable=self._overwrite, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
+
+        # Right column: Dry Run, Verify after pack
+        NeonCheckbox(chk_right, text=tr("bt_dry"), variable=self._dry_run, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
+        NeonCheckbox(chk_right, text=tr("pf_verify"), variable=self._verify_after, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
 
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
@@ -100,6 +108,8 @@ class BatchPanel(BasePanel):
             args.append("--overwrite")
         if self._dry_run.get():
             args.append("--dry-run")
+        if self._verify_after.get():
+            args.append("--verify")
 
         self._run_mkpfs(args)
 
