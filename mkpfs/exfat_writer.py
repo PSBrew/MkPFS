@@ -29,9 +29,7 @@ _FAT_OFFSET_SECTORS: int = 128  # leave aligned room before the FAT (matches new
 _NUMBER_OF_FATS: int = 1
 _FAT_ENTRY_EOC: int = 0xFFFFFFFF
 _FAT_ENTRY_MEDIA: int = 0xFFFFFFF8
-_DEFAULT_CLUSTER_SIZE: int = 32 * 1024
 _LARGE_CLUSTER_SIZE: int = 64 * 1024
-_LARGE_FILE_THRESHOLD: int = 1024 * 1024
 _VOLUME_SERIAL: int = 0x4D6B5046  # "MkPF"; fixed for deterministic output
 _FIXED_TIMESTAMP: int = (2024 - 1980) << 25 | 1 << 21 | 1 << 16  # 2024-01-01 00:00:00
 
@@ -98,21 +96,10 @@ def _scan_tree(root: Path) -> _Node:
 
 
 def _choose_cluster_size(root: _Node) -> int:
-    total: int = 0
-    count: int = 0
-
-    def _accum(node: _Node) -> None:
-        nonlocal total, count
-        for child in node.children:
-            if child.is_dir:
-                _accum(child)
-            else:
-                total += child.size
-                count += 1
-
-    _accum(root)
-    avg: int = total // count if count else 0
-    return _LARGE_CLUSTER_SIZE if avg >= _LARGE_FILE_THRESHOLD else _DEFAULT_CLUSTER_SIZE
+    # SMP requires 64 KiB allocation units for the LVD/BFS fast-path. Use the
+    # larger cluster size unconditionally so images created by mkpfs are
+    # eligible by default (previously we chose 32K for small-file sets).
+    return _LARGE_CLUSTER_SIZE
 
 
 def _directory_entry_count(node: _Node, *, is_root: bool) -> int:

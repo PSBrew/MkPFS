@@ -26,7 +26,7 @@ class ExfatPanel(BasePanel):
         """
         self._src: ctk.StringVar = ctk.StringVar()
         self._out: ctk.StringVar = ctk.StringVar()
-        self._cluster_size: ctk.StringVar = ctk.StringVar(value="auto")
+        self._cluster_size: ctk.StringVar = ctk.StringVar(value="65536")
         self._overwrite: ctk.BooleanVar = ctk.BooleanVar(value=False)
         super().__init__(parent)
         # Auto-populate output path from source folder selection.
