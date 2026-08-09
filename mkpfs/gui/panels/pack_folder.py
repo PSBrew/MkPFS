@@ -68,20 +68,30 @@ class PackFolderPanel(BasePanel):
         SectionLabel(card, tr("options"), color=self._accent).grid(
             row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
-
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
         opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
-        chk: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
-        chk.grid(row=0, column=1, sticky="nw", padx=(8, 0))
 
-        for text, var in [
-            (tr("pf_compress"), self._compress),
-            (tr("pf_signed"), self._signed),
-            (tr("pf_verify"), self._verify_after),
-            (tr("pf_dry"), self._dry_run),
-        ]:
-            NeonCheckbox(chk, text=text, variable=var, accent=self._accent).pack(anchor="w", pady=3)
+        chk_left: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
+        chk_left.grid(row=0, column=0, sticky="nw")
+
+        chk_right: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
+        chk_right.grid(row=0, column=1, sticky="nw", padx=(8, 0))
+
+        # Left column: Compression, Signed
+        NeonCheckbox(chk_left, text=tr("pf_compress"), variable=self._compress, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
+        NeonCheckbox(chk_left, text=tr("pf_signed"), variable=self._signed, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
+        # Right column: Dry Run, Verify after pack
+        NeonCheckbox(chk_right, text=tr("pf_dry"), variable=self._dry_run, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
+        NeonCheckbox(chk_right, text=tr("pf_verify"), variable=self._verify_after, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
 
         # Temp folder (optional, spans both columns below checkboxes)
         PathRow(

@@ -2080,6 +2080,7 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
         "ekpfs": config.ekpfs_key,
         "verbose": bool(getattr(args, "verbose", False)),
         "dry_run": bool(getattr(args, "dry_run", False)),
+        "verify": bool(getattr(args, "verify", False)),
     }
     from .batch import (
         BatchItem,
@@ -2321,6 +2322,8 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     batch_parser.epilog = "Examples:\r\n   mkpfs batch ./games/ ./output/\r\n"
     batch_parser.add_argument("source_dir", help="Directory containing items to convert")
     batch_parser.add_argument("output_dir", help="Directory where .ffpfsc images are written")
+    batch_parser.add_argument("--verify", action="store_true", help="Run full verification after a successful pack")
+
     batch_parser.add_argument(
         "--overwrite",
         action="store_true",

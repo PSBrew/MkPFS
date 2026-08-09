@@ -97,8 +97,8 @@ def discover_batch_items(source_dir: Path) -> list[BatchItem]:
     * Skip names starting with ``"."`` (covers dotfiles and hidden files).
     * Skip entries matching :func:`is_ignored_name` (OS metadata like
       ``.DS_Store``, ``Thumbs.db``, etc.).
-    * Directories → ``BatchItem(kind="folder")``.
-    * Files with suffix ``.exfat`` or ``.ffpkg`` (case-insensitive) →
+    * Directories -> ``BatchItem(kind="folder")``.
+    * Files with suffix ``.exfat`` or ``.ffpkg`` (case-insensitive) ->
       ``BatchItem(kind="file")``.
     * All other files are silently ignored.
 
@@ -320,12 +320,12 @@ def run_batch(
     For each discovered item:
 
     1. Compute ``output_path = output_dir / f"{item.name}.ffpfsc"``.
-    2. If it exists and *overwrite* is False → skip.
-    3. If ``item.kind == "folder"`` → call
+    2. If it exists and *overwrite* is False -> skip.
+    3. If ``item.kind == "folder"`` -> call
        :func:`mkpfs.pfs.build_pfs_stream_from_exfat`.
-    4. If ``item.kind == "file"`` → call
+    4. If ``item.kind == "file"`` -> call
        :func:`mkpfs.pfs.build_pfs_stream_single_file`.
-    5. Wrap each call in try/except; on error → record and continue.
+    5. Wrap each call in try/except; on error -> record and continue.
 
     Returns:
         Aggregate results for all items.
@@ -333,7 +333,13 @@ def run_batch(
     Raises:
         BuildError: If source or output directories fail validation.
     """
-    from .pfs import BuildError, BuildStats, build_pfs_stream_from_exfat, build_pfs_stream_single_file
+    from .pfs import (
+        BuildError,
+        BuildStats,
+        build_pfs_stream_from_exfat,
+        build_pfs_stream_single_file,
+        verify_pfs_image,
+    )
 
     _validate_batch_dirs(source_dir=source_dir, output_dir=output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -430,6 +436,24 @@ def run_batch(
                 elapsed_seconds=elapsed,
             )
             results.append(result)
+            # Optional verification step after a successful pack when requested.
+            if pack_flags.get("verify"):
+                try:
+                    # For folder items pass the source directory; for single-file packs
+                    # verification against a source tree is not meaningful, so pass None.
+                    src_for_verify = item.source if item.kind == "folder" else None
+                    inspection = verify_pfs_image(
+                        output_path,
+                        source=src_for_verify,
+                        ekpfs=pack_flags.get("ekpfs"),
+                        new_crypt=pack_flags.get("new_crypt", False),
+                    )
+                    if inspection.errors:
+                        result.status = "error"
+                        result.error_message = "; ".join(inspection.errors[:3])  # brief message
+                except Exception as exc:  # pragma: no cover - defensive
+                    result.status = "error"
+                    result.error_message = f"verification failed: {exc}"
             print_item_status(index=idx, total=len(items), result=result)
 
         except BuildError as exc:
