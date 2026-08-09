@@ -104,15 +104,16 @@ class TestExfatWriterFormat(ExfatWriterTestCase):
         self.assertEqual(geo.bytes_per_sector, 512)
         self.assertEqual(geo.cluster_size, 64 * 1024)
 
-    def test_large_files_select_64k_clusters(self) -> None:
+    def test_explicit_cluster_size_override(self) -> None:
         tmp = self.make_temp_path()
         src = tmp / "src"
         src.mkdir()
-        (src / "big.bin").write_bytes(os.urandom(2 * 1024 * 1024))  # avg >= 1 MiB
+        # create a sizeable file but request a 32 KiB cluster explicitly
+        (src / "big.bin").write_bytes(os.urandom(2 * 1024 * 1024))
         image = tmp / "out.exfat"
-        write_exfat_image(src, image)
+        write_exfat_image(src, image, cluster_size=32 * 1024)
         with image.open("rb") as fh:
-            self.assertEqual(exfat.ExfatReader(fh).geometry.cluster_size, 64 * 1024)
+            self.assertEqual(exfat.ExfatReader(fh).geometry.cluster_size, 32 * 1024)
 
 
 class TestExfatWriterAutoName(ExfatWriterTestCase):
