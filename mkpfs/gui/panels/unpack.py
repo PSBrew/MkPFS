@@ -123,7 +123,7 @@ class UnpackPanel(BasePanel):
         # existing directory (e.g. Desktop -> Desktop/GRIS).
         actual_output: Path = Path(output)
         if actual_output.exists() and actual_output.is_dir() and not self._overwrite.get():
-            actual_output = actual_output / Path(image).stem
+            actual_output = actual_output / ui_sanitize_basename(Path(image).stem)
             self._emit(tr("u_auto_subdir").format(actual_output), "muted")
 
         args: list[str] = ["unpack", image, str(actual_output)]

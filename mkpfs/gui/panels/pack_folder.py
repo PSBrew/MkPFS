@@ -1,7 +1,6 @@
 """Pack Folder operation panel for mkpfs GUI."""
 
 from pathlib import Path
-
 from typing import Any
 
 import customtkinter as ctk

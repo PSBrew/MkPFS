@@ -1,13 +1,11 @@
-
 """Pack File operation panel for mkpfs GUI."""
+
 from pathlib import Path
-from ...utils import ui_sanitize_basename
-
-
 from typing import Any
 
 import customtkinter as ctk
 
+from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..theme import _BORDER_BRIGHT
 from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel

@@ -1,8 +1,6 @@
-
 """Batch Convert operation panel for the mkpfs GUI."""
+
 from pathlib import Path
-
-
 from typing import Any
 
 import customtkinter as ctk
