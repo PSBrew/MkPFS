@@ -562,6 +562,94 @@ class TestRunBatch(unittest.TestCase):
         self.assertTrue((out / "Image.exfat.ffpfsc").exists())
         self.assertTrue((out / "Pkg.ffpkg.ffpfsc").exists())
 
+    def test_run_batch_verify_success_keeps_converted(self) -> None:
+        """--verify with a clean inspection keeps status='converted'."""
+        src = self._make_temp_dir()
+        (src / "GameA").mkdir()
+        (src / "GameA" / "f.txt").write_text("hi")
+        out = self._make_temp_dir()
+
+        from unittest.mock import MagicMock
+
+        with (
+            patch(
+                "mkpfs.pfs.build_pfs_stream_from_exfat",
+                side_effect=lambda **kw: _mock_build(kw["output_path"], 1000, 800),
+            ),
+            patch(
+                "mkpfs.pfs.verify_pfs_image",
+                return_value=MagicMock(errors=[]),
+            ) as mock_verify,
+        ):
+            summary = run_batch(
+                source_dir=src,
+                output_dir=out,
+                pack_flags=self._default_pack_flags(verify=True),
+            )
+
+        mock_verify.assert_called_once()
+        self.assertEqual(summary.converted, 1)
+        self.assertEqual(summary.errors, 0)
+        self.assertEqual(summary.results[0].status, "converted")
+
+    def test_run_batch_verify_errors_set_error_status(self) -> None:
+        """--verify with inspection errors flips status to 'error'."""
+        src = self._make_temp_dir()
+        (src / "GameA").mkdir()
+        (src / "GameA" / "f.txt").write_text("hi")
+        out = self._make_temp_dir()
+
+        from unittest.mock import MagicMock
+
+        with (
+            patch(
+                "mkpfs.pfs.build_pfs_stream_from_exfat",
+                side_effect=lambda **kw: _mock_build(kw["output_path"], 1000, 800),
+            ),
+            patch(
+                "mkpfs.pfs.verify_pfs_image",
+                return_value=MagicMock(errors=["header magic mismatch"]),
+            ),
+        ):
+            summary = run_batch(
+                source_dir=src,
+                output_dir=out,
+                pack_flags=self._default_pack_flags(verify=True),
+            )
+
+        self.assertEqual(summary.converted, 0)
+        self.assertEqual(summary.errors, 1)
+        self.assertEqual(summary.results[0].status, "error")
+        self.assertIn("header magic mismatch", summary.results[0].error_message)
+
+    def test_run_batch_verify_exception_sets_error_status(self) -> None:
+        """--verify where verify_pfs_image raises records an error and continues."""
+        src = self._make_temp_dir()
+        (src / "GameA").mkdir()
+        (src / "GameA" / "f.txt").write_text("hi")
+        out = self._make_temp_dir()
+
+        with (
+            patch(
+                "mkpfs.pfs.build_pfs_stream_from_exfat",
+                side_effect=lambda **kw: _mock_build(kw["output_path"], 1000, 800),
+            ),
+            patch(
+                "mkpfs.pfs.verify_pfs_image",
+                side_effect=RuntimeError("disk on fire"),
+            ),
+        ):
+            summary = run_batch(
+                source_dir=src,
+                output_dir=out,
+                pack_flags=self._default_pack_flags(verify=True),
+            )
+
+        self.assertEqual(summary.converted, 0)
+        self.assertEqual(summary.errors, 1)
+        self.assertEqual(summary.results[0].status, "error")
+        self.assertIn("verification failed", summary.results[0].error_message)
+
     def test_run_batch_output_inside_source_rejected(self) -> None:
         src = self._make_temp_dir()
         out = src / "sub"
