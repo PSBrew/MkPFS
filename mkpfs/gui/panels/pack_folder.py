@@ -28,6 +28,7 @@ class PackFolderPanel(BasePanel):
         self._src: ctk.StringVar = ctk.StringVar()
         self._out: ctk.StringVar = ctk.StringVar()
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
+        self._signed: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
@@ -77,8 +78,11 @@ class PackFolderPanel(BasePanel):
         chk_right: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
         chk_right.grid(row=0, column=1, sticky="nw", padx=(8, 0))
 
-        # Left column: Compression
+        # Left column: Compression, Signed
         NeonCheckbox(chk_left, text=tr("pf_compress"), variable=self._compress, accent=self._accent).pack(
+            anchor="w", pady=3
+        )
+        NeonCheckbox(chk_left, text=tr("pf_signed"), variable=self._signed, accent=self._accent).pack(
             anchor="w", pady=3
         )
         # Right column: Dry Run, Verify after pack
@@ -129,6 +133,8 @@ class PackFolderPanel(BasePanel):
         args: list[str] = ["pack", "folder", src, out]
         if not self._compress.get():
             args.append("--no-compress")
+        if self._signed.get():
+            args.append("--signed")
         if self._verify_after.get():
             args.append("--verify")
         if self._dry_run.get():

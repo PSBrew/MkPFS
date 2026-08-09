@@ -47,8 +47,8 @@ class ExfatPanel(BasePanel):
         if not src_path:
             return
         p: Path = Path(src_path)
-        # Only auto-populate when the source is an existing directory;
-        # avoids disk I/O on partial paths during manual typing.
+        # Only auto-populate when source resolves to an existing directory,
+        # avoiding clobber on partial/in-progress paths during typing.
         if not p.is_dir():
             return
         self._out.set(str(p.parent / (ui_sanitize_basename(p.name) + ".exfat")))
@@ -103,7 +103,7 @@ class ExfatPanel(BasePanel):
 
         args: list[str] = ["pack", "exfat", src]
 
-        # Handle output path (user-provided or auto-computed)
+        # Output path (auto-populated or manually entered)
         out_path: str = self._out.get().strip()
         if out_path:
             args.append(out_path)

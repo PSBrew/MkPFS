@@ -58,6 +58,9 @@ class BatchPanel(BasePanel):
         ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
         ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
+        SectionLabel(card, tr("options"), color=self._accent).grid(
+            row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
+        )
 
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
         opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
