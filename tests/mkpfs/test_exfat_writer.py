@@ -102,7 +102,7 @@ class TestExfatWriterFormat(ExfatWriterTestCase):
         with image.open("rb") as fh:
             geo = exfat.ExfatReader(fh).geometry
         self.assertEqual(geo.bytes_per_sector, 512)
-        self.assertIn(geo.cluster_size, (32 * 1024, 64 * 1024))
+        self.assertEqual(geo.cluster_size, 64 * 1024)
 
     def test_large_files_select_64k_clusters(self) -> None:
         tmp = self.make_temp_path()

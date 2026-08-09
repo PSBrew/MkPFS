@@ -2168,7 +2168,7 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     exfat_parser.add_argument(
         "--cluster-size",
         default="auto",
-        help="exFAT cluster size in bytes or 'auto' (32 KiB, or 64 KiB for large-average-file trees)",
+        help="exFAT cluster size in bytes or 'auto' (default: 65536 - SMP/LVD-optimal 64 KiB)",
     )
     exfat_parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output file")
     exfat_parser.add_argument("--verbose", action="store_true", help="Verbose output")
