@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import mkpfs.consts as c
 import mkpfs.pfs as pfs_mod
@@ -1382,13 +1382,19 @@ class TestEncryptedImageRoundTrip(PfsTestCase):
         assert errors == []
         report_text: str = output_buffer.getvalue()
         expected_logical: int = 196608
-        expected_stored: int = 65791
         assert (
             f"Logical file bytes:    {human_readable_size(expected_logical)} ({expected_logical:,} bytes)"
         ) in report_text
-        assert (
-            f"Stored file bytes:     {human_readable_size(expected_stored)} ({expected_stored:,} bytes)"
-        ) in report_text
+
+        # Parse the stored bytes value from the report rather than hardcoding a
+        # backend-specific number. The test's purpose is to verify the report
+        # formatting and that stored < logical when compression is used.
+        import re
+
+        m = re.search(r"Stored file bytes:\s+([0-9\.]+ \w+)\s+\(([0-9,]+) bytes\)", report_text)
+        assert m is not None, "Stored file bytes line missing from report"
+        stored_bytes = int(m.group(2).replace(",", ""))
+        assert 0 < stored_bytes < expected_logical
 
     def test_compression_phase_emits_intermediate_progress_for_single_worker(self) -> None:
         """Single-worker compression should emit intermediate progress updates."""
@@ -3286,3 +3292,222 @@ class TestVerifyProgress(PfsTestCase):
         # Final verify update reaches 100% (done == total == logical size).
         self.assertEqual(verify_calls[-1][1], verify_calls[-1][2])
         self.assertEqual(verify_calls[-1][2], len(payload))
+
+
+class TestScanExcludesOsMetadata(PfsTestCase):
+    """scan_source_tree must drop OS-generated metadata files and dirs."""
+
+    def test_scan_excludes_junk_files_and_dirs(self) -> None:
+        root = self.make_temp_path()
+        (root / "sce_sys").mkdir()
+        (root / "sce_sys" / "param.json").write_text("{}", encoding="utf-8")
+        (root / "eboot.bin").write_bytes(b"x")
+        # junk at root, nested, and a whole junk dir
+        (root / ".DS_Store").write_bytes(b"junk")
+        (root / "._eboot.bin").write_bytes(b"junk")
+        (root / "Thumbs.db").write_bytes(b"junk")
+        (root / "__MACOSX").mkdir()
+        (root / "__MACOSX" / "buried.txt").write_bytes(b"junk")
+        (root / "sce_sys" / ".DS_Store").write_bytes(b"junk")
+
+        _dirs, files, _total = pfs_mod.scan_source_tree(root, Progress(enabled=False))
+        rels = set(files.keys())
+        self.assertEqual(rels, {"sce_sys/param.json", "eboot.bin"})
+        self.assertFalse(any("MACOSX" in r or "DS_Store" in r or r.startswith("._") or "Thumbs" in r for r in rels))
+
+
+class TestExtractOptimization(PfsTestCase):
+    """Unpack should decode each payload once and report progress."""
+
+    def _build(self, tmp_path: Path, payload: bytes) -> Path:
+        src: Path = tmp_path / "blob.exfat"
+        src.write_bytes(payload)
+        out: Path = tmp_path / "blob.ffpfsc"
+        pfs_mod.build_pfs_stream_single_file(
+            source_file=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=c.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=9,
+            threshold_gain=0,
+            min_file_gain=0,
+            min_compress_size=0,
+            cpu_count=1,
+            compress=True,
+        )
+        return out
+
+    def test_extract_skips_payload_verification(self) -> None:
+        """Extraction must not run the payload hash pass; it decodes once to write."""
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = (b"GAMEDATA" * 4000) + b"\x00" * 200_000
+        out: Path = self._build(tmp_path, payload)
+        dest: Path = tmp_path / "u"
+        with patch.object(pfs_mod, "verify_file_payload_hashes") as mock_verify:
+            result = extract_pfs_image(image=out, output_path=dest)
+        self.assertEqual(result.errors, [])
+        mock_verify.assert_not_called()
+        self.assertEqual((dest / "blob.exfat").read_bytes(), payload)
+
+    def test_extract_reports_progress(self) -> None:
+        """Extraction drives an 'extract' progress phase when a reporter is supplied."""
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = (b"GAMEDATA" * 4000) + b"\x00" * 200_000
+        out: Path = self._build(tmp_path, payload)
+        dest: Path = tmp_path / "u"
+        progress = MagicMock()
+        result = extract_pfs_image(image=out, output_path=dest, progress=progress)
+        self.assertEqual(result.errors, [])
+        phases = [call.args[0] for call in progress.step.call_args_list]
+        self.assertIn("extract", phases)
+
+    def test_extract_reports_incremental_progress_for_large_file(self) -> None:
+        """A single large file should produce multiple extract updates, not just one at the end."""
+        tmp_path: Path = self.make_temp_path()
+        payload: bytes = b"GAMEDATA" * (2 * 1024 * 1024)  # 16 MiB logical, highly compressible
+        out: Path = self._build(tmp_path, payload)
+        dest: Path = tmp_path / "u"
+        progress = MagicMock()
+        result = extract_pfs_image(image=out, output_path=dest, progress=progress)
+        self.assertEqual(result.errors, [])
+        extract_calls = [call for call in progress.step.call_args_list if call.args[0] == "extract"]
+        self.assertGreaterEqual(len(extract_calls), 2)
+        last = extract_calls[-1]
+        self.assertEqual(last.args[1], last.args[2])  # reaches 100%
+        self.assertEqual(last.args[2], len(payload))  # progress is byte-based, not file-count-based
+
+
+class TestZlibBackend(PfsTestCase):
+    """The compression backend is zlib-ng but stays format-compatible with stdlib zlib."""
+
+    def test_decode_accepts_stdlib_zlib_compressed_block(self) -> None:
+        """A PFSC payload whose block was compressed by stdlib zlib still decodes."""
+        import struct
+        import zlib as stdlib_zlib
+
+        lb: int = c.PFSC_LOGICAL_BLOCK_SIZE
+        raw: bytes = (b"OLD-IMAGE-DATA" * 6000).ljust(lb, b"\x00")[:lb]
+        stored: bytes = stdlib_zlib.compress(raw, 9)  # produced by the previous backend
+        header_size: int = pfs_mod._pfsc_header_size(block_count=1, logical_block_size=lb)
+        offsets: list[int] = [header_size, header_size + len(stored)]
+        header: bytearray = bytearray(header_size)
+        struct.pack_into(
+            "<iiiiqqQq",
+            header,
+            0,
+            c.PFSC_MAGIC,
+            c.PFSC_UNK4,
+            c.PFSC_UNK8,
+            lb,
+            lb,
+            c.PFSC_BLOCK_OFFSETS_OFFSET,
+            header_size,
+            lb,
+        )
+        struct.pack_into("<2Q", header, c.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
+        payload: bytes = bytes(header) + stored
+        decoded: bytes = pfs_mod.decode_pfsc_payload(payload, expected_logical_size=lb)
+        self.assertEqual(decoded, raw)
+
+
+class TestSourceMatchExcludesJunk(PfsTestCase):
+    """Source/image comparison must ignore OS metadata the packer excludes."""
+
+    def test_validate_source_paths_ignores_os_metadata(self) -> None:
+        root = self.make_temp_path()
+        (root / "sce_sys").mkdir()
+        (root / "sce_sys" / "param.json").write_text("{}", encoding="utf-8")
+        (root / "eboot.bin").write_bytes(b"x")
+        # Junk present in the source but (correctly) absent from the image.
+        (root / ".DS_Store").write_bytes(b"junk")
+        (root / "._eboot.bin").write_bytes(b"junk")
+        (root / "__MACOSX").mkdir()
+        (root / "__MACOSX" / "x").write_bytes(b"junk")
+
+        file_inodes = {"sce_sys/param.json": 4, "eboot.bin": 3}  # what a packed image would contain
+        errors: list[str] = []
+        common = pfs_mod.validate_source_paths(file_inodes=file_inodes, source=root, errors=errors)
+        self.assertEqual(errors, [])  # no "missing in image" for junk
+        self.assertEqual(set(common or []), {"sce_sys/param.json", "eboot.bin"})
+
+
+class TestEncodePfscIntoHandleBounded(unittest.TestCase):
+    """The multi-worker PFSC encoder caps in-flight blocks so memory stays flat."""
+
+    def test_multi_worker_bounds_in_flight_and_round_trips(self) -> None:
+        # A mix of highly-compressible and incompressible blocks reproduces the
+        # fast-producer/slow-consumer condition that previously buffered without
+        # limit. The in-flight window must stay at workers*4, far below the block
+        # count, while output stays byte-correct.
+        lbs: int = c.PFSC_LOGICAL_BLOCK_SIZE
+        workers: int = 2
+        block_count: int = 20
+        rng: random.Random = random.Random(20240627)
+        payload: bytearray = bytearray()
+        for index in range(block_count):
+            payload += b"\x00" * lbs if index % 2 == 0 else rng.randbytes(lbs)
+        original: bytes = bytes(payload)
+
+        peak_in_flight: list[int] = [0]
+
+        class _FakeAsyncResult:
+            def __init__(self, pool: _FakePool, value: tuple[bytes, bytes]) -> None:
+                self._pool = pool
+                self._value = value
+
+            def get(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+                self._pool.outstanding -= 1
+                return self._value
+
+        class _FakePool:
+            def __init__(
+                self,
+                processes: int | None = None,
+                initializer: Callable[..., None] | None = None,
+                initargs: tuple = (),
+            ) -> None:
+                self.outstanding: int = 0
+                if initializer is not None:
+                    initializer(*initargs)
+
+            def apply_async(self, func: Callable[..., tuple[bytes, bytes]], args: tuple = ()) -> _FakeAsyncResult:
+                value: tuple[bytes, bytes] = func(*args)
+                self.outstanding += 1
+                peak_in_flight[0] = max(peak_in_flight[0], self.outstanding)
+                return _FakeAsyncResult(self, value)
+
+            def __enter__(self) -> _FakePool:
+                return self
+
+            def __exit__(self, *exc: object) -> bool:
+                return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src: Path = Path(tmp) / "payload.bin"
+            src.write_bytes(original)
+            out_path: Path = Path(tmp) / "out.pfsc"
+            try:
+                with patch.object(pfs_mod.mp, "Pool", _FakePool), out_path.open("w+b") as out:
+                    stored_size, is_compressed, _gain, _hyp = pfs_mod._encode_pfsc_into_handle(
+                        out=out,
+                        base_offset=0,
+                        source_path=src,
+                        threshold_gain=0,
+                        min_file_gain=0,
+                        zlib_level=6,
+                        logical_block_size=lbs,
+                        block_worker_count=workers,
+                    )
+                    out.truncate(stored_size)
+            finally:
+                if pfs_mod._PFSC_WORKER_SOURCE_HANDLE is not None:
+                    pfs_mod._PFSC_WORKER_SOURCE_HANDLE.close()
+                    pfs_mod._PFSC_WORKER_SOURCE_HANDLE = None
+                    pfs_mod._PFSC_WORKER_SOURCE_PATH = None
+
+            self.assertTrue(is_compressed)
+            self.assertGreater(peak_in_flight[0], 0)
+            self.assertLessEqual(peak_in_flight[0], workers * pfs_mod.DEFAULT_MKPFS_PFSC_WINDOW_FACTOR)
+            self.assertLess(peak_in_flight[0], block_count)
+            self.assertEqual(pfs_mod.decode_pfsc_payload(out_path.read_bytes()), original)

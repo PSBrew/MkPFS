@@ -1,0 +1,56 @@
+name: "CodeQL"
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '28 4 * * 3' # Once per week: 04:28, only on Wednesday
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  security-events: write
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+          - language: actions
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Setup uv (project tooling)
+        uses: astral-sh/setup-uv@v7
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install Python dependencies for analysis
+        if: matrix.language == 'python'
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Prefer project-managed deps via uv if available
+          if command -v uv >/dev/null 2>&1; then
+            uv sync --group dev --frozen || true
+          fi
+          # Fallback to requirements.txt if present
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt || true
+          fi
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+      - name: Autobuild (skip for Actions workflows)
+        if: matrix.language != 'actions'
+        uses: github/codeql-action/autobuild@v4
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{matrix.language}}"

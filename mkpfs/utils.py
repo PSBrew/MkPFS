@@ -3,9 +3,110 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import BinaryIO
+
+# OS-generated metadata files/directories that should never be packed into an
+# image or indexed. Matched case-insensitively against the entry's base name;
+# AppleDouble resource forks ("._*") are matched by prefix.
+IGNORED_NAMES: frozenset[str] = frozenset(
+    {
+        # macOS
+        ".ds_store",
+        ".spotlight-v100",
+        ".trashes",
+        ".fseventsd",
+        ".temporaryitems",
+        ".documentrevisions-v100",
+        ".apdisk",
+        "__macosx",
+        ".volumeicon.icns",
+        # Windows
+        "thumbs.db",
+        "ehthumbs.db",
+        "desktop.ini",
+        "$recycle.bin",
+        "system volume information",
+    }
+)
+
+
+def _sanitize_name_component(name: str) -> str:
+    """Replace filesystem-unsafe characters in a single name component with ``_``."""
+    return "".join(c if (c.isalnum() or c in "._-") else "_" for c in name)
+
+
+def ui_sanitize_basename(name: str) -> str:
+    """Sanitize a name for UI-generated output basenames.
+
+    Replaces a specific set of problematic characters with a single space,
+    collapses consecutive spaces into one, and strips leading/trailing space.
+    This follows the GUI requirement exactly (do NOT convert spaces to
+    underscores).
+    """
+    if not name:
+        return ""
+    # Replace problematic characters with a space.
+    sanitized: str = re.sub(r"[()\[\]\{\}\*\&\^\%\$\#\@!\u00B1\u00A7\|\\\/:;\"'<>,\?]", " ", name)
+    # Collapse runs of whitespace and trim.
+    return " ".join(sanitized.split()).strip()
+
+
+def title_id_from_source(source_root: Path) -> str | None:
+    """Return the title ID from ``sce_sys/param.json`` when present.
+
+    Args:
+        source_root: Source tree root to inspect.
+
+    Returns:
+        The trimmed ``titleId`` / ``title_id`` value, or ``None`` when missing or
+        unreadable.
+    """
+    param_json: Path = source_root / "sce_sys" / "param.json"
+    if not param_json.exists():
+        return None
+    try:
+        parsed: dict[str, object] = read_param_json(param_json)
+    except ValueError:
+        return None
+    value: object | None = parsed.get("titleId") or parsed.get("title_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def default_image_basename(source_root: Path) -> str:
+    """Return the base name (no extension) for an image built from ``source_root``.
+
+    Prefers the title ID from ``sce_sys/param.json``; falls back to the source
+    directory name. The result is sanitized for use as a filename.
+
+    Args:
+        source_root: Source tree root.
+
+    Returns:
+        A non-empty, filesystem-safe base name.
+    """
+    base: str = title_id_from_source(source_root) or source_root.name or "image"
+    sanitized: str = _sanitize_name_component(base)
+    return sanitized or "image"
+
+
+def is_ignored_name(name: str) -> bool:
+    """Return True if ``name`` is OS-generated metadata to exclude from images.
+
+    Args:
+        name: A single path component (file or directory base name).
+
+    Returns:
+        True for known macOS/Windows metadata entries (case-insensitive) and for
+        AppleDouble resource forks (names starting with ``._``).
+    """
+    if name.startswith("._"):
+        return True
+    return name.lower() in IGNORED_NAMES
 
 
 def human_readable_size(size: int) -> str:

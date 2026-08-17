@@ -16,26 +16,34 @@ from enum import StrEnum
 from pathlib import Path
 
 from . import __version__, consts
+from .ampr import ensure_ampr_index
+from .exfat import EXFAT_SIGNATURE, ExfatReader, render_exfat_tree
+from .exfat_writer import iter_exfat_image, write_exfat_image
 from .logging import error, info, warning
 from .pbar import Progress
 from .pfs import (
     BuildError,
     BuildStats,
+    ImageFormat,
     ParsedDirent,
     PFSExtractionResult,
     PFSImageInfo,
     PFSImageInspection,
     build_expected_fpt,
     build_pfs,
+    build_pfs_stream_from_exfat,
     build_pfs_stream_single_file,
     build_tree_from_uroot,
     choose_auto_fit_block_size,
     compose_pfs_mode_with_sign,
+    detect_image_format,
     estimate_file_data_footprint,
     estimate_pfsc_spool_size,
+    extract_exfat_image,
     extract_pfs_image,
     human_readable_size,
     inspect_pfs_image,
+    open_inner_file_view,
     parse_ekpfs_key_hex,
     parse_image_header,
     parse_image_inodes,
@@ -50,14 +58,16 @@ from .pfs import (
     validate_ps5_checklist,
     validate_source_match,
     validate_source_paths,
+    verify_exfat_image,
     verify_file_payload_hashes,
     verify_signed_image_signatures,
 )
 from .utils import (
+    default_image_basename,
     is_power_of_two,
     normalize_output_path,
-    read_param_json,
     resolve_temp_root,
+    title_id_from_source,
 )
 
 PROJECT_URL: str = "https://github.com/PSBrew/MkPFS"
@@ -304,21 +314,7 @@ def _detect_title_id_from_source(source_path: Path) -> str | None:
         The trimmed title ID when the tree exposes a valid ``titleId`` or
         ``title_id`` entry, otherwise ``None``.
     """
-    param_json: Path = source_path / "sce_sys" / "param.json"
-    if not param_json.exists():
-        return None
-
-    try:
-        parsed: dict[str, object] = read_param_json(param_json)
-    except ValueError:
-        return None
-
-    title_id_value: object | None = parsed.get("titleId") or parsed.get("title_id")
-    if isinstance(title_id_value, str):
-        title_id: str = title_id_value.strip()
-        if title_id:
-            return title_id
-    return None
+    return title_id_from_source(source_path)
 
 
 def print_summary(stats: BuildStats) -> None:
@@ -794,9 +790,16 @@ def cli_mkpfs_add_create_args(
     parser.add_argument(
         "--compression-level",
         type=int,
-        default=9,
-        help="Zlib compression level (0-9, default: 9)",
+        default=7,
+        help="Zlib compression level (0-9, default: 7)",
     )
+    parser.add_argument(
+        "--compression-backend",
+        choices=("auto", "zlib-ng", "zlib", "isal"),
+        default="auto",
+        help="Compression backend to use for PFSC block compression (default: auto — isal > zlib-ng > zlib)",
+    )
+
     parser.add_argument(
         "--max-compressed-ratio",
         type=int,
@@ -1336,6 +1339,135 @@ def _stage_single_file_source_root(
         yield staging_root
 
 
+def cli_mkpfs_pack_exfat_run(args: argparse.Namespace) -> int:
+    """Build a raw exFAT image from a source directory.
+
+    Args:
+        args: Parsed CLI arguments with ``source_dir`` and optional ``output``.
+
+    Returns:
+        Process exit code for the exFAT packing workflow.
+    """
+    source: Path = Path(args.source_dir).expanduser().resolve()
+    if not source.is_dir():
+        raise BuildError(f"source must be an existing directory: {source}")
+
+    cluster_arg: str = str(args.cluster_size).strip().lower()
+    cluster_size: int | None
+    if cluster_arg in {"auto", ""}:
+        cluster_size = None
+    else:
+        try:
+            cluster_size = int(args.cluster_size)
+        except (TypeError, ValueError) as exc:
+            raise BuildError("--cluster-size must be an integer or 'auto'") from exc
+        if not is_power_of_two(cluster_size) or cluster_size < 512 or cluster_size > 32 * 1024 * 1024:
+            raise BuildError("--cluster-size must be a power of two between 512 and 33554432")
+
+    # Resolve the final output path so we can pre-check overwrite and report it.
+    basename: str = f"{default_image_basename(source)}.exfat"
+    if args.output is None:
+        target: Path = source.parent / basename
+    else:
+        requested: Path = Path(args.output).expanduser().resolve()
+        target = requested / basename if requested.is_dir() else requested
+
+    if target.exists() and not args.overwrite:
+        error(f"output already exists (use --overwrite): {target}")
+        return 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    print_version_header()
+    info(f"Building exFAT image from {source}")
+    info(f"  Output: {target}")
+    written: Path = write_exfat_image(
+        source,
+        target,
+        cluster_size=cluster_size,
+        progress=Progress(enabled=not bool(getattr(args, "no_progress", False))),
+    )
+    info(f"Successfully wrote {human_readable_size(written.stat().st_size)} exFAT image: {written}")
+    return 0
+
+
+def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
+    """Wrap a folder in an exFAT and compress it into a .ffpfsc in one pass.
+
+    Args:
+        args: Parsed pack-folder CLI arguments.
+        source_path: Resolved source directory.
+
+    Returns:
+        Process exit code.
+    """
+    output_path, output_changed = normalize_output_path(
+        args.image_file, ".ffpfsc", adjust=bool(getattr(args, "adjust_output_file_extension", True))
+    )
+    output_path = output_path.expanduser().resolve()
+    if output_changed:
+        info("exFAT wrapping mode enabled, adjusting output file extension to .ffpfsc")
+
+    if args.signed:
+        raise BuildError("--exfat wrapping does not support --signed images")
+
+    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=65536)
+    temp_folder: Path = _resolve_pack_temp_folder(args)
+    _print_pack_parameters(
+        config=config,
+        display_source_path=source_path,
+        output_path=output_path,
+        temp_folder=temp_folder,
+        signed=False,
+        require_game_files=False,
+        dry_run=args.dry_run,
+    )
+
+    if args.dry_run:
+        size_box: list[int] = []
+        blocks = iter_exfat_image(source_path, on_layout=size_box.append)
+        try:
+            next(blocks)  # trigger the scan + layout to learn the inner exFAT size
+        finally:
+            blocks.close()
+        info(
+            f"Dry run: would wrap {source_path} into a {human_readable_size(size_box[0])} "
+            f"exFAT and compress it to {output_path}; nothing written."
+        )
+        return 0
+    if not prompt_overwrite(output_path):
+        info("Operation cancelled.")
+        return 0
+
+    stats: BuildStats = build_pfs_stream_from_exfat(
+        source_root=source_path,
+        output_path=output_path,
+        block_size=config.block_size,
+        pfs_version=config.pfs_version,
+        case_insensitive=config.case_insensitive,
+        zlib_level=config.zlib_level,
+        threshold_gain=config.threshold_gain,
+        cpu_count=config.cpu_count,
+        encrypted=config.encrypted,
+        new_crypt=config.new_crypt,
+        ekpfs=config.ekpfs_key,
+        verbose=args.verbose,
+    )
+    stats.input_path = source_path
+    print_summary(stats)
+    if not args.verify:
+        return 0
+
+    info("Running post-create check...")
+    errors, warnings, _tree, _uroot = run_image_check(
+        output_path, None, print_tree=False, ekpfs=config.ekpfs_key, new_crypt=config.new_crypt
+    )
+    for w in warnings:
+        warning(w)
+    for e in errors:
+        error(e)
+    return 1 if errors else 0
+
+
 def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     """Pack a folder into a PFS image.
 
@@ -1347,6 +1479,21 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
     """
     source_path: Path = Path(args.source_dir).expanduser().resolve()
     temp_folder: Path = _resolve_pack_temp_folder(args)
+    # Generate the AMPR emulation index into the source tree before packing so it
+    # is included in the image (only when an emulation build marker is present).
+    if not args.dry_run:
+        ensure_ampr_index(
+            source_path,
+            enabled=bool(getattr(args, "ampr_index", True)),
+            create_if_missing=bool(getattr(args, "ampr_skip_regen_if_exists", False)),
+            force_regen=bool(getattr(args, "ampr_force_regen", False)),
+        )
+
+    # Default: wrap the folder in an exFAT and compress it into the .ffpfsc in one
+    # pass, with no temporary .exfat. Use --raw to pack the folder directly as PFS.
+    if not bool(getattr(args, "raw", False)):
+        return _run_exfat_pack(args=args, source_path=source_path)
+
     title_id: str | None = _detect_title_id_from_source(source_path)
     desired_output_suffix: str = ".ffpfs" if title_id is not None else ".ffpfsc"
     output_adjustment_message: str
@@ -1551,6 +1698,24 @@ def cli_mkpfs_check_run(args: argparse.Namespace) -> int:
         info("--source-dir and --source-file cannot be used together")
         return 2
 
+    fmt_text: str = getattr(args, "format", "auto")
+    fmt: ImageFormat = ImageFormat(fmt_text)
+    detected: ImageFormat = detect_image_format(image=image, hint=fmt)
+
+    # Raw exFAT verify path.
+    if detected == ImageFormat.EXFAT:
+        if source_file_arg:
+            info("--source-file is not supported for exFAT verify; use --source-dir")
+            return 2
+        source: Path | None = Path(source_dir_arg).expanduser().resolve() if source_dir_arg else None
+        errors, warnings = verify_exfat_image(image=image, source=source, compare_contents=source is not None)
+        for w in warnings:
+            warning(w, icon_name="warning")
+        for e in errors:
+            error(e, icon_name="error")
+        return 1 if errors else 0
+
+    # Default PFS verify path (existing behaviour).
     source: Path | None = None
     if source_dir_arg:
         source = Path(source_dir_arg).expanduser().resolve()
@@ -1646,6 +1811,37 @@ def _run_verify_check(
 
 def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
     image: Path = Path(args.image_file).expanduser().resolve()
+    ekpfs: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
+    new_crypt: bool = bool(getattr(args, "new_crypt", False))
+    fmt: ImageFormat = ImageFormat(getattr(args, "format", ImageFormat.AUTO.value))
+    detected: ImageFormat = detect_image_format(image=image, hint=fmt)
+
+    if detected == ImageFormat.EXFAT:
+        print_version_header()
+        info("/")
+        with image.open("rb") as fh:
+            reader: ExfatReader = ExfatReader(fh)
+            for line in render_exfat_tree(reader.root_entries()):
+                info(line)
+        return 0
+
+    # Deep mode: if the image wraps a single exFAT, list the files inside it.
+    if bool(getattr(args, "deep", False)):
+        opened = open_inner_file_view(image, ekpfs=ekpfs, new_crypt=new_crypt)
+        if opened is not None:
+            view, fh, _name = opened
+            try:
+                view.seek(0)
+                if view.read(len(EXFAT_SIGNATURE) + 3)[3:] == EXFAT_SIGNATURE:
+                    print_version_header()
+                    info("/")
+                    for line in render_exfat_tree(ExfatReader(view).root_entries()):
+                        info(line)
+                    return 0
+            finally:
+                fh.close()
+        info("--deep: no inner exFAT found; showing the image tree")
+
     errors: list[str]
     _warnings: list[str]
     tree: dict[int, list[ParsedDirent]]
@@ -1655,8 +1851,8 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
         source=None,
         print_tree=False,
         emit_report=False,
-        ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
-        new_crypt=bool(getattr(args, "new_crypt", False)),
+        ekpfs=ekpfs,
+        new_crypt=new_crypt,
         verify_payloads=False,
     )
     if errors:
@@ -1768,25 +1964,60 @@ def cli_mkpfs_analyze_run(args: argparse.Namespace) -> int:
 
 
 def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
-    """Extract all files from a PFS image into a directory.
-
-    Args:
-        args: Parsed CLI arguments with `image`, `output`, and optional `overwrite`.
-    """
+    """Extract all files from an image into a directory."""
     image: Path = Path(args.image_file).expanduser().resolve()
     output_path: Path = Path(args.output_dir).expanduser().resolve()
+    deep: bool = bool(getattr(args, "deep", False))
+    selectors: list[str] | None = getattr(args, "only", None)
+
+    if selectors and not deep:
+        info("--only requires --deep (it selects entries inside the wrapped exFAT)")
+        return 2
 
     if output_path.exists() and not args.overwrite:
         info(f"output path {output_path} exists (use --overwrite to force)")
         return 2
 
-    # Perform extraction via library API
+    fmt_text: str = getattr(args, "format", "auto")
+    fmt: ImageFormat = ImageFormat(fmt_text)
+    detected: ImageFormat = detect_image_format(image=image, hint=fmt)
+
+    # Raw exFAT unpack path.
+    if detected == ImageFormat.EXFAT:
+        if deep:
+            info("--deep has no effect for raw exFAT images; extracting image contents")
+        if selectors:
+            info("--only is not supported for raw exFAT images; extracting everything")
+        result: PFSExtractionResult = extract_exfat_image(
+            image=image,
+            output_path=output_path,
+            progress=Progress(enabled=not bool(getattr(args, "no_progress", False))),
+        )
+        for w in result.warnings:
+            info(w)
+        for e in result.errors:
+            info(e)
+
+        if result.errors:
+            return 1
+
+        print_version_header()
+        info("Extraction complete:")
+        info(f"  Output:       {result.output_path}")
+        info(f"  Files written: {result.files_written}")
+        info(f"  Dirs created:  {result.directories_created}")
+        info(f"  Bytes written: {result.bytes_written}")
+        return 0
+
+    # Default PFS unpack path (existing behaviour).
     result: PFSExtractionResult = extract_pfs_image(
         image=image,
         output_path=output_path,
-        progress=None,
+        progress=Progress(enabled=not bool(getattr(args, "no_progress", False))),
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
         new_crypt=bool(getattr(args, "new_crypt", False)),
+        deep=deep,
+        selectors=selectors,
     )
 
     for w in result.warnings:
@@ -1806,6 +2037,82 @@ def cli_mkpfs_extract_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
+    """Batch convert multiple items in a source directory into .ffpfsc images."""
+    source_dir: Path = Path(args.source_dir).expanduser().resolve()
+    output_dir: Path = Path(args.output_dir).expanduser().resolve()
+
+    # Validate source and output directories early so CLI errors are consistent
+    # with run_batch and present user-friendly messages.
+    if not source_dir.exists() or not source_dir.is_dir():
+        error(f"Source directory does not exist or is not a directory: {source_dir}")
+        return 1
+    if output_dir == source_dir or source_dir in output_dir.parents:
+        error("Output directory cannot be inside the source directory")
+        return 1
+
+    # Resolve --block-size the same way as the pack-folder command so the
+    # user-supplied value is honoured.  Batch does not support auto-fit
+    # (which requires a full tree walk), so only "auto" and a literal
+    # integer are accepted.
+    block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
+    if block_size_arg == "auto":
+        block_size: int = 65536
+    else:
+        try:
+            block_size = int(args.block_size)
+        except (TypeError, ValueError) as exc:
+            raise BuildError("--block-size must be an integer value or 'auto' for batch conversion") from exc
+    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
+    pack_flags: dict = {
+        "block_size": config.block_size,
+        "pfs_version": config.pfs_version,
+        "case_insensitive": config.case_insensitive,
+        "zlib_level": config.zlib_level,
+        "threshold_gain": config.threshold_gain,
+        "min_file_gain": config.min_file_gain,
+        "min_compress_size": config.min_compress_size,
+        "cpu_count": config.cpu_count,
+        "compress": config.compress,
+        "skip_executable_compression": config.skip_executable_compression,
+        "encrypted": config.encrypted,
+        "new_crypt": config.new_crypt,
+        "ekpfs": config.ekpfs_key,
+        "verbose": bool(getattr(args, "verbose", False)),
+        "dry_run": bool(getattr(args, "dry_run", False)),
+        "verify": bool(getattr(args, "verify", False)),
+    }
+    from .batch import (
+        BatchItem,
+        BatchSummary,
+        discover_batch_items,
+        print_batch_pre_stats,
+        print_batch_summary,
+        run_batch,
+    )
+
+    items: list[BatchItem] = discover_batch_items(source_dir)
+    if not items:
+        info(f"No packable items found in {source_dir}")
+        return 0
+    print_batch_pre_stats(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        items=items,
+        pack_flags=pack_flags,
+    )
+    summary: BatchSummary = run_batch(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        overwrite=bool(getattr(args, "overwrite", False)),
+        pack_flags=pack_flags,
+    )
+    print_batch_summary(summary)
+    info(f"Total elapsed: {summary.elapsed_seconds:.1f}s")
+    info(f"Output directory: {output_dir}")
+    return 0 if summary.errors == 0 else 1
+
+
 def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     parser = MkPFSArgumentParser(
         prog="mkpfs",
@@ -1823,7 +2130,55 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
 
     folder_parser = pack_sub.add_parser("folder", help="Build image from a source directory")
     cli_mkpfs_add_create_args(folder_parser)
+    folder_parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Pack the folder directly into a PFS image instead of the default exFAT-wrapped .ffpfsc",
+    )
+    folder_parser.add_argument(
+        "--no-ampr-index",
+        dest="ampr_index",
+        action="store_false",
+        default=True,
+        help="Do not generate ampr_emu.index even when fakelib/libSceAmpr.sprx is present",
+    )
+    folder_parser.add_argument(
+        "--ampr-skip-regen-if-exists",
+        dest="ampr_skip_regen_if_exists",
+        action="store_true",
+        default=False,
+        help="If AMPR generation is enabled, validate and skip regen when a valid index exists",
+    )
+    folder_parser.add_argument(
+        "--ampr-force-regen",
+        dest="ampr_force_regen",
+        action="store_true",
+        default=False,
+        help="Force AMPR index regeneration even when an existing index is present",
+    )
     folder_parser.set_defaults(func=cli_mkpfs_create_run)
+
+    exfat_parser = pack_sub.add_parser("exfat", help="Build a raw exFAT image from a source directory")
+    exfat_parser.epilog = "Examples:\r\n   mkpfs pack exfat './BREW1234-app' './BREW1234.exfat'\r\n"
+    exfat_parser.add_argument("source_dir", help="Source app or homebrew folder")
+    exfat_parser.add_argument(
+        "output",
+        nargs="?",
+        help="Output .exfat path, or a directory to auto-name <titleId>.exfat (default: alongside the source)",
+    )
+    exfat_parser.add_argument(
+        "--cluster-size",
+        default="auto",
+        help="exFAT cluster size in bytes or 'auto' (default: 65536 - SMP/LVD-optimal 64 KiB)",
+    )
+    exfat_parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output file")
+    exfat_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    exfat_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the exFAT packing progress bar on stderr",
+    )
+    exfat_parser.set_defaults(func=cli_mkpfs_pack_exfat_run)
 
     file_parser = pack_sub.add_parser("file", help="Build image from a single source file")
     file_parser.epilog = "Examples:\r\n   mkpfs pack file './BREW1234.exfat' './BREW1234.exfat.ffpfsc'\r\n"
@@ -1861,7 +2216,7 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     )
 
     check_parser = sub.add_parser("verify", help="Validate image structure and payload checksums")
-    check_parser.add_argument("image_file", help="Path to input .ffpfs image")
+    check_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
     check_source_group = check_parser.add_mutually_exclusive_group()
     check_source_group.add_argument("--source-dir", help="Optional source folder for hierarchy and payload comparison")
     check_source_group.add_argument(
@@ -1878,6 +2233,15 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     )
     check_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     check_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
+    check_parser.add_argument(
+        "--format",
+        choices=[ImageFormat.AUTO.value, ImageFormat.PFS.value, ImageFormat.EXFAT.value],
+        default=ImageFormat.AUTO.value,
+        help=(
+            "Image format hint (auto: detect exFAT by extension/signature, "
+            "pfs: force PFS handling, exfat: force exFAT handling)"
+        ),
+    )
     check_parser.add_argument(
         "--require-game-files",
         action="store_true",
@@ -1898,19 +2262,165 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     inspect_parser.set_defaults(func=cli_mkpfs_inspect_run)
 
     ls_parser = sub.add_parser("tree", help="Print image tree representation")
-    ls_parser.add_argument("image_file", help="Path to input .ffpfs image")
+    ls_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
+    ls_parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="If the image wraps a single exFAT, list the files inside it",
+    )
+    ls_parser.add_argument(
+        "--format",
+        choices=[ImageFormat.AUTO.value, ImageFormat.PFS.value, ImageFormat.EXFAT.value],
+        default=ImageFormat.AUTO.value,
+        help=(
+            "Image format hint (auto: detect exFAT by extension/signature, "
+            "pfs: force PFS handling, exfat: force exFAT handling)"
+        ),
+    )
     ls_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     ls_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
     ls_parser.set_defaults(func=cli_mkpfs_ls_run)
 
     extract_parser = sub.add_parser("unpack", help="Extract files from image to destination directory")
     extract_parser.epilog = "Examples:\r\n   mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'\r\n"
-    extract_parser.add_argument("image_file", help="Path to input .ffpfs image")
+    extract_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
     extract_parser.add_argument("output_dir", help="Destination directory for extraction")
     extract_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output path")
+    extract_parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="If the image wraps a single exFAT inside a PFS, extract the files inside it instead of the inner .exfat",
+    )
+    extract_parser.add_argument(
+        "--only",
+        action="append",
+        metavar="PATH",
+        help="With --deep, extract only this inner exFAT path (file or folder). Repeatable.",
+    )
     extract_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
     extract_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
+    extract_parser.add_argument(
+        "--format",
+        choices=[ImageFormat.AUTO.value, ImageFormat.PFS.value, ImageFormat.EXFAT.value],
+        default=ImageFormat.AUTO.value,
+        help=(
+            "Image format hint (auto: detect exFAT by extension/signature, "
+            "pfs: force PFS handling, exfat: force exFAT handling)"
+        ),
+    )
+    extract_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the extraction progress bar on stderr",
+    )
     extract_parser.set_defaults(func=cli_mkpfs_extract_run)
+
+    batch_parser = sub.add_parser(
+        "batch",
+        help="Batch convert multiple items in a directory into .ffpfsc images",
+    )
+    batch_parser.epilog = "Examples:\r\n   mkpfs batch ./games/ ./output/\r\n"
+    batch_parser.add_argument("source_dir", help="Directory containing items to convert")
+    batch_parser.add_argument("output_dir", help="Directory where .ffpfsc images are written")
+    batch_parser.add_argument("--verify", action="store_true", help="Run full verification after a successful pack")
+
+    batch_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing output files (default: skip)",
+    )
+    batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be done without writing",
+    )
+
+    # Shared pack flags (mirrors cli_mkpfs_add_create_args minus positionals)
+    comp_grp = batch_parser.add_mutually_exclusive_group()
+    comp_grp.add_argument(
+        "--compress",
+        action="store_true",
+        default=True,
+        help="Enable PFSC block compression (default)",
+    )
+    comp_grp.add_argument("--no-compress", action="store_true", help="Disable PFSC block compression")
+
+    batch_parser.add_argument(
+        "--threshold-gain",
+        type=int,
+        default=0,
+        help="Minimum per-block gain percent to keep PFSC-compressed blocks (default: 0)",
+    )
+    batch_parser.add_argument(
+        "--block-size",
+        default="auto",
+        help="PFS block size in bytes or 'auto' (default: 65536)",
+    )
+    batch_parser.add_argument(
+        "--version",
+        choices=("PS4", "PS5"),
+        default="PS5",
+        help="PFS profile version (default: PS5)",
+    )
+    batch_parser.add_argument(
+        "--inode-bits",
+        type=int,
+        choices=[32, 64],
+        default=32,
+        help="Inode width mode bit (32 or 64, default: 32)",
+    )
+
+    case_grp = batch_parser.add_mutually_exclusive_group()
+    case_grp.add_argument("--case-sensitive", action="store_true", help="Build a case-sensitive image")
+    case_grp.add_argument(
+        "--case-insensitive",
+        action="store_true",
+        help="Set case-insensitive mode bit (default)",
+    )
+
+    batch_parser.add_argument(
+        "--cpu-count",
+        type=int,
+        default=0,
+        help="Number of CPU cores for PFSC compression (0 = auto)",
+    )
+    batch_parser.add_argument(
+        "--compression-level",
+        type=int,
+        default=7,
+        help="Zlib compression level (0-9, default: 7)",
+    )
+    batch_parser.add_argument(
+        "--compression-backend",
+        choices=("auto", "zlib-ng", "zlib", "isal"),
+        default="auto",
+        help="Compression backend (default: auto)",
+    )
+    batch_parser.add_argument(
+        "--max-compressed-ratio",
+        type=int,
+        default=100,
+        help="Maximum PFSC size as percent of raw file (0-100, default: 100)",
+    )
+    batch_parser.add_argument(
+        "--min-compress-size",
+        type=int,
+        default=0,
+        help="Store files smaller than N bytes raw (default: resolved --block-size)",
+    )
+    batch_parser.add_argument(
+        "--skip-executable-compression",
+        action="store_true",
+        default=True,
+        help="Skip compression in executable files",
+    )
+    batch_parser.add_argument("--verbose", action="store_true", help="Verbose per-file decisions")
+    # Encryption flags (match pack command so batch can build encrypted images)
+    batch_parser.add_argument("--encrypted", action="store_true", help="Encrypt filesystem blocks with AES-XTS")
+    batch_parser.add_argument("--ekpfs-key", help="Optional 64-hex EKPFS key for encrypted images")
+    batch_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
+
+    batch_parser.set_defaults(func=cli_mkpfs_batch_run)
 
     return parser
 
@@ -1935,7 +2445,7 @@ def normalize_cli_argv_for_pack_compat(argv: list[str] | None = None) -> list[st
         return argv
 
     explicit_pack_mode: str = effective_argv[1]
-    if explicit_pack_mode in {"folder", "file"} or explicit_pack_mode.startswith("-"):
+    if explicit_pack_mode in {"folder", "file", "exfat"} or explicit_pack_mode.startswith("-"):
         return argv
 
     source_path: Path = Path(explicit_pack_mode).expanduser()
@@ -1974,6 +2484,18 @@ def cli_mkpfs_main(argv: list[str] | None = None) -> int:
 
     normalized_argv: list[str] | None = normalize_cli_argv_for_pack_compat(argv)
     args = parser.parse_args(normalized_argv)
+
+    # Configure compression backend when supplied by pack subcommands.
+    if hasattr(args, "compression_backend"):
+        # Import locally to avoid top-level circular import with pfs module.
+        from . import compression as comp
+
+        try:
+            comp.set_backend(args.compression_backend)
+        except Exception as exc:
+            error(f"Unable to select compression backend '{getattr(args, 'compression_backend', None)}': {exc}")
+            return 2
+
     return int(args.func(args))
 
 

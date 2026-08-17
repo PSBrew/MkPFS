@@ -8,28 +8,35 @@
 [![Profiles](https://img.shields.io/badge/profiles-PS4%20%2F%20PS5-3b82f6?style=flat-square)](#command-reference)
 [![GitHub Sponsors](https://img.shields.io/badge/Fund%20Development-GitHub%20Sponsors-e11d48?style=flat-square&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/RenanGBarreto)
 
-MkPFS is a command-line tool and Python library for building, verifying, inspecting, browsing, and extracting PlayStation FileSystem (PFS) disk images. It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, and `.bin`, and fits both direct image workflows and PKG or FPKG inner-PFS generation.
+MkPFS is a command-line tool and Python library for building, verifying, inspecting, browsing, and extracting PlayStation FileSystem (PFS) disk images. 
+It works with common image naming conventions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, `.exfat`, and `.bin`, and fits both direct image workflows and PKG or FPKG inner-PFS generation.
 
-[Quick Start](#-quick-start) · [Compression Statistics](#-compression-statistics) · [Installation](#-installation) · [Command reference](#command-reference) · [Development](#-development) · [Related projects](#related-projects) · [Sponsor](https://github.com/sponsors/RenanGBarreto)
+[Quick Start](#-quick-start) · [Compression Statistics](#-compression-statistics) · [Installation](#-installation) · [GUI](#-gui) · [Command reference](#command-reference) · [Development](#-development) · [Related projects](#related-projects) · [Sponsor](https://github.com/sponsors/RenanGBarreto)
 
 ## 🎯 Why MkPFS
+
+<img src="assets/images/mkpfs-ui-stack.png" alt="MkPFS GUI - Pack & Verify" align="right" width="40%" />
 
 MkPFS is designed to be a clean and practical entry point for PlayStation PFS image workflows:
 
 - Create and manage PFS disk images for PlayStation-oriented workflows
 - Verify structure, payload hashes, layout consistency, and source-tree matches
 - Inspect image contents quickly with a tree view instead of digging through raw structures
-- Work with common image extensions such as `.ffpfs`, `.ffpfsc`.
+- Work with common image extensions such as `.ffpfs`, `.ffpfsc`, `.pfs`, `.dat`, `.exfat`, and `.bin`.
 - Use the generated images with tools like [MicroMount](https://github.com/drakmor/ShadowMountPlus) and [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)
 - Build the inner PFS filesystem used inside PKG or FPKG workflows
 - Use the same core workflow from both the CLI and the Python library
 - Explore a bundled, source-backed knowledge base for PFS and PKG research
 
+<div style="clear:both"></div>
+
 ## 🚀 Quick Start
+
+### Using the command line
 
 ```bash
 # Install/Update using pip
-python -m pip install -U "mkpfs"
+python -m pip install -U "mkpfs[gui]"
 
 # Creating Images: Option 1: .exfat -> .ffpfsc (Works with ShadowMountPlus)  (Maximum compatibility)
 python -m mkpfs pack file './BREW1234.exfat' './BREW1234.ffpfsc'
@@ -37,24 +44,37 @@ python -m mkpfs pack file './BREW1234.exfat' './BREW1234.ffpfsc'
 # Creating Images: Option 2: .ffpkg -> .ffpfsc (Works with ShadowMountPlus) 
 python -m mkpfs pack file './BREW1234.ffpkg' './BREW1234.ffpfsc'
 
-# Creating Images: Option 3: Game folder wrapped twice into .ffpfsc (two-pass) (Works with ShadowMountPlus) 
-python -m mkpfs pack folder --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
+# Creating Images: Option 3: Game folder -> .ffpfsc in one pass (default: exFAT-wrapped, no temp file)
+python -m mkpfs pack folder './BREW1234-app' './BREW1234.ffpfsc'
+
+# Creating Images: Option 4: Game folder packed directly as PFS (advanced single-pass)
+python -m mkpfs pack folder --raw './BREW1234-app/' './BREW1234.ffpfs'
+
+# Creating Images: Option 5: Game folder wrapped twice into PFS (advanced two-pass)
+python -m mkpfs pack folder --raw --no-compress --no-adjust-output-file-extension './BREW1234-app' './pfs_image.dat'
 python -m mkpfs pack file './pfs_image.dat' './BREW1234.ffpfsc'
 rm './pfs_image.dat'
 
-# Creating Images: Option 4: Game folder without a wrapper (single-pass) (--no-compress) (Avoid; See Notes!)
-python -m mkpfs pack folder --no-compress './BREW1234-app/' './BREW1234.ffpfs'
+# Extracting Existing Images (Reverse operation; --deep lists/extracts inside a wrapped exFAT)
+python -m mkpfs unpack  --deep './BREW1234.ffpfsc' './BREW1234-extracted/'
+```
 
-# Extracting Existing Images (Reverse operation)
-python -m mkpfs unpack './BREW1234.ffpfs' './BREW1234-extracted/'
+### Using the UI
+
+```bash
+python -m pip install -U "mkpfs[gui]"
+python -m mkpfs.gui
 ```
 
 ## ⚠️ Limitations and Known Issues
 
-- `exfat->ffpfsc` is currently the most stable format for compressed game backups.
-- Packing an application folder directly into an image without a wrapper (single-pass) does not work when 
-  file compression is enabled. Although the image is created and verification passes, the console reads the files 
-  incorrectly due to technical limitations, so this option provides no practical benefit.
+- `exfat->ffpfsc` is the most stable format for compressed game backups. `pack folder` produces this layout by
+  default: it wraps the folder in an exFAT image and compresses that into the `.ffpfsc` in a single pass, with no
+  temporary `.exfat` on disk.
+- `pack folder --raw` packs the folder directly into a PFS image without the exFAT wrapper. When file compression is
+  enabled, the image is created and verification passes, but the console reads the files incorrectly due to technical
+  limitations, so this advanced option provides no practical benefit for game backups. Prefer the default wrapped
+  layout.
 - With the default `--block-size 65536`, very small files can cause significant block-alignment waste, which may make
   the resulting image larger than the source in corner cases.
     - For small-file-heavy folders, prefer the two-pass strategy (`raw-folder -> .dat -> .ffpfsc`) or try a smaller
@@ -88,6 +108,55 @@ Or donate directly using:
  - **USDT (TRC-20):**  **`TQb7bUYSYRmdWgALHCejH33dNij9XyTAnU`**
  - **USDT (ERC-20):**  **`0x63c0b4b21133c4068375ae7566dafcf1398cf6fb`**
 
+## 📦 Installation
+
+### Run from a local checkout
+
+### Install from PyPI
+
+```bash
+python -m pip install -U "mkpfs[gui]"
+python -m mkpfs -h
+```
+
+### Install from source
+
+```bash
+uv sync --group dev
+uv run mkpfs -h
+```
+
+#### Install as a local tool
+
+```bash
+uv tool install .
+mkpfs -h
+```
+
+#### Build distributables
+
+```bash
+uv build
+uv run --frozen twine check dist/*
+```
+
+## 🖥️ GUI
+
+MkPFS includes an optional simple graphical interface built with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter). 
+It covers all five operations (pack folder, pack file, verify, inspect, tree, unpack) and supports multiple languages.
+
+
+### Running the GUI
+
+```bash
+python -m mkpfs.gui
+```
+
+Or, if installed via pip:
+
+```bash
+mkpfs-gui
+```
 
 ## 📊 Compression Statistics
 
@@ -106,45 +175,61 @@ The numbers below are measured from a real homebrew title that previously had 6.
 
 Both single-file wrapping (`pack file`) and folder-based packing (`pack folder`) produce compressed images of equivalent size, giving you flexibility without sacrificing efficiency.
 
-## 📦 Installation
 
-### Run from a local checkout
+### Backend compression benchmark
 
-### Install from PyPI
+The compression backend adapter supports three backends: `stdlib zlib`, `zlib-ng`, and `isal`.
+The benchmark below was run on **macOS ARM64 (Apple M-series)** using the included `scripts/bench_compression.py` with **1 GiB of mixed-pattern data**. All results are roundtrip-verified (compress → decompress → byte-for-byte match).
 
-```bash
-pip install mkpfs
-mkpfs -h
-```
+| Backend | Compressed | Ratio | Compress (MB/s) | vs stdlib | Decompress (MB/s) |
+|---------|-----------|-------|-----------------|-----------|-------------------|
+| **stdlib zlib** | 269.90 MiB | 0.2636 | 111.2 | 1.00x | 2180.8 |
+| **zlib-ng** | 270.70 MiB | 0.2643 | 184.3 | **1.66x** | 2287.1 |
+| **isal** | 277.30 MiB | 0.2708 | 446.9 | **4.02x** | 1142.9 |
 
-```bash
-uv sync --group dev
-uv run mkpfs -h
-```
+- **zlib-ng** compresses **1.66x faster** than stdlib zlib with nearly identical compression ratio — the best all-rounder for maximum compression with speed.
+- **ISAL** compresses **4.02x faster** than stdlib zlib, trading a slight ~1% larger output for dramatically better throughput — ideal for large game images.
+- **stdlib zlib** is always available as a fallback; it produces the smallest output but is the slowest to compress.
+- Decompress speeds are excellent across all backends (1142–2287 MB/s), so compressed images load fast regardless of which backend created them.
 
-### Install as a local tool
+### Compiling to a standalone .exe (Windows)
 
-```bash
-uv tool install .
-mkpfs -h
-```
-
-### Build distributables
+Install PyInstaller and build a single-file executable:
 
 ```bash
-uv build
-uv run --frozen twine check dist/*
+pip install pyinstaller
 ```
+
+```powershell
+pyinstaller --onefile --windowed `
+  --name MkPFS `
+  --icon assets\images\icon.png `
+  --collect-all customtkinter `
+  --collect-all PIL `
+  --add-data "assets;assets" `
+  --hidden-import cryptography `
+  mkpfs\gui.py
+```
+
+The resulting `MkPFS.exe` is placed in the `dist\` folder. No Python installation is required to run it.
+
+Notes:
+
+- `--onefile` bundles everything into a single executable. Use `--onedir` instead for faster startup at the cost of a folder output.
+- `--windowed` suppresses the console window. Remove it to keep a terminal for debugging.
+- `--collect-all customtkinter` and `--collect-all PIL` ensure theme files and image codecs are included.
+- `--add-data "assets;assets"` bundles the `assets/images/icon.png` used for the window icon.
+
 
 ## Command Reference
 
 MkPFS keeps the command surface focused on the image lifecycle. 
-The CLI currently supports `pack`, `verify`, `inspect`, `tree`, and `unpack`.
+The CLI currently supports `pack`, `batch`, `verify`, `inspect`, `tree`, and `unpack`.
 
 ### Top-level CLI
 
 ```text
-mkpfs [-h] {pack,verify,inspect,tree,unpack} ...
+mkpfs [-h] {pack,batch,verify,inspect,tree,unpack} ...
 ```
 
 | Parameter | Description |
@@ -155,19 +240,23 @@ mkpfs [-h] {pack,verify,inspect,tree,unpack} ...
 | `inspect` | Inspect image metadata and integrity summary. |
 | `tree` | Print the image tree representation. |
 | `unpack` | Extract files from an image into a destination directory. |
+| `batch` | Batch convert multiple game folders in a directory into `.ffpfsc` images. |
 
 ### `pack`
 
 ```text
-mkpfs pack [-h] {folder,file} ...
+mkpfs pack [-h] {folder,file,exfat} ...
 ```
 
-Use `pack folder` to build from a directory tree, or `pack file` to treat one file as a virtual single-file tree.
+Use `pack folder` to build a PS image from a directory tree, `pack file` to treat one file as a virtual single-file tree, or `pack exfat` to build a raw `.exfat` image from a directory tree without compressing it into a `.ffpfsc`.
 
 ### `pack folder`
 
+By default, `pack folder` wraps the folder in an exFAT image and compresses that into the `.ffpfsc` in a single pass, with no temporary `.exfat` on disk (the most PS-compatible layout). Use `--raw` to instead pack the folder directly into a PFS image.
+
 ```text
 mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file-extension]
+                  [--raw]
                   [--compress | --no-compress] [--threshold-gain THRESHOLD_GAIN]
                   [--block-size BLOCK_SIZE] [--version {PS4,PS5}] [--inode-bits {32,64}]
                   [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
@@ -193,6 +282,7 @@ mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 | `source_dir` | Source app or homebrew folder to pack.                                                                                                                                                                                                        |
 | `image_file` | Output image file path.                                                                                                                                                                                                                       |
 | `-h`, `--help` | Show help and exit.                                                                                                                                                                                                                           |
+| `--raw` | Pack the folder directly into a PFS image instead of the default exFAT-wrapped `.ffpfsc`.                                                                                                                                                      |
 | `--adjust-output-file-extension` | Automatically adjust the output extension to match the detected pack mode. This is the default.                                                                                                                                               |
 | `--no-adjust-output-file-extension` | Keep the requested output file name unchanged.                                                                                                                                                                                                |
 | `--compress` | Enable PFSC block compression. This is the default.                                                                                                                                                                                           |
@@ -204,7 +294,7 @@ mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 | `--case-sensitive` | Build a case-sensitive image.                                                                                                                                                                                                                 |
 | `--case-insensitive` | Set the case-insensitive mode bit. This is the default behavior.                                                                                                                                                                              |
 | `--cpu-count CPU_COUNT` | Number of CPU cores to use for PFSC compression. `0` means auto `min(16, max(1, cpu_count() - 1))`, non-zero uses `max(1, user value)`.                                                                                                       |
-| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `9`.                                                                                                                                                                                         |
+| `--compression-level COMPRESSION_LEVEL` | Zlib compression level from `0` to `9`. Default: `7`.                                                                                                                                                                                         |
 | `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `100` to store files raw only when PFSC is larger than the raw file. Default: `100`.                                                                                                    |
 | `--min-compress-size MIN_COMPRESS_SIZE` | Store files smaller than this many bytes raw without trying PFSC compression. When omitted (or set to `0`), MkPFS uses the resolved `--block-size` value, `65536` for `--block-size auto`, or the selected value for `--block-size auto-fit`. |
 | `--skip-executable-compression`               | Skip compression in important executable files. Default: enabled.                                                                                                                                                                             |
@@ -212,6 +302,9 @@ mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 | `--encrypted`                                 | Encrypt filesystem blocks with AES-XTS.                                                                                                                                                                                                       |
 | `--ekpfs-key EKPFS_KEY`                       | Optional 64-hex EKPFS key. When omitted with `--encrypted`, MkPFS uses an all-zero key.                                                                                                                                                       |
 | `--require-game-files`                        | Require `sce_sys/param.json` and `eboot.bin` before packing.                                                                                                                                                                                  |
+| `--no-ampr-index`                             | Do not generate `ampr_emu.index` even when `fakelib/libSceAmpr.sprx` is present.                                                                                                                                                              |
+| `--ampr-force-regen`                          | Force AMPR index regeneration even when a valid index already exists. Overrides `--ampr-skip-regen-if-exists`.                                                                |
+| `--ampr-skip-regen-if-exists`                 | If AMPR generation is enabled, validate and skip regeneration when a valid `ampr_emu.index` already exists.                                                                    |
 | `--temp-folder TEMP_FOLDER`                   | Directory used for temporary pack artifacts, including the one-file staging tree and PFSC spool files. Default: the system temp folder.                                                                                                       |
 | `--verbose`                                   | Print verbose per-file decisions during packing.                                                                                                                                                                                              |
 | `--dry-run`                                   | Scan, layout, and report only. Do not write an image file.                                                                                                                                                                                    |
@@ -221,6 +314,8 @@ Notes:
 
 - Folder output names are adjusted automatically by default.
 - MkPFS chooses `.ffpfs` when `sce_sys/param.json` exposes a title ID, otherwise it falls back to `.ffpfsc`.
+- When the source folder contains `fakelib/libSceAmpr.sprx`, MkPFS generates an `ampr_emu.index` in the folder before packing so it is included in the image and stays in sync with the current files. The rebuild is metadata-only and inexpensive. Use `--no-ampr-index` to skip it entirely. Use `--ampr-skip-regen-if-exists` to validate a pre-existing index and skip regeneration when it is still current. Use `--ampr-force-regen` to force regeneration even when a valid index exists.
+- OS-generated metadata is never packed: macOS entries (`.DS_Store`, `._*`, `__MACOSX`, `.Spotlight-V100`, ...) and Windows entries (`Thumbs.db`, `desktop.ini`, `$RECYCLE.BIN`, ...) are skipped during scanning and excluded from the AMPR index.
 - `--ekpfs-key` is only meaningful when used with `--encrypted`.
 
 ### `pack file`
@@ -263,7 +358,7 @@ mkpfs pack file ./payload.exfat ./payload.ffpfsc --temp-folder ./tmp/mkpfs
 | `--case-sensitive`                            | Build a case-sensitive image.                                                                                                                                                                           |
 | `--case-insensitive`                          | Set the case-insensitive mode bit. This is the default behavior.                                                                                                                                        |
 | `--cpu-count CPU_COUNT`                       | Number of CPU cores to use for PFSC compression. `0` means auto `min(16, max(1, cpu_count() - 1))`, non-zero uses `max(1, user value)`.                                                                         |
-| `--compression-level COMPRESSION_LEVEL`       | Zlib compression level from `0` to `9`. Default: `9`.                                                                                                                                                   |
+| `--compression-level COMPRESSION_LEVEL`       | Zlib compression level from `0` to `9`. Default: `7`.                                                                                                                                                   |
 | `--max-compressed-ratio MAX_COMPRESSED_RATIO` | Maximum PFSC size as percent of the raw file size. Use `100` to store files raw only when PFSC is larger than the raw file. Default: `100`.                                                                |
 | `--min-compress-size MIN_COMPRESS_SIZE`       | Store files smaller than this many bytes raw without trying PFSC compression. When omitted (or set to `0`), MkPFS uses the resolved `--block-size` value, `65536` for `--block-size auto`, or the selected value for `--block-size auto-fit`.                                              |
 | `--rename-inner-image`                          | Rename inner image filename to a safe normalized name (default).                                                                                                                                        |
@@ -295,13 +390,91 @@ Notes:
 - If `pack file` fails on macOS with `OSError: [Errno 22] Invalid argument` during PFSC compression, rerun with `--cpu-count 1` to keep block compression in-process.
   If the source lives on a removable or network volume, also try a local `--temp-folder` on a writable APFS volume.
 
+### `pack exfat`
+
+Build a raw exFAT image from a source directory, without compressing it into a `.ffpfsc`. This is useful when you want a standalone `.exfat` to inspect, mount, or pass to `pack file` later. The same exFAT layout is produced cross-platform, with no external `mkexfat` tooling required.
+
+```text
+mkpfs pack exfat [-h] [--cluster-size CLUSTER_SIZE] [--overwrite] [--verbose] [--no-progress] source_dir [output]
+```
+
+Examples:
+
+```bash
+mkpfs pack exfat ./BREW1234-app ./BREW1234.exfat
+mkpfs pack exfat ./BREW1234-app          # auto-name <titleId>.exfat alongside the source
+```
+
+| Parameter | Description |
+| --- | --- |
+| `source_dir` | Source app or homebrew folder to pack. |
+| `output` | Output `.exfat` path, or a directory to auto-name `<titleId>.exfat`. When omitted, the image is written alongside the source. |
+| `-h`, `--help` | Show help and exit. |
+| `--cluster-size CLUSTER_SIZE` | exFAT cluster size in bytes or `auto`. Default: `auto` (32 KiB, or 64 KiB for trees with a large average file size). |
+| `--overwrite` | Overwrite an existing output file. |
+| `--verbose` | Print verbose output. |
+| `--no-progress` | Disable the packing progress bar on stderr. |
+
+Notes:
+
+- OS-generated metadata is excluded from the image (see the `pack folder` notes for the full list).
+- The resulting `.exfat` can be packed straight into a `.ffpfsc` with `mkpfs pack file ./BREW1234.exfat ./BREW1234.ffpfsc`.
+
+### `batch`
+
+```text
+mkpfs batch [-h] [--overwrite] [--dry-run] [--compress | --no-compress]
+            [--threshold-gain THRESHOLD_GAIN]
+            [--block-size BLOCK_SIZE]
+            [--version {PS4,PS5}] [--inode-bits {32,64}]
+            [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
+            [--compression-level COMPRESSION_LEVEL]
+            [--compression-backend {auto,zlib-ng,zlib,isal}]
+            [--max-compressed-ratio MAX_COMPRESSED_RATIO]
+            [--min-compress-size MIN_COMPRESS_SIZE]
+            [--skip-executable-compression] [--verbose]
+            [--encrypted] [--ekpfs-key EKPFS_KEY] [--new-crypt]
+            source_dir output_dir
+```
+
+Examples:
+
+```bash
+# Convert all game folders found in ./games/ and write images to ./out/
+mkpfs batch ./games/ ./out/ --compression-level 7
+
+# Dry-run preview (no files written)
+mkpfs batch ./games/ ./out/ --dry-run
+
+# Overwrite existing images
+mkpfs batch ./games/ ./out/ --overwrite --compression-level 9
+```
+
+| Parameter | Description |
+| --- | --- |
+| `source_dir` | Directory containing items (folders or compatible single-file trees) to convert. |
+| `output_dir` | Directory where `.ffpfsc` images are written. |
+| `--overwrite` | Overwrite existing output files (default: skip). |
+| `--dry-run` | Scan, layout, and report only. Do not write image files. |
+| `--block-size` | PFS block size in bytes or `auto` (resolves to 65536). |
+| `--compression-level` | Zlib compression level (0-9, default: 7). |
+| `--encrypted` | Encrypt filesystem blocks with AES-XTS. Use `--ekpfs-key` to provide a 64-hex key. |
+| `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation (when encrypting). |
+
+Notes:
+
+- Batch conversion discovers folder-level items and single-file trees in `source_dir`, converts each item to an image, and writes each `.ffpfsc` inside `output_dir` using the item name. See `mkpfs pack` options for details on compression, signing, and encryption behavior.
+- Dry-run items are excluded from summary savings and total compressed size so overall savings remain representative.
+
 ### `verify`
 
 ```text
 mkpfs verify [-h] [--source-dir SOURCE_DIR | --source-file SOURCE_FILE]
              [--expect-crc32 EXPECT_CRC32]
              [--expect-manifest-sha256 EXPECT_MANIFEST_SHA256]
-             [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
+             [--ekpfs-key EKPFS_KEY] [--new-crypt]
+             [--format {auto,pfs,exfat}]
+             image_file
 ```
 
 Examples:
@@ -310,18 +483,20 @@ Examples:
 mkpfs verify ./game.ffpfs
 mkpfs verify ./single.ffpfsc --source-file ./payload.exfat
 mkpfs verify ./game.ffpfs --source-dir ./input --expect-crc32 0x7F528D1F
+mkpfs verify ./BREW1234.exfat --source-dir ./BREW1234-app --format exfat
 ```
 
 | Parameter | Description |
 | --- | --- |
-| `image_file` | Path to the input `.ffpfs` image. |
+| `image_file` | Path to the input image (`.ffpfs`, `.ffpfsc`, or `.exfat`). |
 | `-h`, `--help` | Show help and exit. |
-| `--source-dir SOURCE_DIR` | Optional source folder for hierarchy and payload comparison. |
-| `--source-file SOURCE_FILE` | Optional source file for single-file image comparison. Mutually exclusive with `--source-dir`. |
+| `--source-dir SOURCE_DIR` | Optional source folder for hierarchy and payload comparison. For exFAT images, this enables full file-by-file SHA-256 verification. |
+| `--source-file SOURCE_FILE` | Optional source file for single-file image comparison. Mutually exclusive with `--source-dir`. Not supported for raw exFAT images. |
 | `--expect-crc32 EXPECT_CRC32` | Expected cumulative data CRC32 in hex. Verification fails if the computed value differs. |
 | `--expect-manifest-sha256 EXPECT_MANIFEST_SHA256` | Expected manifest SHA256 as 64 hex characters. Verification fails if it differs. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
+| `--format {auto,pfs,exfat}` | Image format hint. `auto` (default) detects exFAT by extension/signature and treats everything else as PFS; `pfs` forces PFS handling; `exfat` forces exFAT handling. |
 
 ### `inspect`
 
@@ -347,26 +522,31 @@ mkpfs inspect ./game.ffpfs --format json
 ### `tree`
 
 ```text
-mkpfs tree [-h] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
+mkpfs tree [-h] [--deep] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file
 ```
 
 Examples:
 
 ```bash
 mkpfs tree ./game.ffpfs
+mkpfs tree ./game.ffpfsc --deep
 ```
 
 | Parameter | Description |
 | --- | --- |
 | `image_file` | Path to the input `.ffpfs` image. |
 | `-h`, `--help` | Show help and exit. |
+| `--deep` | When the image wraps a single exFAT, list the files inside it instead of the inner `.exfat`. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
 
 ### `unpack`
 
 ```text
-mkpfs unpack [-h] [--overwrite] [--ekpfs-key EKPFS_KEY] [--new-crypt] image_file output_dir
+mkpfs unpack [-h] [--overwrite] [--deep] [--only PATH]
+             [--ekpfs-key EKPFS_KEY] [--new-crypt]
+             [--format {auto,pfs,exfat}] [--no-progress]
+             image_file output_dir
 ```
 
 Examples:
@@ -374,16 +554,23 @@ Examples:
 ```bash
 mkpfs unpack ./game.ffpfs ./extracted/
 mkpfs unpack ./game.ffpfs ./extracted/ --overwrite
+mkpfs unpack ./game.ffpfsc ./extracted/ --deep
+mkpfs unpack ./game.ffpfsc ./extracted/ --deep --only sce_sys --only eboot.bin
+mkpfs unpack ./BREW1234.exfat ./BREW1234-extracted/ --format exfat
 ```
 
 | Parameter | Description |
 | --- | --- |
-| `image_file` | Path to the input `.ffpfs` image. |
+| `image_file` | Path to the input image (`.ffpfs`, `.ffpfsc`, or `.exfat`). |
 | `output_dir` | Destination directory for extraction. |
 | `-h`, `--help` | Show help and exit. |
 | `--overwrite` | Overwrite an existing output path. |
+| `--deep` | When a PFS image wraps a single exFAT, extract the files inside it instead of the inner `.exfat`. Has no effect for raw `.exfat` images. |
+| `--only PATH` | With `--deep`, extract only this inner exFAT path (a file, or a folder and everything under it). Repeatable. Only the matching entries are read, so cherry-picking a few files from a large image is cheap. |
 | `--ekpfs-key EKPFS_KEY` | Optional 64-hex EKPFS key for encrypted images. |
 | `--new-crypt` | Use the alternate `newCrypt` EKPFS derivation. |
+| `--format {auto,pfs,exfat}` | Image format hint. `auto` (default) detects exFAT by extension/signature and treats everything else as PFS; `pfs` forces PFS handling; `exfat` forces exFAT handling. |
+| `--no-progress` | Disable the extraction progress bar on stderr. |
 
 ## 🖥️ GUI
 
@@ -563,7 +750,7 @@ uv run --frozen ruff format .
 uv run --frozen ruff check .
 ```
 
-## 💙 Special thanks and Contributors
+## 💙 Special thanks
 
 Special thanks to the people and communities helping shape MkPFS:
 
@@ -572,7 +759,13 @@ Special thanks to the people and communities helping shape MkPFS:
 - **The PlayStation and reverse-engineering community**: for tools, research threads, testing feedback, technical notes, and historical knowledge
 - **Community-maintained references and wiki pages**: especially the projects and archives that preserve PFS, PKG, and FPKG implementation details
 
-## ⚠️ Disclaimer
+## 💻 Contributors
+
+<a href="https://github.com/PSBrew/MkPFS/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=PSBrew/MkPFS" />
+</a>
+
+## 📘 Disclaimer
 
 This software is intended for archival, backup, preservation, and homebrew purposes only.
 
@@ -580,8 +773,20 @@ Users are responsible for complying with all applicable laws and regulations in 
 
 ## 🔗 Related projects
 
-- [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus): Practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility
-- [PSDevWiki PFS](https://www.psdevwiki.com/ps4/PFS): Community reference for PFS on-disk structures
-- [PSDevWiki PKG files](https://www.psdevwiki.com/ps4/PKG_files): PKG format reference and tooling pointers
-- [ShadPKG HOWWORKS](https://github.com/seregonwar/ShadPKG/blob/main/docs/HOWWORKS.md): Implementation-focused PKG/PFS decryption walkthrough
-- [Wololo: PS4 FPKG writeup by Flatz](https://wololo.net/ps4-fpkg-writeup-by-flatz/): Historical writeup on FPKG/PKG techniques
+The projects listed below are community resources that are related to, have informed, or may be useful when researching PFS / PKG / exFAT tooling. They may have inspired MkPFS or help new developers exploring these topics, but their code or contents were not necessarily used in MkPFS - these entries are indexed for context.
+
+- [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus): Practical PS5 auto-mounter and a key reference for `.ffpfs` compatibility. [AI Summary](.claude/skills/related-projects-index/references/shadowmountplus.md)
+- [PS5 Game Compressor](https://github.com/juma-sayeh/PS5-Game-Compressor): PS5 payload + web UI for compressing and validating game images. [AI Summary](.claude/skills/related-projects-index/references/ps5-game-compressor.md)
+- [PKGTool](https://github.com/thesupersonic16/PKGTool): `.pkg` parser/extractor with a partial repack path. [AI Summary](.claude/skills/related-projects-index/references/pkgtool.md)
+- [LibOrbisPkg](https://github.com/maxton/LibOrbisPkg): Full PKG/PFS toolkit (library, tools, tests). [AI Summary](.claude/skills/related-projects-index/references/liborbispkg.md)
+- [LibOrbisPkg Wiki](https://github.com/maxton/LibOrbisPkg/wiki): Orientation wiki for LibOrbisPkg and PKG crypto notes. [AI Summary](.claude/skills/related-projects-index/references/liborbispkg-wiki.md)
+- [kstuff-lite](https://github.com/EchoStretch/kstuff-lite): PS5 payload bundle with mount automation and crypto helpers. [AI Summary](.claude/skills/related-projects-index/references/kstuff-lite.md)
+- [PSDevWiki - PFS](https://www.psdevwiki.com/ps4/PFS): Community reference for PFS on-disk structures. [AI Summary](.claude/skills/related-projects-index/references/psdevwiki-pfs.md)
+- [PSDevWiki - PKG files](https://www.psdevwiki.com/ps4/PKG_files): PKG container structure and validation notes. [AI Summary](.claude/skills/related-projects-index/references/psdevwiki-pkg-files.md)
+- [ShadPKG - HOWWORKS](https://github.com/seregonwar/ShadPKG/blob/main/docs/HOWWORKS.md): Step-by-step PKG->PFS implementation walkthrough. [AI Summary](.claude/skills/related-projects-index/references/shadpkg-howworks.md)
+- [Wololo: PS4 FPKG writeup by Flatz](https://wololo.net/ps4-fpkg-writeup-by-flatz/): Deep-dive on FPKG/FPKG toolchain and keys. [AI Summary](.claude/skills/related-projects-index/references/wololo-fpkg-flatz.md)
+- [goodle](https://github.com/oriath-net/goodle): Thin Go cgo wrapper for OodleLZ decompression. [AI Summary](.claude/skills/related-projects-index/references/goodle.md)
+- [TLOU PSARC Tool](https://github.com/amrshaheen61/TLOU_PSARC_Tool): Utility for reading/extracting Naughty Dog `.psarc` archives. [AI Summary](.claude/skills/related-projects-index/references/tlou-psarc-tool.md)
+- [PKG Passcode Finder](https://github.com/bobg-github/PS5PKGPasscodeFinder): Brute-force research UI for PS5 PKG passcodes. [AI Summary](.claude/skills/related-projects-index/references/pkg-passcode-finder.md)
+- [Oodle / Kraken decompression tools](https://github.com/lvlvllvlvllvlvl/oozextract): Open decoders and shims for Oodle codecs. [AI Summary](.claude/skills/related-projects-index/references/oodle-kraken-tools.md)
+- [LibProsperoPkg](https://github.com/SvenGDK/LibProsperoPKG): .NET library for building & reading PS5 packages and PFSC heuristics. [AI Summary](.claude/skills/related-projects-index/references/libprospero-pkg.md)

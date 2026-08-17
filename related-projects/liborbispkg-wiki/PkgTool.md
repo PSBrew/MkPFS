@@ -1,1 +1,0 @@
-PkgTool is a command line tool.

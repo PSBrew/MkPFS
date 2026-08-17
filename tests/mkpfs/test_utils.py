@@ -82,3 +82,66 @@ class TestUtilityFileHelpers(unittest.TestCase):
         truncated: BytesIO = BytesIO(b"abc")
         with self.assertRaises(ValueError):
             utils._read_exact(truncated, 0, 10)
+
+
+class TestIgnoredNames(unittest.TestCase):
+    """OS metadata filenames must be recognized for exclusion from packing/indexing."""
+
+    def test_macos_junk_is_ignored(self) -> None:
+        for name in (".DS_Store", "._payload.bin", ".Spotlight-V100", ".Trashes", ".fseventsd", "__MACOSX"):
+            self.assertTrue(utils.is_ignored_name(name), name)
+
+    def test_windows_junk_is_ignored_case_insensitively(self) -> None:
+        for name in (
+            "Thumbs.db",
+            "thumbs.db",
+            "desktop.ini",
+            "Desktop.ini",
+            "$RECYCLE.BIN",
+            "System Volume Information",
+        ):
+            self.assertTrue(utils.is_ignored_name(name), name)
+
+    def test_regular_names_are_kept(self) -> None:
+        for name in ("eboot.bin", "data.pkg", "sce_sys", "._notjunk_but_real"[2:], "ds_store.txt"):
+            self.assertFalse(utils.is_ignored_name(name), name)
+
+    def test_appledouble_prefix_only_matches_dot_underscore(self) -> None:
+        self.assertTrue(utils.is_ignored_name("._foo"))
+        self.assertFalse(utils.is_ignored_name("_foo"))
+        self.assertFalse(utils.is_ignored_name(".foo"))
+
+
+class TestTitleIdNaming(unittest.TestCase):
+    """Deriving image names from sce_sys/param.json titleId."""
+
+    def _src(self, title_id: str | None) -> Path:
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        root = Path(d.name)
+        if title_id is not None:
+            (root / "sce_sys").mkdir()
+            (root / "sce_sys" / "param.json").write_text(json.dumps({"titleId": title_id}), encoding="utf-8")
+        return root
+
+    def test_title_id_from_source_reads_param_json(self) -> None:
+        self.assertEqual(utils.title_id_from_source(self._src("PPSA25872")), "PPSA25872")
+
+    def test_title_id_absent_returns_none(self) -> None:
+        self.assertIsNone(utils.title_id_from_source(self._src(None)))
+
+    def test_title_id_bad_json_returns_none(self) -> None:
+        root = self._src("PPSA25872")
+        (root / "sce_sys" / "param.json").write_text("{not json", encoding="utf-8")
+        self.assertIsNone(utils.title_id_from_source(root))
+
+    def test_basename_prefers_title_id(self) -> None:
+        self.assertEqual(utils.default_image_basename(self._src("PPSA25872")), "PPSA25872")
+
+    def test_basename_falls_back_to_folder_name(self) -> None:
+        root = self._src(None)
+        # rename not feasible on the temp dir; folder name is the temp basename, just assert non-empty
+        self.assertTrue(utils.default_image_basename(root))
+
+    def test_basename_sanitizes_unsafe_characters(self) -> None:
+        self.assertEqual(utils.default_image_basename(self._src("PP/SA 25872")), "PP_SA_25872")

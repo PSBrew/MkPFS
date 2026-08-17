@@ -1,6 +1,6 @@
 [project]
 name = "mkpfs"
-version = "0.0.9"
+version = "1.0.0"
 description = "Create and Manage Unsigned PFS (Playstation File System) image files with file compression and checksum support."
 readme = "README.md"
 authors = [{ name = "PSBrew", email = "contact@psbrew.com" }]
@@ -18,6 +18,10 @@ classifiers = [
 ]
 dependencies = [
     "cryptography>=47.0.0",
+    "zlib-ng>=0.5.1",
+    "isal>=1.0.0; platform_machine == 'x86_64' or platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'arm64'",
+    "customtkinter>=5.2.0",
+    "Pillow>=9.0.0",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +34,7 @@ mkpfs = "mkpfs.cli:main"
 mkpfs-gui = "mkpfs.gui:main"
 
 [build-system]
-requires = ["hatchling<1.30"]
+requires = ["hatchling<1.32"]
 build-backend = "hatchling.build"
 
 [project.urls]
@@ -47,8 +51,10 @@ dev = [
     "pre-commit>=3.5.0",
     "pytest>=8.3.5",
     "pytest-cov>=5.0.0",
-    "ruff>=0.11.12",
+    "ruff>=0.16.0",
     "twine>=6.1.0",
+    "customtkinter>=5.2.0",
+    "Pillow>=9.0.0",
 ]
 
 [tool.pytest.ini_options]
@@ -117,31 +123,31 @@ select = [
     "W",   # pycodestyle warnings
 ]
 ignore = [
-    "ANN401", # Checks that function arguments are annotated with a more specific type than Any.
-    "B007",   # Unused loop variable
-    "B008",   # Function call in default argument
-    "B905",   # `zip()` without `strict=True`
-    "COM812", # Missing trailing comma
-    "COM819", # Trailing comma prohibited
+    "any-type", # Checks that function arguments are annotated with a more specific type than Any.
+    "unused-loop-control-variable",   # Unused loop variable
+    "function-call-in-default-argument",   # Function call in default argument
+    "zip-without-explicit-strict",   # `zip()` without `strict=True`
+    "missing-trailing-comma", # Missing trailing comma
+    "prohibited-trailing-comma", # Trailing comma prohibited
     "D1",     # Missing docstring in public module, class, function, or method
-    "D203",   # One blank line required before class docstring (ignored because D211 is prioritized in pydocstyle convention 'google')
-    "D205",   # 1 blank line required between summary line and description
-    "D212",   # Multi-line docstring summary should start at the first line
-    "D213",   # Multi-line docstring summary should start at the second line
-    "D400",   # First line of docstring should end with a period
-    "G004",   # Logging statement uses f-string
-    "ISC001", # Implicit string concatenation on a single line
-    "ISC002", # Implicit string concatenation on multiple lines
-    "PTH123", # `open()` should be replaced by `Path.open()`
-    "RUF002", # Checks for ambiguous Unicode characters in docstrings.
-    "RUF003", # Checks for ambiguous Unicode characters in comments.
-    "SIM108", # Use ternary operator instead of `if`-else`-block
+    "incorrect-blank-line-before-class",   # One blank line required before class docstring (ignored because D211 is prioritized in pydocstyle convention 'google')
+    "missing-blank-line-after-summary",   # 1 blank line required between summary line and description
+    "multi-line-summary-first-line",   # Multi-line docstring summary should start at the first line
+    "multi-line-summary-second-line",   # Multi-line docstring summary should start at the second line
+    "missing-trailing-period",   # First line of docstring should end with a period
+    "logging-f-string",   # Logging statement uses f-string
+    "single-line-implicit-string-concatenation", # Implicit string concatenation on a single line
+    "multi-line-implicit-string-concatenation", # Implicit string concatenation on multiple lines
+    "builtin-open", # `open()` should be replaced by `Path.open()`
+    "ambiguous-unicode-character-docstring", # Checks for ambiguous Unicode characters in docstrings.
+    "ambiguous-unicode-character-comment", # Checks for ambiguous Unicode characters in comments.
+    "if-else-block-instead-of-if-exp", # Use ternary operator instead of `if`-else`-block
 ]
 unfixable = [ ]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
-"mkpfs/logging.py" = ["RUF001"]
+"__init__.py" = ["unused-import"]
+"mkpfs/logging.py" = ["ambiguous-unicode-character-string"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

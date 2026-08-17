@@ -87,6 +87,8 @@ class CliTestCase(unittest.TestCase):
             verify=verify,
             verify_structure=True,
             skip_verification=False,
+            raw=True,  # exercise the direct PFS path; exFAT wrapping is the default
+            ampr_index=True,
         )
 
     def make_pack_file_args(
@@ -229,10 +231,10 @@ class TestCliArgumentHelpers(CliTestCase):
         choices: dict[str, argparse.ArgumentParser] = next(
             action.choices for action in parser._actions if isinstance(action, argparse._SubParsersAction)
         )
-        self.assertEqual(set(choices), {"pack", "verify", "inspect", "tree", "unpack"})
+        self.assertEqual(set(choices), {"pack", "verify", "batch", "inspect", "tree", "unpack"})
 
-    def test_pack_parser_uses_default_compression_level_of_nine(self) -> None:
-        """The pack parser should expose 9 as the default compression level."""
+    def test_pack_parser_uses_default_compression_level_of_seven(self) -> None:
+        """The pack parser should expose 7 as the default compression level."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
             action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
@@ -244,7 +246,7 @@ class TestCliArgumentHelpers(CliTestCase):
         compression_action = next(
             action for action in folder_parser._actions if getattr(action, "dest", "") == "compression_level"
         )
-        self.assertEqual(compression_action.default, 9)
+        self.assertEqual(compression_action.default, 7)
 
     def test_pack_parser_uses_zero_as_default_threshold_gain(self) -> None:
         """The pack parser should expose 0 as the default threshold gain."""
@@ -282,7 +284,7 @@ class TestCliArgumentHelpers(CliTestCase):
         parsed_args: argparse.Namespace = parser.parse_args(["pack", "file", "src.bin", "out.ffpfsc"])
         self.assertEqual(parsed_args.inode_bits, 32)
 
-    def test_pack_parser_uses_ps4_as_default_version(self) -> None:
+    def test_pack_parser_uses_ps5_as_default_version(self) -> None:
         """The pack parser should expose PS5 as the default pack profile version."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
         pack_parser: argparse.ArgumentParser = next(
@@ -754,6 +756,66 @@ class TestCliOutputFormatting(CliTestCase):
         output_text: str = stdout_buffer.getvalue()
         self.assertIn(cli.get_output_title(), output_text)
         self.assertIn("Extraction complete:", output_text)
+
+    def test_unpack_passes_progress_reporter_to_extraction(self) -> None:
+        """The unpack command drives a progress reporter through extraction."""
+        extraction_result: PFSExtractionResult = PFSExtractionResult(
+            image=Path("img.ffpfs"),
+            output_path=Path("out"),
+        )
+        with (
+            patch.object(cli, "extract_pfs_image", return_value=extraction_result) as mocked_extract,
+            redirect_stdout(StringIO()),
+        ):
+            exit_code: int = cli.cli_mkpfs_extract_run(
+                SimpleNamespace(
+                    image_file="img.ffpfs", output_dir="out", overwrite=True, ekpfs_key=None, new_crypt=False
+                )
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertIsNotNone(mocked_extract.call_args.kwargs["progress"])
+
+    def test_unpack_only_requires_deep(self) -> None:
+        """`--only` without `--deep` is rejected before any extraction runs."""
+        with patch.object(cli, "extract_pfs_image") as mocked_extract, redirect_stdout(StringIO()):
+            exit_code: int = cli.cli_mkpfs_extract_run(
+                SimpleNamespace(
+                    image_file="img.ffpfsc",
+                    output_dir="out",
+                    overwrite=True,
+                    ekpfs_key=None,
+                    new_crypt=False,
+                    deep=False,
+                    only=["sce_sys"],
+                )
+            )
+        self.assertEqual(exit_code, 2)
+        mocked_extract.assert_not_called()
+
+    def test_unpack_passes_selectors_with_deep(self) -> None:
+        """`--only` paths are forwarded to extraction when `--deep` is set."""
+        extraction_result: PFSExtractionResult = PFSExtractionResult(
+            image=Path("img.ffpfsc"),
+            output_path=Path("out"),
+        )
+        with (
+            patch.object(cli, "extract_pfs_image", return_value=extraction_result) as mocked_extract,
+            redirect_stdout(StringIO()),
+        ):
+            exit_code: int = cli.cli_mkpfs_extract_run(
+                SimpleNamespace(
+                    image_file="img.ffpfsc",
+                    output_dir="out",
+                    overwrite=True,
+                    ekpfs_key=None,
+                    new_crypt=False,
+                    deep=True,
+                    only=["sce_sys", "eboot.bin"],
+                )
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(mocked_extract.call_args.kwargs["selectors"], ["sce_sys", "eboot.bin"])
+        self.assertTrue(mocked_extract.call_args.kwargs["deep"])
 
 
 class TestCliCreateRun(CliTestCase):
@@ -1571,6 +1633,8 @@ class TestCliCreateRun(CliTestCase):
 
         self.assertFalse(mocked_check.call_args.kwargs["require_game_files"])
 
+    def test_stage_single_file_source_root_falls_back_to_copyfile_when_links_unavailable(self) -> None:
+        """Single-file staging should copy when hard links and symlinks are unavailable."""
         tmp_path: Path = self.make_temp_path()
         source_file: Path = tmp_path / "sample.bin"
         source_file.write_bytes(b"payload")
@@ -2314,8 +2378,6 @@ class TestRunImageCheck(CliTestCase):
         mocked_hashes.assert_called_once()
         mocked_match.assert_called_once()
 
-    """Tests for the spool-free streaming flag on the file pack path."""
-
     def test_pack_file_stream_auto_block_size_defaults_min_compress_size_to_65536(self) -> None:
         """Streaming single-file mode should map min_compress_size=0 to the auto block-size value."""
         tmp_path: Path = self.make_temp_path()
@@ -2575,3 +2637,352 @@ class TestCliTreeStructureOnly(CliTestCase):
         self.assertEqual(rc, 0)
         mock_verify.assert_not_called()
         self.assertIn("blob.exfat", buffer.getvalue())
+
+
+class TestCliAmprIndex(CliTestCase):
+    """Folder packing generates ampr_emu.index when the emulation marker is present."""
+
+    def _make_emu_source(self, root: Path) -> Path:
+        source: Path = root / "game"
+        (source / "fakelib").mkdir(parents=True)
+        (source / "fakelib" / "libSceAmpr.sprx").write_bytes(b"\x00" * 16)
+        (source / "data.bin").write_bytes(b"PAYLOAD" * 1000)
+        return source
+
+    def _pack_unpack(self, source: Path, out: Path, dest: Path, extra: list[str]) -> int:
+        with (
+            patch.object(cli, "prompt_overwrite", return_value=True),
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc: int = cli_mkpfs_main(
+                [
+                    "pack",
+                    "folder",
+                    str(source),
+                    str(out),
+                    "--raw",  # direct PFS so the index is a top-level entry for plain unpack
+                    "--no-compress",
+                    "--no-adjust-output-file-extension",
+                    *extra,
+                ]
+            )
+            if rc == 0:
+                cli_mkpfs_main(["unpack", str(out), str(dest)])
+        return rc
+
+    def test_pack_folder_generates_ampr_index_into_image(self) -> None:
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        rc: int = self._pack_unpack(source, out, dest, extra=[])
+        self.assertEqual(rc, 0)
+        # Written into the source tree...
+        self.assertTrue((source / "ampr_emu.index").exists())
+        # ...and therefore present inside the unpacked image, with the right magic.
+        extracted: Path = dest / "ampr_emu.index"
+        self.assertTrue(extracted.exists())
+        self.assertEqual(extracted.read_bytes()[:8], b"AMPRIDX3")
+
+    def test_no_ampr_index_flag_suppresses_generation(self) -> None:
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        rc: int = self._pack_unpack(source, out, dest, extra=["--no-ampr-index"])
+        self.assertEqual(rc, 0)
+        self.assertFalse((source / "ampr_emu.index").exists())
+        self.assertFalse((dest / "ampr_emu.index").exists())
+
+    def test_skip_regen_if_exists_keeps_valid_index(self) -> None:
+        """--ampr-skip-regen-if-exists does not regenerate a valid existing index."""
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        # Pre-generate the index so it already exists and is valid.
+        from mkpfs.ampr import build_ampr_index
+
+        pre_idx: Path = source / "ampr_emu.index"
+        build_ampr_index(source, pre_idx)
+        pre_mtime: int = pre_idx.stat().st_mtime_ns
+        rc: int = self._pack_unpack(source, out, dest, extra=["--ampr-skip-regen-if-exists"])
+        self.assertEqual(rc, 0)
+        # Mtime unchanged means the index was not regenerated.
+        self.assertEqual(pre_idx.stat().st_mtime_ns, pre_mtime)
+
+    def test_skip_regen_does_not_conflict_with_no_ampr_index(self) -> None:
+        """--no-ampr-index overrides --ampr-skip-regen-if-exists."""
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        rc: int = self._pack_unpack(source, out, dest, extra=["--no-ampr-index", "--ampr-skip-regen-if-exists"])
+        self.assertEqual(rc, 0)
+        self.assertFalse((source / "ampr_emu.index").exists())
+
+    def test_force_regen_overrides_skip_regen(self) -> None:
+        """--ampr-force-regen paired with --ampr-skip-regen-if-exists rebuilds."""
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self._make_emu_source(tmp_path)
+        out: Path = tmp_path / "game.ffpfs"
+        dest: Path = tmp_path / "out"
+        from mkpfs.ampr import build_ampr_index
+
+        pre_idx: Path = source / "ampr_emu.index"
+        build_ampr_index(source, pre_idx)
+        pre_bytes: bytes = pre_idx.read_bytes()
+        # Change file content (not count) so the validator still passes.
+        # Without --force-regen, --skip-regen keeps the old index since
+        # row count matches.  With --force-regen, the index is rebuilt
+        # and content differs because the mtime changed.
+        (source / "data.bin").write_bytes(b"PAYLOAD" * 2000)
+        rc: int = self._pack_unpack(
+            source,
+            out,
+            dest,
+            extra=["--ampr-skip-regen-if-exists", "--ampr-force-regen"],
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(pre_idx.exists())
+        self.assertNotEqual(pre_idx.read_bytes(), pre_bytes)
+
+
+class TestCliPackExfat(CliTestCase):
+    """`pack exfat` builds a raw exFAT image from a folder, cross-platform."""
+
+    def _game(self, root: Path) -> Path:
+        src = root / "game"
+        (src / "sce_sys").mkdir(parents=True)
+        (src / "sce_sys" / "param.json").write_text('{"titleId": "PPSA25872"}', encoding="utf-8")
+        (src / "eboot.bin").write_bytes(b"BOOT" * 1000)
+        return src
+
+    def test_pack_exfat_auto_names_from_title_id(self) -> None:
+        from mkpfs.exfat import ExfatReader
+
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out_dir = tmp / "out"
+        out_dir.mkdir()
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["pack", "exfat", str(src), str(out_dir)])
+        self.assertEqual(rc, 0)
+        produced = out_dir / "PPSA25872.exfat"
+        self.assertTrue(produced.is_file())
+        with produced.open("rb") as fh:
+            files = {f.rel_path for f in ExfatReader(fh).iter_files()}
+        self.assertEqual(files, {"eboot.bin", "sce_sys/param.json"})
+
+    def test_pack_exfat_explicit_output_path(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "custom.exfat"
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["pack", "exfat", str(src), str(out)])
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.is_file())
+
+    def test_pack_exfat_refuses_existing_without_overwrite(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "x.exfat"
+        out.write_bytes(b"existing")
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["pack", "exfat", str(src), str(out)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out.read_bytes(), b"existing")
+
+    def test_pack_exfat_rejects_bad_cluster_size(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "x.exfat"
+        with self.assertRaises(BuildError):
+            cli_mkpfs_main(["pack", "exfat", str(src), str(out), "--cluster-size", "777"])
+
+
+class TestCliVerifyUnpackExfat(CliTestCase):
+    """`verify` and `unpack` support raw .exfat images via helpers."""
+
+    def _fixture_exfat_path(self, tmp: Path) -> Path:
+        import gzip
+
+        fixture: Path = Path(__file__).parent / "fixtures" / "tiny.exfat.gz"
+        exfat_path = tmp / "tiny.exfat"
+        exfat_path.write_bytes(gzip.decompress(fixture.read_bytes()))
+        return exfat_path
+
+    def test_verify_with_format_exfat_uses_exfat_helper(self) -> None:
+        tmp = self.make_temp_path()
+        image = self._fixture_exfat_path(tmp)
+        source = tmp / "src"
+        source.mkdir()
+        with (
+            patch.object(cli, "verify_exfat_image", return_value=([], [])) as mocked_verify,
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc = cli_mkpfs_main(
+                [
+                    "verify",
+                    str(image),
+                    "--source-dir",
+                    str(source),
+                    "--format",
+                    "exfat",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        mocked_verify.assert_called_once()
+
+    def test_unpack_with_format_exfat_uses_exfat_helper(self) -> None:
+        from mkpfs.pfs import PFSExtractionResult
+
+        tmp = self.make_temp_path()
+        image = self._fixture_exfat_path(tmp)
+        dest = tmp / "out"
+        result = PFSExtractionResult(image=image, output_path=dest, bytes_written=0)
+        with (
+            patch.object(cli, "extract_exfat_image", return_value=result) as mocked_extract,
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc = cli_mkpfs_main(
+                [
+                    "unpack",
+                    str(image),
+                    str(dest),
+                    "--format",
+                    "exfat",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        mocked_extract.assert_called_once()
+
+    def test_tree_with_format_exfat_uses_exfat_tree(self) -> None:
+        tmp = self.make_temp_path()
+        image = self._fixture_exfat_path(tmp)
+        buffer = StringIO()
+        with redirect_stdout(buffer), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["tree", str(image), "--format", "exfat"])
+        self.assertEqual(rc, 0)
+        self.assertIn("hello.txt", buffer.getvalue())
+
+
+class TestCliPackFolderExfat(CliTestCase):
+    """`pack folder` defaults to fusing folder -> exFAT -> .ffpfsc with no temp image."""
+
+    def _game(self, root: Path) -> Path:
+        src = root / "game"
+        (src / "sce_sys").mkdir(parents=True)
+        (src / "sce_sys" / "param.json").write_text('{"titleId": "PPSA25872"}', encoding="utf-8")
+        (src / "eboot.bin").write_bytes(b"BOOT" * 5000)
+        (src / "Media").mkdir()
+        (src / "Media" / "data.bin").write_bytes(bytes(range(256)) * 2000)
+        return src
+
+    def test_pack_folder_exfat_deep_round_trips(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "game.ffpfsc"
+        with (
+            patch.object(cli, "prompt_overwrite", return_value=True),
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc = cli_mkpfs_main(["pack", "folder", str(src), str(out), "--no-adjust-output-file-extension"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.exists())
+        # no temporary .exfat was produced anywhere under the temp tree
+        self.assertEqual([p for p in tmp.rglob("*.exfat")], [])
+        # deep-unpack reproduces the source tree
+        dest = tmp / "deep"
+        from mkpfs.pfs import extract_pfs_image
+
+        result = extract_pfs_image(image=out, output_path=dest, deep=True)
+        self.assertEqual(result.errors, [])
+        self.assertEqual((dest / "eboot.bin").read_bytes(), (src / "eboot.bin").read_bytes())
+        self.assertEqual((dest / "Media" / "data.bin").read_bytes(), (src / "Media" / "data.bin").read_bytes())
+        self.assertEqual((dest / "sce_sys" / "param.json").read_bytes(), (src / "sce_sys" / "param.json").read_bytes())
+
+    def test_pack_folder_default_rejects_signed(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "game.ffpfsc"
+        with patch.object(cli, "prompt_overwrite", return_value=True), self.assertRaises(BuildError):
+            cli_mkpfs_main(["pack", "folder", str(src), str(out), "--signed", "--no-adjust-output-file-extension"])
+
+    def test_pack_folder_raw_uses_direct_pfs(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "game.ffpfs"
+        with (
+            patch.object(cli, "build_pfs", return_value=self.make_build_stats(tmp)) as mocked_build,
+            patch.object(cli, "build_pfs_stream_from_exfat", side_effect=AssertionError("exFAT path should not run")),
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            rc = cli_mkpfs_main(
+                ["pack", "folder", str(src), str(out), "--raw", "--dry-run", "--no-adjust-output-file-extension"]
+            )
+        self.assertEqual(rc, 0)
+        mocked_build.assert_called_once()
+
+    def test_pack_folder_default_dry_run_reports_without_writing(self) -> None:
+        tmp = self.make_temp_path()
+        src = self._game(tmp)
+        out = tmp / "game.ffpfsc"
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(
+                ["pack", "folder", str(src), str(out), "--dry-run", "--no-adjust-output-file-extension"]
+            )
+        self.assertEqual(rc, 0)
+        self.assertFalse(out.exists())
+        self.assertIn("Dry run", buf.getvalue())
+
+
+class TestCliTreeDeep(CliTestCase):
+    """`tree --deep` lists files inside a wrapped exFAT."""
+
+    def _wrapped(self, tmp: Path) -> Path:
+        from mkpfs import consts
+        from mkpfs.pfs import build_pfs_stream_from_exfat
+
+        src = tmp / "game"
+        (src / "sce_sys").mkdir(parents=True)
+        (src / "sce_sys" / "param.json").write_text('{"titleId": "PPSA25872"}', encoding="utf-8")
+        (src / "eboot.bin").write_bytes(b"BOOT" * 100)
+        out = tmp / "game.ffpfsc"
+        build_pfs_stream_from_exfat(
+            source_root=src,
+            output_path=out,
+            block_size=65536,
+            pfs_version=consts.PFS_VERSION_PS5,
+            case_insensitive=True,
+            zlib_level=6,
+            threshold_gain=0,
+        )
+        return out
+
+    def test_tree_deep_shows_inner_files(self) -> None:
+        tmp = self.make_temp_path()
+        out = self._wrapped(tmp)
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["tree", str(out), "--deep"])
+        self.assertEqual(rc, 0)
+        text = buf.getvalue()
+        self.assertIn("eboot.bin", text)
+        self.assertIn("sce_sys", text)
+        self.assertIn("param.json", text)
+
+    def test_tree_without_deep_shows_inner_image_name(self) -> None:
+        tmp = self.make_temp_path()
+        out = self._wrapped(tmp)
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["tree", str(out)])
+        self.assertEqual(rc, 0)
+        self.assertIn("PPSA25872.exfat", buf.getvalue())

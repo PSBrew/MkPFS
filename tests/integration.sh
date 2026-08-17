@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 
+# Integration behaviors (strategy = "all") for inputs in SOURCE_DIR:
+# | Input               | Strategies run | Description                          | Final artifact                  |
+# |---------------------|---------------:|--------------------------------------|---------------------------------|
+# | BREW/ (directory)   | single-pass    | Pack folder --raw (raw image)        | <prefix>-BREW.raw.ffpfs         |
+# | BREW/ (directory)   | two-pass       | Stage pfs_image.dat, then pack file  | <prefix>-BREW.raw.dat.ffpfsc    |
+# | BREW/ (directory)   | ffpfsc         | exFAT-wrapped + compressed           | <prefix>-BREW.raw.exfat.ffpfsc  |
+# | BREW/ (directory)   | exfat          | Raw exFAT image (not compressed)     | <prefix>-BREW.raw.exfat         |
+# | BREW.exfat (file)   | files          | Pack input file as file artifact     | <prefix>-BREW.exfat.ffpfc       |
+# | BREW.ffpkg (file)   | files          | Pack input file as file artifact     | <prefix>-BREW.ffpkg.ffpfc       |
+#
+# Notes:
+# - <prefix> is the build prefix (git short commit id or "nogit").
+# - sanitize_name only replaces spaces; file base names (including dots) are preserved.
+
 # Re-exec with bash when launched from another shell (for example, zsh in IDE run configs).
 if [[ -z "${BASH_VERSION:-}" ]]; then
   exec /usr/bin/env bash "$0" "$@"
@@ -24,20 +38,22 @@ Usage:
   ./tests/integration.sh "strategy" "source_dir" "target_dir" ["ftp://1.1.1.1:1234/folder/name" | "-"] [--force]
 
 Strategies:
-  all          Process everything
+  all          Process everything (folders, files, exFAT, ffpfsc, tree)
   files        Process only .exfat and .ffpkg files
-  folders      Process only folders, using both folder strategies
-  single-pass  Process only folders with pack folder -> .raw.ffpfs
-  two-pass     Process only folders with inner pfs_image.dat -> .raw.ffpfsc
+  folders      Process only folders with single-pass and two-pass flows
+  single-pass  Pack folder --raw -> <name>.raw.ffpfs
+  two-pass     Two-pass staging via pfs_image.dat -> <name>.raw.fat
+  ffpfsc       Default pack folder (exFAT-wrapped + compressed) -> <name>.raw.exfat.ffpfcs
+  exfat        Pack folder raw exFAT -> <name>.exfat
+  tree          Show --deep tree of produced images
   help         Show this help
 
 Examples:
   ./tests/integration.sh all /games ./tmp/integration-output
   ./tests/integration.sh files /games ./tmp/integration-output
   ./tests/integration.sh single-pass /games ./tmp/integration-output
-  ./tests/integration.sh all /games ./tmp/integration-output ftp://1.1.1.1:1234/folder/name
-  ./tests/integration.sh all /games ./tmp/integration-output --force
-  ./tests/integration.sh all /games ./tmp/integration-output - --force
+  ./tests/integration.sh ffpfsc /games ./tmp/integration-output
+  ./tests/integration.sh exfat /games ./tmp/integration-output
 
 Notes:
   - The script uses "uv run --frozen mkpfs" from the repo one level above this script.
@@ -116,7 +132,7 @@ abs_path() {
 
 is_valid_strategy() {
   case "$1" in
-    all | files | folders | single-pass | two-pass) return 0 ;;
+    all | files | folders | single-pass | two-pass | ffpfsc | exfat | tree) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -258,7 +274,7 @@ process_artifact() {
   if [[ "${pack_mode}" == "file" ]]; then
     run_mkpfs pack file "${source_path}" "${artifact_path}"
   elif [[ "${pack_mode}" == "single-pass" ]]; then
-    run_mkpfs pack folder "${source_path}" "${artifact_path}"
+    run_mkpfs pack folder --raw "${source_path}" "${artifact_path}"
   elif [[ "${pack_mode}" == "two-pass" ]]; then
     # Two-pass builds stage an uncompressed image as an exact pfs_image.dat file.
     [[ -n "${temp_dat_path}" ]] || die "Missing temp_dat_path for two-pass build"
@@ -271,7 +287,8 @@ process_artifact() {
 
     log "Two-pass staging file: ${pfs_file}"
 
-    run_mkpfs pack folder --no-compress --no-adjust-output-file-extension "${source_path}" "${pfs_file}"
+    # --raw produces flat FAT (not exFAT-wrapped) for the intermediate image.
+    run_mkpfs pack folder --raw --no-compress --no-adjust-output-file-extension "${source_path}" "${pfs_file}"
 
     if [[ ! -f "${pfs_file}" ]]; then
       die "Expected ${pfs_file} to exist after first pass"
@@ -322,17 +339,38 @@ process_file_input() {
   local name=""
   local game_name=""
   local artifact_path=""
+  local lower_name=""
 
   name="$(basename "${source_file}")"
-  game_name="$(sanitize_name "${name%.*}")"
+  game_name="$(sanitize_name "$name")"
+  lower_name="$(printf '%s' "${name}" | tr '[:upper:]' '[:lower:]')"
 
-  artifact_path="${TARGET_DIR}/${prefix}-${game_name}.ffpfsc"
+  # Use .exfat.ffpfsc for .exfat inputs (mkpfs produces .ffpfsc in streaming/file mode).
+  if [[ "${lower_name}" == *.exfat ]]; then
+    # Avoid duplicating the .exfat extension if game_name already ends with it.
+    local game_name_lower
+    game_name_lower="$(printf '%s' "${game_name}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "${game_name_lower}" == *.exfat ]]; then
+      artifact_path="${TARGET_DIR}/${prefix}-${game_name}.ffpfsc"
+    else
+      artifact_path="${TARGET_DIR}/${prefix}-${game_name}.exfat.ffpfsc"
+    fi
+  else
+    artifact_path="${TARGET_DIR}/${prefix}-${game_name}.ffpfsc"
+  fi
+
+  log "Artifact path: ${artifact_path}"
 
   process_artifact \
     "${source_file}" \
     "file" \
     "${artifact_path}" \
     "file"
+
+  # Ensure artifact was produced
+  if [[ ! -f "${artifact_path}" ]]; then
+    die "Expected artifact not found after pack: ${artifact_path}"
+  fi
 }
 
 process_folder_single_pass() {
@@ -362,7 +400,9 @@ process_folder_two_pass() {
 
   game_name="$(sanitize_name "$(basename "${source_dir}")")"
 
-  artifact_path="${TARGET_DIR}/${prefix}-${game_name}.raw.ffpfsc"
+  # two-pass produces .raw.ffpfsc; ffpfsc produces .exfats.ffpfsc — different paths now.
+  # Use a strategy-aware suffix to avoid collisions when "all" runs both.
+  artifact_path="${TARGET_DIR}/${prefix}-${game_name}.raw.dat.ffpfsc"
 
   if [[ -f "${artifact_path}" ]]; then
     if [[ "${FORCE_REBUILD}" == "true" ]]; then
@@ -385,6 +425,82 @@ process_folder_two_pass() {
     "${artifact_path}" \
     "two-pass" \
     "${temp_dat_path}"
+}
+
+process_folder_ffpfsc() {
+  local source_dir="$1"
+  local prefix="$2"
+  local game_name=""
+  local artifact_path=""
+
+  # ffpfsc strategy: pack folder default (exFAT-wrapped, compressed) -> .ffpfsc.
+  # Uses a different suffix from two-pass to avoid collision with raw.fat build.
+  game_name="$(sanitize_name "$(basename "${source_dir}")")"
+  artifact_path="${TARGET_DIR}/${prefix}-${game_name}.raw.exfat.ffpfsc"
+
+  if [[ -f "${artifact_path}" ]]; then
+    if [[ "${FORCE_REBUILD}" == "true" ]]; then
+      log "--force enabled, replacing existing artifact: $(basename "${artifact_path}")"
+      rm -f "${artifact_path}"
+    else
+      log "Skipping existing artifact: $(basename "${artifact_path}")"
+      return 0
+    fi
+  fi
+
+  log "Building ffpfsc artifact: $(basename "${artifact_path}")"
+  run_mkpfs pack folder "${source_dir}" "${artifact_path}"
+
+  # Verify and tree the final artifact.
+  log "Verifying $(basename "${artifact_path}")"
+
+  # Extract inner contents using mkpfs unpack --deep and verify against the source dir.
+  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/mkpfs-ffpfsc-unpack.${prefix}-${game_name}.XXXXXX")"
+  register_temp_dir "${temp_dir}"
+
+  log "Extracting inner image to ${temp_dir}"
+  # Ensure temp dir is empty to avoid unpack refusing to overwrite existing path.
+  rm -rf -- "${temp_dir}" && mkdir -p -- "${temp_dir}"
+  uv run --frozen mkpfs unpack "${artifact_path}" "${temp_dir}" --deep --overwrite
+
+  log "Tree $(basename "${artifact_path}")"
+  run_mkpfs tree "${artifact_path}"
+
+  upload_file "${artifact_path}"
+}
+
+process_folder_exfat() {
+  local source_dir="$1"
+  local prefix="$2"
+  local game_name=""
+  local artifact_path=""
+
+  # exFAT strategy: raw exFAT image, not wrapped or compressed.
+  game_name="$(sanitize_name "$(basename "${source_dir}")")"
+  # exFAT artifact should be named as raw exfat image
+  artifact_path="${TARGET_DIR}/${prefix}-${game_name}.raw.exfat"
+
+  if [[ -f "${artifact_path}" ]]; then
+    if [[ "${FORCE_REBUILD}" == "true" ]]; then
+      log "--force enabled, replacing existing artifact: $(basename "${artifact_path}")"
+      rm -f "${artifact_path}"
+    else
+      log "Skipping existing artifact: $(basename "${artifact_path}")"
+      return 0
+    fi
+  fi
+
+  log "Building exFAT image: $(basename "${artifact_path}")"
+  run_mkpfs pack exfat "${source_dir}" "${artifact_path}"
+
+  # Verify the exFAT image directly using the CLI's exFAT-aware verify mode.
+  log "Verifying $(basename "${artifact_path}") with exFAT-aware verify against source dir"
+  run_mkpfs verify "${artifact_path}" --source-dir "${source_dir}" --format exfat
+
+  log "Tree $(basename "${artifact_path}")"
+  run_mkpfs tree "${artifact_path}" --format exfat
+
+  upload_file "${artifact_path}"
 }
 
 main() {
@@ -436,36 +552,100 @@ main() {
     log "Force rebuild enabled"
   fi
 
+  # Collect produced image paths for tree --deep display.
+  local produced_images=()
+
   while IFS= read -r -d '' entry; do
     processed=1
 
+    local base_name
+    base_name="${entry##*/}"
+
+    # Skip hidden dotfiles/directories and common OS metadata junk.
+    local base_lower
+    base_lower="$(printf '%s' "${base_name}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "${base_name}" == .* ]] || [[ "${base_lower}" == ".ds_store" || "${base_lower}" == "thumbs.db" || "${base_lower}" == "desktop.ini" ]]; then
+      log "Skipping hidden or OS metadata entry: ${base_name}"
+      continue
+    fi
+
     if [[ -f "${entry}" ]]; then
-      lower_name="$(printf '%s' "${entry##*/}" | tr '[:upper:]' '[:lower:]')"
+      lower_name="$(printf '%s' "${base_name}" | tr '[:upper:]' '[:lower:]')"
       if [[ "${lower_name}" == *.exfat || "${lower_name}" == *.ffpkg ]]; then
-        log_item_start "$(basename "${entry}")" "file"
+        log_item_start "${base_name}" "file"
         if should_run_files; then
           process_file_input "${entry}" "${prefix}"
         else
-          log "Skipping file input: $(basename "${entry}")"
+          log "Skipping file input: ${base_name}"
         fi
       else
-        log "Skipping unsupported file: $(basename "${entry}")"
+        log "Skipping unsupported file: ${base_name}"
       fi
     elif [[ -d "${entry}" ]]; then
-      log_item_start "$(basename "${entry}")" "folder"
+      log_item_start "${base_name}" "folder"
+
+      # Single-pass (old-style flat FAT via --raw)
       if should_run_single_pass; then
         process_folder_single_pass "${entry}" "${prefix}"
       else
         log "Skipping single-pass folder build: $(basename "${entry}")"
       fi
 
+      # Two-pass (two-stage: staging -> re-pack) — always produces .ffpfsc.
       if should_run_two_pass; then
         process_folder_two_pass "${entry}" "${prefix}"
       else
         log "Skipping two-pass folder build: $(basename "${entry}")"
       fi
+
+      # ffpfsc (default pack folder, exFAT-wrapped + compressed) — always produces .ffpfsc.
+      if [[ "${STRATEGY}" == "ffpfsc" || "${STRATEGY}" == "all" ]]; then
+        process_folder_ffpfsc "${entry}" "${prefix}"
+      fi
+
+      # ExFAT raw image (not wrapped, not compressed).
+      if [[ "${STRATEGY}" == "exfat" || "${STRATEGY}" == "all" ]]; then
+        process_folder_exfat "${entry}" "${prefix}"
+      fi
+
+      # Track produced images for tree display.
+      local img_base
+      local img_path=""
+
+      # two-pass produces .raw.ffpfsc; ffpfsc produces .exfats.ffpfsc. single-pass produces .exfat.ffpfs.
+      img_base="$(sanitize_name "$(basename "${entry}")")"
+      img_path="${TARGET_DIR}/${prefix}-${img_base}.raw.ffpfs"
+      if [[ -f "${img_path}" ]]; then
+        produced_images+=("${img_path}")
+      fi
+
+# single-pass intermediate (two-pass staging)
+      img_path="${TARGET_DIR}/${prefix}-${img_base}.raw.dat.ffpfsc"
+      if [[ -f "${img_path}" ]]; then
+        produced_images+=("${img_path}")
+      fi
+
+      # ffpfsc produces .raw.exfat.ffpfsc.
+      img_path="${TARGET_DIR}/${prefix}-${img_base}.raw.exfat.ffpfsc"
+      if [[ -f "${img_path}" ]]; then
+        produced_images+=("${img_path}")
+      fi
+
+      # exFAT strategy produces .raw.exfat images.
+      img_path="${TARGET_DIR}/${prefix}-${img_base}.raw.exfat"
+      if [[ -f "${img_path}" ]]; then
+        produced_images+=("${img_path}")
+      fi
     fi
   done < <(find "${SOURCE_DIR}" -mindepth 1 -maxdepth 1 -print0)
+
+  # Run tree --deep on all produced images (when strategy includes tree).
+  if [[ "${STRATEGY}" == "tree" || "${STRATEGY}" == "all" ]]; then
+    for img in "${produced_images[@]}"; do
+      log "Tree --deep $(basename "${img}")"
+      run_mkpfs tree --deep "${img}"
+    done
+  fi
 
   [[ "${processed}" == "1" ]] || die "No inputs found in ${SOURCE_DIR}"
 

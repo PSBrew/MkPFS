@@ -1,19 +1,28 @@
 name: GitLeaks
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 on:
   pull_request:
   push:
+    branches:
+      - main
+      - master
   workflow_dispatch:
   schedule:
     - cron: "0 4 * * *" # run once a day at 4 AM
+permissions:
+  contents: read
 jobs:
   scan:
     name: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # Only required for Organizations, not personal accounts.
+          # Falls back to a dummy string if the secret is blank (fork PRs)
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE || 'fork-bypass-placeholder' }} # Only required for Organizations, not personal accounts.

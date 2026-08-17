@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import itertools
 import json
 import multiprocessing as mp
 import os
@@ -18,23 +19,48 @@ import struct
 import subprocess
 import time
 import uuid
-import zlib
+import zlib as _zlib
+from collections import deque
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
+from enum import StrEnum
+from multiprocessing.pool import AsyncResult
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+from . import compression as comp
 from . import consts
+from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
+from .exfat_writer import iter_exfat_image
+from .gather import gather_files_scandir
 from .logging import info, warning
 from .pbar import Progress
-from .utils import _read_exact, ceil_div, human_readable_size, read_param_json, resolve_temp_root
+from .utils import (
+    _read_exact,
+    ceil_div,
+    default_image_basename,
+    human_readable_size,
+    is_ignored_name,
+    read_param_json,
+    resolve_temp_root,
+)
 
+# Keep a legacy module alias for tests/callers that expect pfs.zlib
+zlib = _zlib
+DEFAULT_MKPFS_PFSC_WINDOW_FACTOR: int = 8
 PFSC_PROGRESS_REPORT_BYTES: int = consts.PFSC_LOGICAL_BLOCK_SIZE * 16
 PFSC_SINGLE_FILE_PARALLEL_MIN_SIZE: int = 256 * 1024 * 1024
-AUTO_FIT_BLOCK_SIZE_CANDIDATES: tuple[int, ...] = (0x1000, 0x2000, 0x4000, 0x8000, 0x10000)
+AUTO_FIT_BLOCK_SIZE_CANDIDATES: tuple[int, ...] = (
+    0x1000,
+    0x2000,
+    0x4000,
+    0x8000,
+    0x10000,
+)
 _NON_LOCAL_VOLUME_FS_KEYWORDS: tuple[str, ...] = (
     "afp",
     "cifs",
@@ -591,6 +617,14 @@ class SignatureTarget:
 
 class BuildError(RuntimeError):
     pass
+
+
+class ImageFormat(StrEnum):
+    """Supported on-disk image formats for verify and unpack workflows."""
+
+    AUTO = "auto"
+    PFS = "pfs"
+    EXFAT = "exfat"
 
 
 @dataclass
@@ -1182,6 +1216,9 @@ def _init_pfsc_block_worker_for_pool(source_path: Path) -> None:
         source_path: Source file path shared by all block jobs in the pool.
     """
     _init_pfsc_block_worker(source_path=source_path)
+    # Ensure compression backend in child process matches the parent selection.
+    with suppress(Exception):
+        comp.init_worker(comp.get_backend_name())
 
 
 def _read_pfsc_block_from_worker_handle(*, block_offset: int, logical_block_size: int) -> bytes:
@@ -1243,11 +1280,13 @@ def _compress_pfsc_block_lengths_worker(args: tuple[int, int, int]) -> tuple[int
         logical_block_size=logical_block_size,
     )
     padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-    compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+    compressed_chunk: bytes = comp.compress_block(padded_chunk, level=zlib_level)
     return len(raw_chunk), len(compressed_chunk)
 
 
-def _compress_pfsc_block_payload_worker(args: tuple[int, int, int]) -> tuple[bytes, bytes]:
+def _compress_pfsc_block_payload_worker(
+    args: tuple[int, int, int],
+) -> tuple[bytes, bytes]:
     """Compress one logical block and return raw/compressed payload bytes.
 
     Args:
@@ -1265,7 +1304,7 @@ def _compress_pfsc_block_payload_worker(args: tuple[int, int, int]) -> tuple[byt
         logical_block_size=logical_block_size,
     )
     padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-    compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+    compressed_chunk: bytes = comp.compress_block(padded_chunk, level=zlib_level)
     return raw_chunk, compressed_chunk
 
 
@@ -1312,7 +1351,7 @@ def _analyze_pfsc_file_storage(
             for _idx in range(block_count):
                 chunk: bytes = source_file.read(logical_block_size)
                 padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
-                compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+                compressed_chunk: bytes = comp.compress_block(padded_chunk, level=zlib_level)
                 all_compressed_size += len(compressed_chunk)
                 gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
                 if _should_store_pfsc_block_compressed(
@@ -1365,7 +1404,156 @@ def _analyze_pfsc_file_storage(
     effective_gain_pct: float = ((raw_size - encoded_payload_size) / raw_size) * 100.0
     if effective_gain_pct < min_file_gain:
         return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
-    return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
+    return (
+        encoded_payload_size,
+        True,
+        effective_gain_pct,
+        hypothetical_all_compressed_size,
+    )
+
+
+def _write_pfsc_header_and_offsets(
+    *,
+    out: BinaryIO,
+    base_offset: int,
+    block_count: int,
+    logical_block_size: int,
+    header_size: int,
+    offsets: list[int],
+) -> None:
+    """Write the PFSC header and block offset table at ``base_offset``."""
+    header: PFSCHeader = PFSCHeader(
+        magic=consts.PFSC_MAGIC,
+        unk4=consts.PFSC_UNK4,
+        unk8=consts.PFSC_UNK8,
+        logical_block_size=logical_block_size,
+        block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
+        data_offset=header_size,
+        data_length=block_count * logical_block_size,
+    )
+    header_area: bytearray = bytearray(header_size)
+    struct.pack_into(
+        "<iiiiqqQq",
+        header_area,
+        0,
+        header.magic,
+        header.unk4,
+        header.unk8,
+        header.logical_block_size,
+        header.logical_block_size,
+        header.block_offsets_offset,
+        header.data_offset,
+        header.data_length,
+    )
+    struct.pack_into(f"<{block_count + 1}Q", header_area, consts.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
+    out.seek(base_offset)
+    out.write(header_area)
+
+
+def _encode_pfsc_stream_into_handle(
+    *,
+    out: BinaryIO,
+    base_offset: int,
+    source_blocks: Iterator[bytes],
+    raw_size: int,
+    threshold_gain: int,
+    zlib_level: int,
+    logical_block_size: int,
+    cpu_count: int = 0,
+    progress_callback: Callable[[int], None] | None = None,
+) -> tuple[int, int]:
+    """Encode a forward byte stream into a PFSC payload at ``base_offset``.
+
+    Re-chunks ``source_blocks`` into logical blocks and compresses them across a
+    bounded thread pool (zlib-ng releases the GIL, so this scales across cores)
+    while writing results strictly in order; then backfills the header. The
+    payload is always PFSC-wrapped (a stream cannot be re-read for a whole-file
+    raw fallback). Memory stays bounded by the in-flight window.
+
+    Args:
+        out: Open writable and seekable output handle.
+        base_offset: Absolute byte offset where the PFSC payload begins.
+        source_blocks: Iterator yielding the raw payload bytes in order.
+        raw_size: Total raw payload size in bytes (must match the stream length).
+        threshold_gain: Minimum per-block gain percent to keep compressed bytes.
+        zlib_level: zlib compression level.
+        logical_block_size: PFSC logical block size.
+        cpu_count: Requested compression worker count (0 = auto).
+        progress_callback: Optional callback receiving processed raw byte deltas.
+
+    Returns:
+        Tuple ``(stored_size, hypothetical_all_compressed_size)``.
+
+    Raises:
+        BuildError: If the stream length does not match ``raw_size``.
+    """
+    block_count: int = ceil_div(raw_size, logical_block_size)
+    header_size: int = _pfsc_header_size(block_count=block_count, logical_block_size=logical_block_size)
+    offsets: list[int] = [header_size]
+    all_compressed_size: int = 0
+    emitted_blocks: int = 0
+    out.seek(base_offset + header_size)
+
+    def _compress(raw_block: bytes) -> tuple[int, bytes, bytes]:
+        padded: bytes = raw_block.ljust(logical_block_size, b"\x00")
+        return len(raw_block), padded, comp.compress_block(padded, level=zlib_level)
+
+    def _write(result: tuple[int, bytes, bytes]) -> None:
+        nonlocal all_compressed_size, emitted_blocks
+        raw_len, padded, compressed = result
+        all_compressed_size += len(compressed)
+        gain_pct: float = ((len(padded) - len(compressed)) / len(padded)) * 100.0
+        store_compressed: bool = _should_store_pfsc_block_compressed(
+            compressed_block_size=len(compressed),
+            logical_block_size=logical_block_size,
+            gain_pct=gain_pct,
+            threshold_gain=threshold_gain,
+        )
+        selected: bytes = compressed if store_compressed else padded
+        out.write(selected)
+        offsets.append(offsets[-1] + len(selected))
+        emitted_blocks += 1
+        if progress_callback is not None:
+            progress_callback(raw_len)
+
+    def _iter_logical_blocks() -> Iterator[bytes]:
+        buffer: bytearray = bytearray()
+        for piece in source_blocks:
+            buffer += piece
+            while len(buffer) >= logical_block_size:
+                yield bytes(buffer[:logical_block_size])
+                del buffer[:logical_block_size]
+        if buffer:
+            yield bytes(buffer)
+
+    workers: int = resolve_compression_worker_count(requested_cpu_count=cpu_count)
+    if workers <= 1:
+        for raw_block in _iter_logical_blocks():
+            _write(_compress(raw_block))
+    else:
+        # Compress up to ``workers * 4`` blocks ahead, writing results in submit order.
+        max_in_flight: int = workers * 4
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pending: deque[Future[tuple[int, bytes, bytes]]] = deque()
+            for raw_block in _iter_logical_blocks():
+                if len(pending) >= max_in_flight:
+                    _write(pending.popleft().result())
+                pending.append(pool.submit(_compress, raw_block))
+            while pending:
+                _write(pending.popleft().result())
+
+    if emitted_blocks != block_count:
+        raise BuildError(f"exFAT stream length mismatch: expected {block_count} blocks, got {emitted_blocks}")
+
+    _write_pfsc_header_and_offsets(
+        out=out,
+        base_offset=base_offset,
+        block_count=block_count,
+        logical_block_size=logical_block_size,
+        header_size=header_size,
+        offsets=offsets,
+    )
+    return offsets[-1], header_size + all_compressed_size
 
 
 def _encode_pfsc_into_handle(
@@ -1421,7 +1609,7 @@ def _encode_pfsc_into_handle(
             for _idx in range(block_count):
                 chunk: bytes = source_file.read(logical_block_size)
                 padded_chunk: bytes = chunk.ljust(logical_block_size, b"\x00")
-                compressed_chunk: bytes = zlib.compress(padded_chunk, level=zlib_level)
+                compressed_chunk: bytes = comp.compress_block(padded_chunk, level=zlib_level)
                 all_compressed_size += len(compressed_chunk)
                 gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
                 store_compressed: bool = _should_store_pfsc_block_compressed(
@@ -1443,31 +1631,51 @@ def _encode_pfsc_into_handle(
             logical_block_size=logical_block_size,
             zlib_level=zlib_level,
         )
+
+        def _write_block_result(result: tuple[bytes, bytes]) -> None:
+            nonlocal all_compressed_size, compressed_blocks
+            raw_chunk, compressed_chunk = result
+            padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
+            all_compressed_size += len(compressed_chunk)
+            gain_pct: float = ((logical_block_size - len(compressed_chunk)) / logical_block_size) * 100.0
+            store_compressed: bool = _should_store_pfsc_block_compressed(
+                compressed_block_size=len(compressed_chunk),
+                logical_block_size=logical_block_size,
+                gain_pct=gain_pct,
+                threshold_gain=threshold_gain,
+            )
+            selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
+            if store_compressed:
+                compressed_blocks += 1
+            out.write(selected_chunk)
+            offsets.append(offsets[-1] + len(selected_chunk))
+            if progress_callback is not None:
+                progress_callback(len(raw_chunk))
+
+        # Bound in-flight work to ``max_in_flight`` blocks and write results in
+        # submit order. An unbounded ``imap`` lets a fast compressor pool outrun
+        # the single writer and buffer finished blocks without limit, which OOMs
+        # on large, highly-compressible inputs; this window keeps memory flat.
+        factor: int = DEFAULT_MKPFS_PFSC_WINDOW_FACTOR
+        with suppress(ValueError):
+            env_val = os.environ.get("MKPFS_PFSC_WINDOW_FACTOR")
+            if env_val is not None:
+                parsed = int(env_val)
+                if parsed > 0:
+                    factor = parsed
+        max_in_flight: int = max(1, effective_block_workers * factor)
         with mp.Pool(
             processes=effective_block_workers,
             initializer=_init_pfsc_block_worker_for_pool,
             initargs=(source_path,),
         ) as pool:
-            results_iter = pool.imap(_compress_pfsc_block_payload_worker, worker_args_iter, chunksize=1)
-            raw_chunk: bytes
-            compressed_chunk: bytes
-            for raw_chunk, compressed_chunk in results_iter:
-                padded_chunk: bytes = raw_chunk.ljust(logical_block_size, b"\x00")
-                all_compressed_size += len(compressed_chunk)
-                gain_pct: float = ((len(padded_chunk) - len(compressed_chunk)) / len(padded_chunk)) * 100.0
-                store_compressed: bool = _should_store_pfsc_block_compressed(
-                    compressed_block_size=len(compressed_chunk),
-                    logical_block_size=logical_block_size,
-                    gain_pct=gain_pct,
-                    threshold_gain=threshold_gain,
-                )
-                selected_chunk: bytes = compressed_chunk if store_compressed else padded_chunk
-                if store_compressed:
-                    compressed_blocks += 1
-                out.write(selected_chunk)
-                offsets.append(offsets[-1] + len(selected_chunk))
-                if progress_callback is not None:
-                    progress_callback(len(raw_chunk))
+            pending: deque[AsyncResult[tuple[bytes, bytes]]] = deque()
+            for worker_args in worker_args_iter:
+                if len(pending) >= max_in_flight:
+                    _write_block_result(pending.popleft().get())
+                pending.append(pool.apply_async(_compress_pfsc_block_payload_worker, (worker_args,)))
+            while pending:
+                _write_block_result(pending.popleft().get())
 
     encoded_payload_size: int = offsets[-1]
     hypothetical_all_compressed_size: int = header_size + all_compressed_size
@@ -1479,33 +1687,20 @@ def _encode_pfsc_into_handle(
         return raw_size, False, effective_gain_pct, hypothetical_all_compressed_size
 
     # Backfill the PFSC header and block offset table at the payload base.
-    header: PFSCHeader = PFSCHeader(
-        magic=consts.PFSC_MAGIC,
-        unk4=consts.PFSC_UNK4,
-        unk8=consts.PFSC_UNK8,
+    _write_pfsc_header_and_offsets(
+        out=out,
+        base_offset=base_offset,
+        block_count=block_count,
         logical_block_size=logical_block_size,
-        block_offsets_offset=consts.PFSC_BLOCK_OFFSETS_OFFSET,
-        data_offset=header_size,
-        data_length=block_count * logical_block_size,
+        header_size=header_size,
+        offsets=offsets,
     )
-    header_area: bytearray = bytearray(header_size)
-    struct.pack_into(
-        "<iiiiqqQq",
-        header_area,
-        0,
-        header.magic,
-        header.unk4,
-        header.unk8,
-        header.logical_block_size,
-        header.logical_block_size,
-        header.block_offsets_offset,
-        header.data_offset,
-        header.data_length,
+    return (
+        encoded_payload_size,
+        True,
+        effective_gain_pct,
+        hypothetical_all_compressed_size,
     )
-    struct.pack_into(f"<{block_count + 1}Q", header_area, consts.PFSC_BLOCK_OFFSETS_OFFSET, *offsets)
-    out.seek(base_offset)
-    out.write(header_area)
-    return encoded_payload_size, True, effective_gain_pct, hypothetical_all_compressed_size
 
 
 def _encode_pfsc_file_to_spool(
@@ -1563,7 +1758,13 @@ def _encode_pfsc_file_to_spool(
     return stored_size, is_compressed, gain_pct, hypothetical_all_compressed_size
 
 
-def _copy_exact_bytes(*, source_file: BinaryIO, destination_file: BinaryIO, byte_count: int, chunk_size: int) -> None:
+def _copy_exact_bytes(
+    *,
+    source_file: BinaryIO,
+    destination_file: BinaryIO,
+    byte_count: int,
+    chunk_size: int,
+) -> None:
     """Copy exactly ``byte_count`` bytes between file objects.
 
     Args:
@@ -1920,7 +2121,10 @@ def _compress_files_in_process(
             nonlocal displayed_progress_units, file_progress_bytes
             file_progress_bytes += delta_bytes
             target_units: int = (
-                min(total_bytes_to_process, _file_base_processed_bytes + file_progress_bytes)
+                min(
+                    total_bytes_to_process,
+                    _file_base_processed_bytes + file_progress_bytes,
+                )
                 if total_bytes_to_process > 0
                 else _completed_files
             )
@@ -2089,7 +2293,13 @@ def _parse_pfsc_header(head: bytes) -> tuple[int, int, int, int, int]:
         raise ValueError("PFSC data offset is smaller than the minimum compatible header span")
 
     block_count: int = logical_size // logical_block_size
-    return logical_block_size, block_count, block_offsets_offset, data_offset, logical_size
+    return (
+        logical_block_size,
+        block_count,
+        block_offsets_offset,
+        data_offset,
+        logical_size,
+    )
 
 
 def _decode_pfsc_block(stored_block: bytes, logical_block_size: int, idx: int) -> bytes:
@@ -2110,8 +2320,8 @@ def _decode_pfsc_block(stored_block: bytes, logical_block_size: int, idx: int) -
         return stored_block
     if len(stored_block) < logical_block_size:
         try:
-            logical_block: bytes = zlib.decompress(stored_block)
-        except zlib.error as exc:
+            logical_block: bytes = comp.decompress_block(stored_block)
+        except (comp.CompressionError, _zlib.error) as exc:
             raise ValueError(f"PFSC block {idx} failed to decompress: {exc}") from exc
         if len(logical_block) != logical_block_size:
             raise ValueError(
@@ -2264,7 +2474,13 @@ def make_fpt_and_collision_blob(
             continue
         path_entries.append((dir_full_path_for_hash(d), inode_by_path[f"dir:{d.rel_dir}"].number, True))
     for f in files_sorted:
-        path_entries.append((file_full_path_for_hash(f), inode_by_path[f"file:{f.rel_path}"].number, False))
+        path_entries.append(
+            (
+                file_full_path_for_hash(f),
+                inode_by_path[f"file:{f.rel_path}"].number,
+                False,
+            )
+        )
 
     by_hash: dict[int, list[tuple[str, int, bool]]] = {}
     for item in path_entries:
@@ -2523,7 +2739,9 @@ def scan_source_tree(root: Path, progress: Progress) -> tuple[dict[str, DirNode]
         by relative path and total_files is the number of files discovered.
     """
     progress.status("\nDiscovering files...")
-    abs_files: list[Path] = [p for p in root.rglob("*") if p.is_file()]
+    # Exclude OS-generated metadata (.DS_Store, ._*, Thumbs.db, __MACOSX, ...) so it
+    # never ends up in the image.
+    abs_files = gather_files_scandir(root)
     abs_files.sort(key=lambda p: p.relative_to(root).as_posix().lower())
 
     # Validate filenames before compression work begins; non-ASCII names are unsupported.
@@ -2558,14 +2776,20 @@ def scan_source_tree(root: Path, progress: Progress) -> tuple[dict[str, DirNode]
         for part in parts:  # pragma: no cover - exercised indirectly in integration tests
             next_rel: str = f"{curr}/{part}" if curr else part
             if next_rel not in dirs:
-                dirs[next_rel] = DirNode(rel_dir=next_rel, name=part, parent_rel_dir=curr if curr != "" else "")
+                dirs[next_rel] = DirNode(
+                    rel_dir=next_rel,
+                    name=part,
+                    parent_rel_dir=curr if curr != "" else "",
+                )
                 dirs[curr].children_dirs.append(next_rel)
             curr = next_rel
 
         if parent not in dirs:  # pragma: no cover - defensive fallback
             # This should not happen but keep it robust.
             dirs[parent] = DirNode(
-                rel_dir=parent, name=Path(parent).name if parent else "uroot", parent_rel_dir=""
+                rel_dir=parent,
+                name=Path(parent).name if parent else "uroot",
+                parent_rel_dir="",
             )  # pragma: no cover
 
         name: str = Path(rel).name  # pragma: no cover - defensive path
@@ -2649,7 +2873,10 @@ def make_sig_records_blob(blocks: list[int], block_size: int, inode_bits: int) -
 
 
 def collect_signed_block_numbers(
-    inode: Inode, block_size: int, indirect_block_records: dict[int, list[int]], inode_bits: int
+    inode: Inode,
+    block_size: int,
+    indirect_block_records: dict[int, list[int]],
+    inode_bits: int,
 ) -> list[int]:
     """Return ordered data block numbers referenced by a signed inode.
 
@@ -2739,7 +2966,10 @@ def assign_signed_inode_layout(
         inode.db[i] = next_block
         sig_targets.append(
             SignatureTarget(
-                next_block, signed_inode_sig_offset(inode.number, i, block_size, inode_bits), block_size, 0
+                next_block,
+                signed_inode_sig_offset(inode.number, i, block_size, inode_bits),
+                block_size,
+                0,
             )
         )
         next_block += 1
@@ -2752,7 +2982,12 @@ def assign_signed_inode_layout(
     ib0_block = next_block
     next_block += 1
     sig_targets.append(
-        SignatureTarget(ib0_block, signed_inode_sig_offset(inode.number, 12, block_size, inode_bits), block_size, 1)
+        SignatureTarget(
+            ib0_block,
+            signed_inode_sig_offset(inode.number, 12, block_size, inode_bits),
+            block_size,
+            1,
+        )
     )
 
     ib0_children: list[int] = []
@@ -2763,7 +2998,10 @@ def assign_signed_inode_layout(
         ib0_children.append(child_block)
         sig_targets.append(
             SignatureTarget(
-                child_block, ib0_block * block_size + len(ib0_children[:-1]) * layout.entry_size, block_size, 0
+                child_block,
+                ib0_block * block_size + len(ib0_children[:-1]) * layout.entry_size,
+                block_size,
+                0,
             )
         )
     indirect_block_records[ib0_block] = ib0_children
@@ -2775,7 +3013,12 @@ def assign_signed_inode_layout(
     ib1_parent = next_block
     next_block += 1
     sig_targets.append(
-        SignatureTarget(ib1_parent, signed_inode_sig_offset(inode.number, 13, block_size, inode_bits), block_size, 2)
+        SignatureTarget(
+            ib1_parent,
+            signed_inode_sig_offset(inode.number, 13, block_size, inode_bits),
+            block_size,
+            2,
+        )
     )
 
     ib1_children: list[int] = []
@@ -2786,7 +3029,12 @@ def assign_signed_inode_layout(
         next_block += 1
         ib1_children.append(child_indirect_block)
         sig_targets.append(
-            SignatureTarget(child_indirect_block, ib1_parent * block_size + idx * layout.entry_size, block_size, 1)
+            SignatureTarget(
+                child_indirect_block,
+                ib1_parent * block_size + idx * layout.entry_size,
+                block_size,
+                1,
+            )
         )
 
         child_records: list[int] = []
@@ -2797,7 +3045,10 @@ def assign_signed_inode_layout(
             child_records.append(data_block)
             sig_targets.append(
                 SignatureTarget(
-                    data_block, child_indirect_block * block_size + rec_idx * layout.entry_size, block_size, 0
+                    data_block,
+                    child_indirect_block * block_size + rec_idx * layout.entry_size,
+                    block_size,
+                    0,
                 )
             )
         indirect_block_records[child_indirect_block] = child_records
@@ -3026,11 +3277,123 @@ def build_pfs(
             progress.step("compress", 0, progress_total_units, bytes_processed=0)
             total_bytes_processed: int = 0
             displayed_progress_units: int = 0
-            with mp.Manager() as manager:
-                progress_queue: SupportsIntQueue = manager.Queue()
-                worker_args: list[
-                    tuple[Path, int, int, int, bool, int, int, bool, SupportsIntQueue | None, Path | None]
-                ] = [
+
+            # Adaptive Manager: try Manager-backed intra-file progress (stderr suppressed),
+            # else fallback to per-file updates
+            def _start_manager_quietly() -> object | None:
+                try:
+                    save2 = os.dup(2)
+                    dn = os.open(os.devnull, os.O_WRONLY)
+                    try:
+                        os.dup2(dn, 2)
+                        return mp.Manager()
+                    finally:
+                        with suppress(OSError):
+                            os.dup2(save2, 2)
+                        with suppress(OSError):
+                            os.close(save2)
+                        with suppress(OSError):
+                            os.close(dn)
+                except Exception:
+                    return None
+
+            manager_obj = _start_manager_quietly()
+            if manager_obj is not None:
+                try:
+                    progress_queue: SupportsIntQueue = manager_obj.Queue()
+                    worker_args: list[
+                        tuple[
+                            Path,
+                            int,
+                            int,
+                            int,
+                            bool,
+                            int,
+                            int,
+                            bool,
+                            SupportsIntQueue | None,
+                            Path | None,
+                        ]
+                    ] = [
+                        (
+                            f.abs_path,
+                            threshold_gain,
+                            min_file_gain,
+                            min_compress_size,
+                            True,
+                            consts.PFSC_LOGICAL_BLOCK_SIZE,
+                            zlib_level,
+                            dry_run,
+                            progress_queue,
+                            temp_root,
+                        )
+                        for f in compression_file_nodes
+                    ]
+                    with mp.Pool(processes=worker_count) as pool:
+                        results = pool.imap_unordered(_compute_file_storage_worker, worker_args, chunksize=1)
+                        remaining_results: int = len(worker_args)
+                        while remaining_results > 0:
+                            queued_bytes: int = _drain_compression_progress_queue(progress_queue=progress_queue)
+                            if queued_bytes > 0:
+                                displayed_progress_units = min(
+                                    total_bytes_to_process,
+                                    displayed_progress_units + queued_bytes,
+                                )
+                                progress.step(
+                                    "compress",
+                                    displayed_progress_units,
+                                    progress_total_units,
+                                    bytes_processed=displayed_progress_units if total_bytes_to_process > 0 else 0,
+                                )
+                            try:
+                                result = results.next(timeout=0.1)
+                            except mp.TimeoutError:
+                                continue
+                            except OSError:
+                                cleanup_temporary_file_node_payloads(file_nodes=compression_file_nodes)
+                                raise
+
+                            remaining_results -= 1
+                            (
+                                abs_path,
+                                stored_source_path,
+                                stored_source_is_temp,
+                                stored_size,
+                                is_compressed,
+                                gain_pct,
+                                hyp_comp_size,
+                            ) = result
+                            file_node = file_nodes_by_path[abs_path]
+                            file_node.stored_source_path = stored_source_path
+                            file_node.stored_source_is_temp = stored_source_is_temp
+                            file_node.stored_size = stored_size
+                            file_node.compressed = is_compressed
+                            file_node.gain_pct = gain_pct
+                            file_node.hypothetical_compressed_size = hyp_comp_size
+                            total_bytes_processed += file_node.raw_size
+                            completed_files: int = len(worker_args) - remaining_results
+                            target_progress_units: int = (
+                                total_bytes_processed if total_bytes_to_process > 0 else completed_files
+                            )
+                            if displayed_progress_units < target_progress_units:
+                                displayed_progress_units = target_progress_units
+                                progress.step(
+                                    "compress",
+                                    displayed_progress_units,
+                                    progress_total_units,
+                                    bytes_processed=displayed_progress_units if total_bytes_to_process > 0 else 0,
+                                )
+                finally:
+                    with suppress(Exception):
+                        manager_obj.shutdown()
+            else:
+                warning("")
+                warning(
+                    "The progress bar might take a while to update. Please wait...",
+                    icon_name="warning",
+                )
+                progress_queue_none: SupportsIntQueue | None = None
+                worker_args = [
                     (
                         f.abs_path,
                         threshold_gain,
@@ -3040,27 +3403,15 @@ def build_pfs(
                         consts.PFSC_LOGICAL_BLOCK_SIZE,
                         zlib_level,
                         dry_run,
-                        progress_queue,
+                        progress_queue_none,
                         temp_root,
                     )
                     for f in compression_file_nodes
                 ]
                 with mp.Pool(processes=worker_count) as pool:
                     results = pool.imap_unordered(_compute_file_storage_worker, worker_args, chunksize=1)
-                    remaining_results: int = len(worker_args)
+                    remaining_results = len(worker_args)
                     while remaining_results > 0:
-                        queued_bytes: int = _drain_compression_progress_queue(progress_queue=progress_queue)
-                        if queued_bytes > 0:
-                            displayed_progress_units = min(
-                                total_bytes_to_process,
-                                displayed_progress_units + queued_bytes,
-                            )
-                            progress.step(
-                                "compress",
-                                displayed_progress_units,
-                                progress_total_units,
-                                bytes_processed=displayed_progress_units if total_bytes_to_process > 0 else 0,
-                            )
                         try:
                             result = results.next(timeout=0.1)
                         except mp.TimeoutError:
@@ -3068,7 +3419,6 @@ def build_pfs(
                         except OSError:
                             cleanup_temporary_file_node_payloads(file_nodes=compression_file_nodes)
                             raise
-
                         remaining_results -= 1
                         (
                             abs_path,
@@ -3087,8 +3437,8 @@ def build_pfs(
                         file_node.gain_pct = gain_pct
                         file_node.hypothetical_compressed_size = hyp_comp_size
                         total_bytes_processed += file_node.raw_size
-                        completed_files: int = len(worker_args) - remaining_results
-                        target_progress_units: int = (
+                        completed_files = len(worker_args) - remaining_results
+                        target_progress_units = (
                             total_bytes_processed if total_bytes_to_process > 0 else completed_files
                         )
                         if displayed_progress_units < target_progress_units:
@@ -3131,7 +3481,10 @@ def build_pfs(
                 f.hypothetical_compressed_size = 0
                 total_bytes_processed += f.raw_size
                 progress.step(
-                    "read", total_bytes_processed, total_bytes_to_process, bytes_processed=total_bytes_processed
+                    "read",
+                    total_bytes_processed,
+                    total_bytes_to_process,
+                    bytes_processed=total_bytes_processed,
                 )
 
     now: int = int(time.time())
@@ -3230,7 +3583,11 @@ def build_pfs(
 
         d.dirents = [
             Dirent(this_ino.number, consts.DIRENT_TYPE_DOT, "."),
-            Dirent(parent_ino.number if d.rel_dir != "" else this_ino.number, consts.DIRENT_TYPE_DOTDOT, ".."),
+            Dirent(
+                parent_ino.number if d.rel_dir != "" else this_ino.number,
+                consts.DIRENT_TYPE_DOTDOT,
+                "..",
+            ),
         ]
 
         for child_rel_dir in d.children_dirs:
@@ -3380,7 +3737,13 @@ def build_pfs(
         ndblock += 2
         reserved_empty_blocks.update({ndblock - 2, ndblock - 1})
 
-        for inode, payload_size, is_dir, _payload_bytes, _payload_source in all_nodes_data:
+        for (
+            inode,
+            payload_size,
+            is_dir,
+            _payload_bytes,
+            _payload_source,
+        ) in all_nodes_data:
             blocks = max(1, ceil_div(payload_size, block_size)) if payload_size > 0 else 1
             inode.blocks = blocks
             if is_dir:
@@ -3427,7 +3790,13 @@ def build_pfs(
             ndblock += 1
             reserved_empty_blocks.add(ndblock - 1)
 
-        for inode, payload_size, is_dir, _payload_bytes, _payload_source in all_nodes_data:
+        for (
+            inode,
+            payload_size,
+            is_dir,
+            _payload_bytes,
+            _payload_source,
+        ) in all_nodes_data:
             blocks = max(1, ceil_div(payload_size, block_size)) if payload_size > 0 else 1
             inode.db[0] = ndblock
             inode.blocks = blocks
@@ -3532,7 +3901,10 @@ def build_pfs(
                         out,
                         collision_blob,
                         collect_signed_block_numbers(
-                            collision_inode, block_size, indirect_block_records, signed_inode_bits
+                            collision_inode,
+                            block_size,
+                            indirect_block_records,
+                            signed_inode_bits,
                         ),
                         block_size,
                     )
@@ -3552,13 +3924,24 @@ def build_pfs(
                 payload_size for _inode, payload_size, _is_dir, _bytes, _path in all_nodes_data
             )
             written_bytes: int = 0
-            for inode, payload_size, _is_dir, payload_bytes, payload_source_path in all_nodes_data:
+            for (
+                inode,
+                payload_size,
+                _is_dir,
+                payload_bytes,
+                payload_source_path,
+            ) in all_nodes_data:
                 if payload_bytes is not None:
                     if signed:
                         write_payload_to_blocks(
                             out,
                             payload_bytes,
-                            collect_signed_block_numbers(inode, block_size, indirect_block_records, signed_inode_bits),
+                            collect_signed_block_numbers(
+                                inode,
+                                block_size,
+                                indirect_block_records,
+                                signed_inode_bits,
+                            ),
                             block_size,
                         )
                     else:
@@ -3573,7 +3956,10 @@ def build_pfs(
                             source_path=payload_source_path,
                             payload_size=payload_size,
                             blocks=collect_signed_block_numbers(
-                                inode, block_size, indirect_block_records, signed_inode_bits
+                                inode,
+                                block_size,
+                                indirect_block_records,
+                                signed_inode_bits,
                             ),
                             block_size=block_size,
                         )
@@ -3585,7 +3971,12 @@ def build_pfs(
                             offset=inode.db[0] * block_size,
                         )
                 written_bytes += payload_size
-                progress.step("write", written_bytes, total_write_bytes, bytes_processed=written_bytes)
+                progress.step(
+                    "write",
+                    written_bytes,
+                    total_write_bytes,
+                    bytes_processed=written_bytes,
+                )
 
             if signed:
                 sign_key = pfs_gen_sign_key(resolved_ekpfs, seed)
@@ -3868,9 +4259,17 @@ def build_pfs_stream_single_file(
         raw_size=raw_size,
     )
     file_node.inode = file_inode
-    uroot_dir = DirNode(rel_dir="", name="", parent_rel_dir=None, children_files=[resolved_inner_file_name])
+    uroot_dir = DirNode(
+        rel_dir="",
+        name="",
+        parent_rel_dir=None,
+        children_files=[resolved_inner_file_name],
+    )
     uroot_dir.inode = uroot_inode
-    inode_by_path: dict[str, Inode] = {"dir:": uroot_inode, f"file:{resolved_inner_file_name}": file_inode}
+    inode_by_path: dict[str, Inode] = {
+        "dir:": uroot_inode,
+        f"file:{resolved_inner_file_name}": file_inode,
+    }
     fpt_blob: bytes
     has_collision: bool
     fpt_blob, _collision_blob, has_collision = make_fpt_and_collision_blob(
@@ -3980,7 +4379,12 @@ def build_pfs_stream_single_file(
                 """Forward block progress to the compression bar."""
                 nonlocal processed
                 processed += delta
-                progress.step("compress", min(processed, total_units), total_units, bytes_processed=processed)
+                progress.step(
+                    "compress",
+                    min(processed, total_units),
+                    total_units,
+                    bytes_processed=processed,
+                )
 
             if should_compress:
                 progress.status(
@@ -4086,6 +4490,313 @@ def build_pfs_stream_single_file(
         hypothetical_size=hypothetical_size,
         block_size=block_size,
         gain_pct=gain_pct,
+        elapsed_seconds=time.time() - start,
+        verbose=verbose,
+    )
+
+
+def build_pfs_stream_from_exfat(
+    *,
+    source_root: Path,
+    output_path: Path,
+    block_size: int,
+    pfs_version: int,
+    case_insensitive: bool,
+    zlib_level: int,
+    threshold_gain: int,
+    cluster_size: int | None = None,
+    cpu_count: int = 0,
+    encrypted: bool = False,
+    new_crypt: bool = False,
+    ekpfs: bytes | None = None,
+    verbose: bool = False,
+) -> BuildStats:
+    """Pack a folder into a compressed PFS image with an inner exFAT, in one pass.
+
+    Wraps ``source_root`` in an exFAT volume and compresses that volume straight
+    into the PFS payload region with no temporary ``.exfat`` on disk: the exFAT
+    serializer streams forward into the PFSC encoder. The single inner file is
+    named ``<titleId>.exfat`` (from ``sce_sys/param.json``, else the folder name).
+
+    Args:
+        source_root: Source directory to wrap.
+        output_path: Final ``.ffpfsc`` path.
+        block_size: PFS filesystem block size in bytes.
+        pfs_version: PFS profile version.
+        case_insensitive: Whether to set the case-insensitive mode bit.
+        zlib_level: zlib compression level.
+        threshold_gain: Minimum per-block gain percent to keep PFSC blocks.
+        cluster_size: Optional inner exFAT cluster size (auto when omitted).
+        cpu_count: Requested compression worker count (0 = auto).
+        encrypted: Whether to encrypt filesystem blocks.
+        new_crypt: Whether to use the alternate EKPFS derivation.
+        ekpfs: Optional EKPFS key bytes.
+        verbose: Whether to emit a verbose per-file decision line.
+
+    Returns:
+        Build statistics for the completed image.
+    """
+    start: float = time.time()
+    progress: Progress = Progress(enabled=True)
+    if not source_root.is_dir():
+        raise BuildError(f"source must be an existing directory: {source_root}")
+    now: int = int(time.time())
+    resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)
+    seed: bytes = consts.ZERO_PFS_SEED
+    inner_name: str = f"{default_image_basename(source_root)}.exfat"
+
+    # Plan the exFAT layout to learn the inner payload size before laying out the
+    # PFS container, then stream the same image forward into the PFSC encoder.
+    size_box: list[int] = []
+    exfat_blocks: Iterator[bytes] = iter_exfat_image(source_root, cluster_size=cluster_size, on_layout=size_box.append)
+    first_chunk: bytes = next(exfat_blocks)
+    raw_size: int = size_box[0]
+    payload_stream: Iterator[bytes] = itertools.chain([first_chunk], exfat_blocks)
+
+    # Four-inode single-file PFS scaffolding (unsigned, contiguous).
+    super_root_inode = Inode(
+        number=0,
+        mode=consts.INODE_MODE_DIR | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_INTERNAL | consts.INODE_FLAG_READONLY,
+        size=block_size,
+        size_compressed=block_size,
+        blocks=1,
+        time_sec=now,
+    )
+    fpt_inode = Inode(
+        number=1,
+        mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_INTERNAL | consts.INODE_FLAG_READONLY,
+        size=0,
+        size_compressed=0,
+        blocks=1,
+        time_sec=now,
+    )
+    uroot_inode = Inode(
+        number=2,
+        mode=consts.INODE_MODE_DIR | consts.INODE_RX_ONLY,
+        nlink=3,
+        flags=consts.INODE_FLAG_READONLY,
+        size=block_size,
+        size_compressed=block_size,
+        blocks=1,
+        time_sec=now,
+    )
+    file_inode = Inode(
+        number=3,
+        mode=consts.INODE_MODE_FILE | consts.INODE_RX_ONLY,
+        nlink=1,
+        flags=consts.INODE_FLAG_READONLY,
+        size=0,
+        size_compressed=0,
+        blocks=1,
+        time_sec=now,
+    )
+    inodes: list[Inode] = [super_root_inode, fpt_inode, uroot_inode, file_inode]
+
+    file_node = FileNode(
+        rel_path=inner_name,
+        abs_path=source_root,
+        parent_rel_dir="",
+        name=inner_name,
+        raw_size=raw_size,
+    )
+    file_node.inode = file_inode
+    uroot_dir = DirNode(rel_dir="", name="", parent_rel_dir=None, children_files=[inner_name])
+    uroot_dir.inode = uroot_inode
+    inode_by_path: dict[str, Inode] = {
+        "dir:": uroot_inode,
+        f"file:{inner_name}": file_inode,
+    }
+    fpt_blob, _collision_blob, has_collision = make_fpt_and_collision_blob(
+        [uroot_dir], [file_node], inode_by_path, case_insensitive=case_insensitive
+    )
+    if has_collision:
+        raise BuildError("unexpected FPT collision in exFAT streaming builder")
+
+    uroot_dirents: list[Dirent] = [
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DOT, "."),
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DOTDOT, ".."),
+        Dirent(file_inode.number, consts.DIRENT_TYPE_FILE, inner_name),
+    ]
+    uroot_blob: bytes = b"".join(d.to_bytes() for d in uroot_dirents)
+    super_root_dirents: list[Dirent] = [
+        Dirent(fpt_inode.number, consts.DIRENT_TYPE_FILE, "flat_path_table"),
+        Dirent(uroot_inode.number, consts.DIRENT_TYPE_DIRECTORY, "uroot"),
+    ]
+
+    inode_count: int = len(inodes)
+    inode_size: int = consts.INODE_D32_SIZE
+    inode_block_count: int = ceil_div(inode_count, block_size // inode_size)
+
+    ndblock: int = 1 + inode_block_count
+    super_root_inode.db[0] = ndblock
+    ndblock += super_root_inode.blocks
+    fpt_inode.size = len(fpt_blob)
+    fpt_inode.size_compressed = len(fpt_blob)
+    fpt_inode.blocks = max(1, ceil_div(len(fpt_blob), block_size))
+    fpt_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        fpt_inode.db[i] = -1
+    ndblock += fpt_inode.blocks
+    ndblock += 1
+    reserved_empty_blocks: set[int] = {ndblock - 1}
+    uroot_inode.blocks = max(1, ceil_div(len(uroot_blob), block_size))
+    uroot_inode.size = uroot_inode.blocks * block_size
+    uroot_inode.size_compressed = uroot_inode.size
+    uroot_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        uroot_inode.db[i] = -1
+    ndblock += uroot_inode.blocks
+    file_inode.db[0] = ndblock
+    for i in range(1, consts.MAX_DIRECT_BLOCKS):
+        file_inode.db[i] = -1
+    payload_base: int = file_inode.db[0] * block_size
+
+    mode: int = compose_pfs_mode_with_options(
+        inode_bits=32,
+        case_insensitive=case_insensitive,
+        signed=False,
+        encrypted=encrypted,
+    )
+
+    progress.status(f"\nWrapping {source_root} into an exFAT and compressing to {output_path} (no temp image)...")
+    progress.status(f"Inner image: {inner_name} ({human_readable_size(raw_size)})")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path = Path(str(output_path) + ".tmp")
+    try:
+        with tmp_path.open("w+b") as out:
+            out.write(
+                _pack_pfs_header_block(
+                    block_size=block_size,
+                    pfs_version=pfs_version,
+                    mode=mode,
+                    nblock=1,
+                    inode_count=inode_count,
+                    final_ndblock=0,
+                    inode_block_count=inode_block_count,
+                    now=now,
+                    signed=False,
+                    encrypted=encrypted,
+                    seed=seed,
+                )
+            )
+            out.seek(block_size)
+            _write_inode_table(
+                out=out,
+                inodes=inodes,
+                signed=False,
+                signed_inode_bits=32,
+                block_size=block_size,
+                inode_size=inode_size,
+            )
+            out.seek(super_root_inode.db[0] * block_size)
+            for d in super_root_dirents:
+                out.write(d.to_bytes())
+            out.seek(fpt_inode.db[0] * block_size)
+            out.write(fpt_blob)
+            out.seek(uroot_inode.db[0] * block_size)
+            out.write(uroot_blob)
+
+            total_units: int = max(raw_size, 1)
+            processed: int = 0
+
+            def report(delta: int) -> None:
+                nonlocal processed
+                processed += delta
+                progress.step(
+                    "compress",
+                    min(processed, total_units),
+                    total_units,
+                    bytes_processed=processed,
+                )
+
+            progress.status(f"\nCompressing inner exFAT ({human_readable_size(raw_size)})...")
+            stored_size, hypothetical_size = _encode_pfsc_stream_into_handle(
+                out=out,
+                base_offset=payload_base,
+                source_blocks=payload_stream,
+                raw_size=raw_size,
+                threshold_gain=threshold_gain,
+                zlib_level=zlib_level,
+                logical_block_size=consts.PFSC_LOGICAL_BLOCK_SIZE,
+                cpu_count=cpu_count,
+                progress_callback=report,
+            )
+
+            file_inode.blocks = max(1, ceil_div(stored_size, block_size))
+            file_inode.size = stored_size
+            file_inode.flags = consts.INODE_FLAG_READONLY | consts.INODE_FLAG_COMPRESSED
+            file_inode.size_compressed = raw_size
+            final_ndblock: int = file_inode.db[0] + file_inode.blocks
+
+            validate_d32_ranges(inodes, final_ndblock)
+
+            out.seek(0)
+            out.write(
+                _pack_pfs_header_block(
+                    block_size=block_size,
+                    pfs_version=pfs_version,
+                    mode=mode,
+                    nblock=1,
+                    inode_count=inode_count,
+                    final_ndblock=final_ndblock,
+                    inode_block_count=inode_block_count,
+                    now=now,
+                    signed=False,
+                    encrypted=encrypted,
+                    seed=seed,
+                )
+            )
+            out.seek(block_size)
+            _write_inode_table(
+                out=out,
+                inodes=inodes,
+                signed=False,
+                signed_inode_bits=32,
+                block_size=block_size,
+                inode_size=inode_size,
+            )
+            out.truncate(final_ndblock * block_size)
+
+            if encrypted:
+                encrypt_image_filesystem(
+                    out,
+                    block_size=block_size,
+                    total_blocks=final_ndblock,
+                    ekpfs=resolved_ekpfs,
+                    seed=seed,
+                    new_crypt=new_crypt,
+                    skip_block_numbers=reserved_empty_blocks,
+                )
+
+        validate_image_quick(
+            tmp_path,
+            block_size,
+            mode,
+            pfs_version,
+            ekpfs=resolved_ekpfs if encrypted else None,
+            new_crypt=new_crypt,
+        )
+        shutil.move(str(tmp_path), str(output_path))
+        progress.status(f"Successfully wrote {human_readable_size(final_ndblock * block_size)} image")
+    except Exception:
+        if tmp_path.exists():
+            with suppress(FileNotFoundError):
+                tmp_path.unlink()
+        raise
+
+    return _single_file_build_stats(
+        source_file=source_root,
+        output_path=output_path,
+        raw_size=raw_size,
+        stored_size=stored_size,
+        is_compressed=True,
+        hypothetical_size=hypothetical_size,
+        block_size=block_size,
+        gain_pct=((raw_size - stored_size) / raw_size * 100.0) if raw_size else 0.0,
         elapsed_seconds=time.time() - start,
         verbose=verbose,
     )
@@ -4394,10 +5105,18 @@ def verify_signed_image_signatures(
     for i in range(header.dinode_block_count):
         block_num = 1 + i
         block_data = read_image_bytes(
-            fh, header, block_num * header.block_size, header.block_size, ekpfs=ekpfs, new_crypt=new_crypt
+            fh,
+            header,
+            block_num * header.block_size,
+            header.block_size,
+            ekpfs=ekpfs,
+            new_crypt=new_crypt,
         )
         sig_offset = header_inode_block_sig_offset(i)
-        expected = hmac_sha256(sign_key, block_hmac_without_slot(block_data, 0, header.block_size, signed=False))
+        expected = hmac_sha256(
+            sign_key,
+            block_hmac_without_slot(block_data, 0, header.block_size, signed=False),
+        )
         actual = _read_exact(fh, sig_offset, consts.SIG_SIZE)
         if actual != expected:
             errors.append(f"inode block signature mismatch for block {block_num}")
@@ -4420,7 +5139,12 @@ def verify_signed_image_signatures(
                 errors.append(f"inode {inode.number} has invalid direct block db[{idx}]={block}")
                 continue
             block_data = read_image_bytes(
-                fh, header, block * header.block_size, header.block_size, ekpfs=ekpfs, new_crypt=new_crypt
+                fh,
+                header,
+                block * header.block_size,
+                header.block_size,
+                ekpfs=ekpfs,
+                new_crypt=new_crypt,
             )
             expected = hmac_sha256(sign_key, block_data)
             actual = inode.db_sig[idx]
@@ -4435,12 +5159,22 @@ def verify_signed_image_signatures(
                 errors.append(f"inode {inode.number} missing ib[0] for signed block chain")
             else:
                 ib0_data = read_image_bytes(
-                    fh, header, ib0 * header.block_size, header.block_size, ekpfs=ekpfs, new_crypt=new_crypt
+                    fh,
+                    header,
+                    ib0 * header.block_size,
+                    header.block_size,
+                    ekpfs=ekpfs,
+                    new_crypt=new_crypt,
                 )
                 if inode.ib_sig[0] != hmac_sha256(sign_key, ib0_data):
                     errors.append(f"inode {inode.number} indirect signature mismatch at ib[0] -> block {ib0}")
                     records = parse_sig_record_block(
-                        fh, ib0, inode_bits, header=header, ekpfs=ekpfs, new_crypt=new_crypt
+                        fh,
+                        ib0,
+                        inode_bits,
+                        header=header,
+                        ekpfs=ekpfs,
+                        new_crypt=new_crypt,
                     )
                 take = min(remaining, sigs_per_block)
                 for rec_idx, (sig, block) in enumerate(records[:take]):
@@ -4470,7 +5204,12 @@ def verify_signed_image_signatures(
                 errors.append(f"inode {inode.number} missing ib[1] for signed block chain")
             else:
                 ib1_data = read_image_bytes(
-                    fh, header, ib1 * header.block_size, header.block_size, ekpfs=ekpfs, new_crypt=new_crypt
+                    fh,
+                    header,
+                    ib1 * header.block_size,
+                    header.block_size,
+                    ekpfs=ekpfs,
+                    new_crypt=new_crypt,
                 )
                 if inode.ib_sig[1] != hmac_sha256(sign_key, ib1_data):
                     errors.append(f"inode {inode.number} indirect signature mismatch at ib[1] -> block {ib1}")
@@ -4499,7 +5238,12 @@ def verify_signed_image_signatures(
                             f"signature mismatch for block {child_indirect}"
                         )
                     child_records = parse_sig_record_block(
-                        fh, child_indirect, inode_bits, header=header, ekpfs=ekpfs, new_crypt=new_crypt
+                        fh,
+                        child_indirect,
+                        inode_bits,
+                        header=header,
+                        ekpfs=ekpfs,
+                        new_crypt=new_crypt,
                     )
                     take = min(remaining, sigs_per_block)
                     for rec_idx, (sig, block) in enumerate(child_records[:take]):
@@ -4568,7 +5312,12 @@ def resolve_signed_inode_blocks(
             if remaining <= 0:
                 break
             child_records = parse_sig_record_block(
-                fh, child_block, inode_bits, header=header, ekpfs=ekpfs, new_crypt=new_crypt
+                fh,
+                child_block,
+                inode_bits,
+                header=header,
+                ekpfs=ekpfs,
+                new_crypt=new_crypt,
             )
             take = min(remaining, sigs_per_block)
             blocks.extend(block for _sig2, block in child_records[:take])
@@ -4733,7 +5482,13 @@ def iter_inode_logical_blocks(
     # Compressed PFSC payload stored contiguously from ``base``.
     stored_size: int = inode.stored_size
     head: bytes = read_image_bytes(fh, header, base, consts.PFSC_HEADER_SIZE, ekpfs=ekpfs, new_crypt=new_crypt)
-    logical_block_size, block_count, block_offsets_offset, data_offset, pfsc_logical_size = _parse_pfsc_header(head)
+    (
+        logical_block_size,
+        block_count,
+        block_offsets_offset,
+        data_offset,
+        pfsc_logical_size,
+    ) = _parse_pfsc_header(head)
     if data_offset > stored_size:
         raise ValueError("PFSC data offset exceeds stored payload length")
     offsets_size: int = (block_count + 1) * consts.PFSC_OFFSET_ENTRY_SIZE
@@ -4741,7 +5496,12 @@ def iter_inode_logical_blocks(
         raise ValueError("PFSC payload is truncated before block offset table")
 
     offset_table: bytes = read_image_bytes(
-        fh, header, base + block_offsets_offset, offsets_size, ekpfs=ekpfs, new_crypt=new_crypt
+        fh,
+        header,
+        base + block_offsets_offset,
+        offsets_size,
+        ekpfs=ekpfs,
+        new_crypt=new_crypt,
     )
     offsets: list[int] = list(struct.unpack_from(f"<{block_count + 1}Q", offset_table, 0))
     if offsets[0] != data_offset:
@@ -4760,7 +5520,12 @@ def iter_inode_logical_blocks(
         if emitted >= expected:
             break
         stored_block: bytes = read_image_bytes(
-            fh, header, base + offsets[idx], offsets[idx + 1] - offsets[idx], ekpfs=ekpfs, new_crypt=new_crypt
+            fh,
+            header,
+            base + offsets[idx],
+            offsets[idx + 1] - offsets[idx],
+            ekpfs=ekpfs,
+            new_crypt=new_crypt,
         )
         logical_block: bytes = _decode_pfsc_block(stored_block, logical_block_size, idx)
         if emitted + len(logical_block) > expected:
@@ -4781,7 +5546,14 @@ def parse_superroot_and_indexes(
     new_crypt: bool = False,
 ) -> tuple[int, dict[int, int], dict[int, list[ParsedDirent]], set[int]]:
     super_root_offset = (1 + header.dinode_block_count) * header.block_size
-    blob: bytes = read_image_bytes(fh, header, super_root_offset, header.block_size, ekpfs=ekpfs, new_crypt=new_crypt)
+    blob: bytes = read_image_bytes(
+        fh,
+        header,
+        super_root_offset,
+        header.block_size,
+        ekpfs=ekpfs,
+        new_crypt=new_crypt,
+    )
     super_entries, parse_errors = parse_image_dirents(blob, strict=True)
     for e in parse_errors:
         errors.append(f"superroot: {e}")
@@ -4829,7 +5601,11 @@ def parse_superroot_and_indexes(
                 errors.append("flat_path_table has collision entries but no collision_resolver inode")
             elif 0 <= collision_inode < len(inodes):
                 c_blob = read_image_inode_payload(
-                    fh, header, inodes[collision_inode], ekpfs=ekpfs, new_crypt=new_crypt
+                    fh,
+                    header,
+                    inodes[collision_inode],
+                    ekpfs=ekpfs,
+                    new_crypt=new_crypt,
                 )
                 for h, v in fpt_map.items():
                     if (v & 0x80000000) == 0:
@@ -4843,7 +5619,12 @@ def parse_superroot_and_indexes(
                         errors.extend([f"collision_resolver hash 0x{h:08X}: {e}" for e in parse_err])
                     collision_map[h] = entries
 
-    return (uroot_inode if uroot_inode is not None else -1), fpt_map, collision_map, special_inodes
+    return (
+        (uroot_inode if uroot_inode is not None else -1),
+        fpt_map,
+        collision_map,
+        special_inodes,
+    )
 
 
 def build_tree_from_uroot(
@@ -4989,12 +5770,17 @@ def verify_file_payload_hashes(
         try:
             for chunk in iter_inode_logical_blocks(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt):
                 file_hash.update(chunk)
-                cumulative_crc = zlib.crc32(chunk, cumulative_crc) & 0xFFFFFFFF
+                cumulative_crc = _zlib.crc32(chunk, cumulative_crc) & 0xFFFFFFFF
                 file_len += len(chunk)
                 processed += len(chunk)
                 if progress is not None and processed - last_reported >= update_interval:
                     last_reported = processed
-                    progress.step("verify", min(processed, total_bytes), progress_total, bytes_processed=processed)
+                    progress.step(
+                        "verify",
+                        min(processed, total_bytes),
+                        progress_total,
+                        bytes_processed=processed,
+                    )
         except (ValueError, OSError) as exc:
             errors.append(f"failed to read file payload '{rel}' (inode {inode_num}): {exc}")
             continue
@@ -5016,7 +5802,13 @@ def verify_file_payload_hashes(
 def render_tree(dirents_by_inode: dict[int, list[ParsedDirent]], inode_num: int, prefix: str = "") -> list[str]:
     lines: list[str] = []
     entries = [e for e in dirents_by_inode.get(inode_num, []) if e.name not in (".", "..")]
-    entries.sort(key=lambda e: (e.type_code != consts.DIRENT_TYPE_DIRECTORY, e.name.lower(), e.name))
+    entries.sort(
+        key=lambda e: (
+            e.type_code != consts.DIRENT_TYPE_DIRECTORY,
+            e.name.lower(),
+            e.name,
+        )
+    )
 
     for idx, ent in enumerate(entries):
         last = idx == (len(entries) - 1)
@@ -5029,7 +5821,10 @@ def render_tree(dirents_by_inode: dict[int, list[ParsedDirent]], inode_num: int,
 
 
 def validate_inode_layout(
-    header: ParsedHeader, inodes: list[ParsedInode], errors: list[str], warnings: list[str]
+    header: ParsedHeader,
+    inodes: list[ParsedInode],
+    errors: list[str],
+    warnings: list[str],
 ) -> None:
     if header.magic != consts.PFS_MAGIC:
         errors.append(f"header magic mismatch: 0x{header.magic:016X} != 0x{consts.PFS_MAGIC:016X}")
@@ -5178,7 +5973,13 @@ def validate_source_paths(
         errors.append(f"source path does not exist or is not a directory: {source}")
         return None
 
-    source_files: list[Path] = sorted(path for path in source.rglob("*") if path.is_file())
+    # Exclude OS-generated metadata so the comparison matches what the packer
+    # writes (it drops the same junk), avoiding spurious "missing in image" errors.
+    source_files: list[Path] = sorted(
+        path
+        for path in source.rglob("*")
+        if path.is_file() and not any(is_ignored_name(part) for part in path.relative_to(source).parts)
+    )
     source_rel: set[str] = {path.relative_to(source).as_posix() for path in source_files}
     image_rel: set[str] = set(file_inodes.keys())
 
@@ -5224,7 +6025,12 @@ def validate_source_match(
                 processed += len(chunk)
                 if progress is not None and processed - last_reported >= update_interval:
                     last_reported = processed
-                    progress.step("compare", min(processed, total_bytes), progress_total, bytes_processed=processed)
+                    progress.step(
+                        "compare",
+                        min(processed, total_bytes),
+                        progress_total,
+                        bytes_processed=processed,
+                    )
         except (ValueError, OSError) as exc:
             errors.append(f"file '{rel}' failed to read payload: {exc}")
             continue
@@ -5276,7 +6082,7 @@ class PFSImageInfo(PFSOperationResult):
 
     @property
     def version_label(self) -> str:
-        """Return the human-friendly version label."""
+        """Human-friendly version label."""
         if self.header is None:
             return ""
         return "PS5" if self.header.version == consts.PFS_VERSION_PS5 else "PS4"
@@ -5325,7 +6131,7 @@ class PFSImageInspection(PFSImageInfo):
 
     @property
     def has_tree(self) -> bool:
-        """Return whether the inspection contains a parsed filesystem tree."""
+        """Whether the inspection contains a parsed filesystem tree."""
         return self.uroot_inode >= 0 and len(self.dirents_by_inode) > 0
 
 
@@ -5389,6 +6195,40 @@ def read_pfs_info(image: Path) -> PFSImageInfo:
     return info
 
 
+def detect_image_format(image: Path, *, hint: ImageFormat = ImageFormat.AUTO) -> ImageFormat:
+    """Return the effective image format for verify/unpack workflows.
+
+    The helper keeps detection intentionally simple to preserve existing
+    behaviour for PFS images: we only special-case exFAT and treat
+    everything else as PFS.
+
+    Detection rules when ``hint`` is ``AUTO``:
+
+    * ``.exfat`` extension → :class:`ImageFormat.EXFAT`.
+    * exFAT boot signature at bytes 3..11 → ``EXFAT``.
+    * Otherwise → :class:`ImageFormat.PFS`.
+
+    When ``hint`` is ``PFS`` or ``EXFAT``, it is returned as-is.
+    """
+    if hint in (ImageFormat.PFS, ImageFormat.EXFAT):
+        return hint
+
+    suffix: str = image.suffix.lower()
+    if suffix == ".exfat":
+        return ImageFormat.EXFAT
+
+    try:
+        with image.open("rb") as fh:
+            vbr: bytes = fh.read(512)
+    except OSError:
+        return ImageFormat.PFS
+
+    if len(vbr) >= 11 and vbr[3:11] == EXFAT_SIGNATURE:
+        return ImageFormat.EXFAT
+
+    return ImageFormat.PFS
+
+
 def inspect_pfs_image(
     image: Path,
     source: Path | None = None,
@@ -5396,6 +6236,7 @@ def inspect_pfs_image(
     expected_manifest_sha256: str | None = None,
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
+    verify_payloads: bool = True,
 ) -> PFSImageInspection:
     """Inspect a PFS image and collect structural validation details.
 
@@ -5406,6 +6247,8 @@ def inspect_pfs_image(
         expected_manifest_sha256: Optional expected manifest SHA256 digest.
         ekpfs: Optional EKPFS key material for encrypted images.
         new_crypt: When True, use the alternate newCrypt key derivation path.
+        verify_payloads: When False, skip the payload-content passes (checklist and
+            per-file hash verification); structural checks still run.
 
     Returns:
         A detailed inspection report with parsed tree data, warnings, and errors.
@@ -5431,7 +6274,14 @@ def inspect_pfs_image(
             validate_inode_layout(header, inodes, inspection.errors, inspection.warnings)
 
             try:
-                verify_signed_image_signatures(fh, header, inodes, inspection.errors, ekpfs=ekpfs, new_crypt=new_crypt)
+                verify_signed_image_signatures(
+                    fh,
+                    header,
+                    inodes,
+                    inspection.errors,
+                    ekpfs=ekpfs,
+                    new_crypt=new_crypt,
+                )
             except (OSError, ValueError) as exc:
                 inspection.errors.append(f"failed to verify image signatures: {exc}")
 
@@ -5442,7 +6292,12 @@ def inspect_pfs_image(
                     inspection.collision_map,
                     inspection.special_inodes,
                 ) = parse_superroot_and_indexes(
-                    fh, header, inodes, inspection.errors, ekpfs=ekpfs, new_crypt=new_crypt
+                    fh,
+                    header,
+                    inodes,
+                    inspection.errors,
+                    ekpfs=ekpfs,
+                    new_crypt=new_crypt,
                 )
             except (OSError, ValueError) as exc:
                 inspection.errors.append(f"failed to parse superroot and indexes: {exc}")
@@ -5450,7 +6305,11 @@ def inspect_pfs_image(
 
             if inspection.uroot_inode >= 0:
                 try:
-                    inspection.file_inodes, inspection.dir_inodes, inspection.dirents_by_inode = build_tree_from_uroot(
+                    (
+                        inspection.file_inodes,
+                        inspection.dir_inodes,
+                        inspection.dirents_by_inode,
+                    ) = build_tree_from_uroot(
                         fh,
                         header,
                         inodes,
@@ -5468,47 +6327,56 @@ def inspect_pfs_image(
                     inspection.file_inodes, inspection.dir_inodes, case_insensitive
                 )
 
-                validate_fpt_maps(inspection.fpt_map, inspection.collision_map, expected_fpt, inspection.errors)
-                validate_ps5_checklist(
-                    fh,
-                    header,
-                    inodes,
-                    inspection.file_inodes,
-                    inspection.warnings,
+                validate_fpt_maps(
+                    inspection.fpt_map,
+                    inspection.collision_map,
+                    expected_fpt,
                     inspection.errors,
-                    ekpfs=ekpfs,
-                    new_crypt=new_crypt,
                 )
 
-                try:
-                    (
-                        inspection.checked_files,
-                        inspection.data_crc32,
-                        inspection.manifest_sha256,
-                    ) = verify_file_payload_hashes(
+                # Payload-content passes (decode every file). Skipped for callers that
+                # only need structure, such as unpack, which decodes once while writing.
+                if verify_payloads:
+                    validate_ps5_checklist(
                         fh,
                         header,
                         inodes,
                         inspection.file_inodes,
+                        inspection.warnings,
                         inspection.errors,
                         ekpfs=ekpfs,
                         new_crypt=new_crypt,
                     )
-                except (OSError, ValueError) as exc:
-                    inspection.errors.append(f"failed to verify file payload hashes: {exc}")
 
-                if expected_crc32 is not None and inspection.data_crc32 != expected_crc32:
-                    inspection.errors.append(
-                        f"CRC32 mismatch: actual 0x{inspection.data_crc32:08X}, expected 0x{expected_crc32:08X}"
-                    )
-                if (
-                    expected_manifest_sha256 is not None
-                    and inspection.manifest_sha256.lower() != expected_manifest_sha256.lower()
-                ):
-                    inspection.errors.append(
-                        "Manifest SHA256 mismatch: actual "
-                        f"{inspection.manifest_sha256}, expected {expected_manifest_sha256.lower()}"
-                    )
+                    try:
+                        (
+                            inspection.checked_files,
+                            inspection.data_crc32,
+                            inspection.manifest_sha256,
+                        ) = verify_file_payload_hashes(
+                            fh,
+                            header,
+                            inodes,
+                            inspection.file_inodes,
+                            inspection.errors,
+                            ekpfs=ekpfs,
+                            new_crypt=new_crypt,
+                        )
+                    except (OSError, ValueError) as exc:
+                        inspection.errors.append(f"failed to verify file payload hashes: {exc}")
+
+                    if expected_crc32 is not None and inspection.data_crc32 != expected_crc32:
+                        inspection.errors.append(
+                            f"CRC32 mismatch: actual 0x{inspection.data_crc32:08X}, expected 0x{expected_crc32:08X}"
+                        )
+                    if (
+                        expected_manifest_sha256 is not None
+                        and inspection.manifest_sha256.lower() != expected_manifest_sha256.lower()
+                    ):
+                        inspection.errors.append(
+                            "Manifest SHA256 mismatch: actual "
+                            f"{inspection.manifest_sha256}, expected {expected_manifest_sha256.lower()}"
+                        )
 
                 reachable = (
                     set(inspection.file_inodes.values())
@@ -5594,12 +6462,479 @@ def verify_pfs_image(
     )
 
 
+class _LogicalFileView:
+    """Seekable, read-only view over one inode's logical payload.
+
+    Decodes PFSC blocks on demand (with a small LRU cache) so a consumer can
+    randomly seek into a compressed inner file without materializing it. Supports
+    the contiguous, unsigned layout produced by single-file packing; encryption is
+    handled transparently via :func:`read_image_bytes`.
+    """
+
+    _CACHE_BLOCKS: int = 16
+
+    def __init__(
+        self,
+        fh: BinaryIO,
+        header: ParsedHeader,
+        inode: ParsedInode,
+        ekpfs: bytes | None = None,
+        new_crypt: bool = False,
+    ) -> None:
+        self._fh: BinaryIO = fh
+        self._header: ParsedHeader = header
+        self._ekpfs: bytes | None = ekpfs
+        self._new_crypt: bool = new_crypt
+        self._base: int = inode.db[0] * header.block_size
+        self._compressed: bool = inode.is_compressed
+        self._size: int = inode.logical_size
+        self._pos: int = 0
+        self._cache: dict[int, bytes] = {}
+        self._order: list[int] = []
+        if self._compressed:
+            head: bytes = self._raw(self._base, consts.PFSC_HEADER_SIZE)
+            self._lbs, block_count, block_offsets_offset, _data_offset, _logical = _parse_pfsc_header(head)
+            offsets_blob: bytes = self._raw(self._base + block_offsets_offset, (block_count + 1) * 8)
+            self._offsets: list[int] = list(struct.unpack_from(f"<{block_count + 1}Q", offsets_blob, 0))
+
+    def _raw(self, offset: int, size: int) -> bytes:
+        return read_image_bytes(
+            self._fh,
+            self._header,
+            offset,
+            size,
+            ekpfs=self._ekpfs,
+            new_crypt=self._new_crypt,
+        )
+
+    def _decode_block(self, index: int) -> bytes:
+        cached: bytes | None = self._cache.get(index)
+        if cached is not None:
+            return cached
+        start: int = self._offsets[index]
+        stored: bytes = self._raw(self._base + start, self._offsets[index + 1] - start)
+        block: bytes = stored if len(stored) == self._lbs else comp.decompress_block(stored)
+        self._cache[index] = block
+        self._order.append(index)
+        if len(self._order) > self._CACHE_BLOCKS:
+            self._cache.pop(self._order.pop(0), None)
+        return block
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 1:
+            offset += self._pos
+        elif whence == 2:
+            offset += self._size
+        self._pos = max(0, offset)
+        return self._pos
+
+    def tell(self) -> int:
+        return self._pos
+
+    def read(self, size: int = -1) -> bytes:
+        end: int = self._size if size is None or size < 0 else min(self._pos + size, self._size)
+        if end <= self._pos:
+            return b""
+        if not self._compressed:
+            data: bytes = self._raw(self._base + self._pos, end - self._pos)
+            self._pos += len(data)
+            return data
+        out: bytearray = bytearray()
+        pos: int = self._pos
+        while pos < end:
+            block_index: int = pos // self._lbs
+            within: int = pos % self._lbs
+            take: int = min(self._lbs - within, end - pos)
+            out += self._decode_block(block_index)[within : within + take]
+            pos += take
+        self._pos = pos
+        return bytes(out)
+
+
+def open_inner_file_view(
+    image: Path,
+    ekpfs: bytes | None = None,
+    new_crypt: bool = False,
+) -> tuple[_LogicalFileView, BinaryIO, str] | None:
+    """Open a seekable view over a single-file image's inner payload.
+
+    Args:
+        image: Input PFS image path.
+        ekpfs: Optional EKPFS key material for encrypted images.
+        new_crypt: When True, use the alternate newCrypt key derivation path.
+
+    Returns:
+        ``(view, file_handle, inner_name)`` when the image holds exactly one file
+        stored in the contiguous, unsigned layout; otherwise ``None``. The caller
+        owns and must close ``file_handle``.
+    """
+    inspection: PFSImageInspection = inspect_pfs_image(
+        image=image, ekpfs=ekpfs, new_crypt=new_crypt, verify_payloads=False
+    )
+    if inspection.errors or inspection.header is None or len(inspection.file_inodes) != 1:
+        return None
+    rel_name, inode_num = next(iter(inspection.file_inodes.items()))
+    inode: ParsedInode = inspection.inodes[inode_num]
+    if inode.db_sig or inode.ib_sig or inode.blocks <= 0 or inode.logical_size <= 0:
+        return None  # signed/scattered/empty payloads are not served by the on-demand view
+    fh: BinaryIO = image.open("rb")
+    try:
+        view: _LogicalFileView = _LogicalFileView(fh, inspection.header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
+    except Exception:
+        fh.close()
+        raise
+    return view, fh, rel_name
+
+
+def _flatten_exfat_entries(
+    entries: list[ExfatEntry],
+) -> tuple[list[ExfatEntry], list[ExfatEntry]]:
+    """Split an exFAT entry tree into (directories, files), each depth-ordered."""
+    dirs: list[ExfatEntry] = []
+    files: list[ExfatEntry] = []
+
+    def _walk(nodes: list[ExfatEntry]) -> None:
+        for node in sorted(nodes, key=lambda n: n.rel_path.lower()):
+            if node.is_dir:
+                dirs.append(node)
+                _walk(node.children)
+            else:
+                files.append(node)
+
+    _walk(entries)
+    return dirs, files
+
+
+def verify_exfat_image(
+    image: Path, source: Path | None = None, *, compare_contents: bool = True
+) -> tuple[list[str], list[str]]:
+    """Verify a raw exFAT image optionally against a source directory.
+
+    When ``source`` is provided and ``compare_contents`` is True, the
+    verification performs a file-for-file SHA-256 comparison between the
+    source tree and the exFAT contents. Otherwise it performs a
+    lightweight structural sanity check by walking the directory tree.
+
+    Returns:
+        Tuple of ``(errors, warnings)``.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    fh: BinaryIO | None = None
+    try:
+        fh = image.open("rb")
+        reader = ExfatReader(fh)
+
+        # No source: require that we can walk the directory tree.
+        if source is None or not compare_contents:
+            try:
+                _ = reader.root_entries()
+            except ExfatError as exc:
+                errors.append(f"failed to walk exFAT directory tree: {exc}")
+            return errors, warnings
+
+        source = source.expanduser().resolve()
+        if not source.exists() or not source.is_dir():
+            errors.append(f"source directory does not exist: {source}")
+            return errors, warnings
+
+        def _hash_file(path: Path) -> str:
+            hasher = hashlib.sha256()
+            with path.open("rb") as src_fh:
+                for chunk in iter(lambda: src_fh.read(4 * 1024 * 1024), b""):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+
+        def _is_metadata_path(rel_path: str) -> bool:
+            base_name: str = Path(rel_path).name
+            base_lower: str = base_name.lower()
+            return base_name.startswith(".") or base_lower in {
+                "thumbs.db",
+                "desktop.ini",
+            }
+
+        # Build source map (case-insensitive keying to match exFAT behaviour).
+        src_hashes: dict[str, str] = {}
+        for candidate in sorted(source.rglob("*")):
+            if not candidate.is_file():
+                continue
+            rel: str = candidate.relative_to(source).as_posix()
+            if _is_metadata_path(rel):
+                continue
+            src_hashes[rel.lower()] = _hash_file(candidate)
+
+        # Build exFAT map.
+        extr_hashes: dict[str, str] = {}
+        for entry in reader.iter_files():
+            rel_path: str = entry.rel_path.replace("\\", "/").lstrip("/")
+            if _is_metadata_path(rel_path):
+                continue
+            key: str = rel_path.lower()
+            hasher = hashlib.sha256()
+            for chunk in reader.read_file(entry):
+                hasher.update(chunk)
+            extr_hashes[key] = hasher.hexdigest()
+
+        # Compare key sets.
+        missing: list[str] = sorted(k for k in src_hashes if k not in extr_hashes)
+        extra: list[str] = sorted(k for k in extr_hashes if k not in src_hashes)
+        if missing:
+            errors.append(
+                "missing files in exFAT image: " + ", ".join(missing[:20]) + (" ..." if len(missing) > 20 else "")
+            )
+        if extra:
+            errors.append("extra files in exFAT image: " + ", ".join(extra[:20]) + (" ..." if len(extra) > 20 else ""))
+
+        # Compare contents for common keys.
+        for key in sorted(set(src_hashes.keys()) & set(extr_hashes.keys())):
+            if src_hashes[key] != extr_hashes[key]:
+                errors.append(f"content mismatch for {key}")
+
+        return errors, warnings
+    except (OSError, ExfatError) as exc:
+        errors.append(f"failed to parse exFAT image: {exc}")
+        return errors, warnings
+    finally:
+        if fh is not None:
+            fh.close()
+
+
+def _normalize_extract_selectors(selectors: list[str] | None) -> list[str] | None:
+    """Normalize selector paths to POSIX-relative form, or None when unfiltered.
+
+    Args:
+        selectors: Raw selector strings, or None.
+
+    Returns:
+        A list of cleaned selectors (slashes normalized, leading/trailing slashes
+        and blanks dropped), or None when no usable selector remains.
+    """
+    if not selectors:
+        return None
+    cleaned: list[str] = []
+    for raw in selectors:
+        norm: str = raw.strip().replace("\\", "/").strip("/")
+        if norm:
+            cleaned.append(norm)
+    return cleaned or None
+
+
+def extract_exfat_image(
+    image: Path,
+    output_path: Path,
+    *,
+    progress: Progress | None = None,
+    selectors: list[str] | None = None,
+) -> PFSExtractionResult:
+    """Extract all files from a raw exFAT image into a directory.
+
+    Args:
+        image: exFAT image path.
+        output_path: Destination directory.
+        progress: Optional progress reporter.
+        selectors: Optional list of inner paths (files or directory prefixes)
+            to extract. When ``None``, everything is extracted.
+
+    Returns:
+        A structured extraction result.
+    """
+    result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
+
+    fh: BinaryIO | None = None
+    try:
+        fh = image.open("rb")
+        reader = ExfatReader(fh)
+        dirs, files = _flatten_exfat_entries(reader.root_entries())
+    except (OSError, ExfatError) as exc:
+        result.errors.append(f"failed to parse exFAT image: {exc}")
+        if fh is not None:
+            fh.close()
+        return result
+
+    if output_path.exists() and not output_path.is_dir():
+        result.errors.append(f"output path exists and is not a directory: {output_path}")
+        return result
+
+    selectors_norm: list[str] | None = _normalize_extract_selectors(selectors)
+    matched: set[str] = set()
+
+    def _selected(rel_path: str) -> bool:
+        if selectors_norm is None:
+            return True
+        hit: bool = False
+        for sel in selectors_norm:
+            if rel_path == sel or rel_path.startswith(sel + "/"):
+                matched.add(sel)
+                hit = True
+        return hit
+
+    dirs = [d for d in dirs if _selected(d.rel_path)]
+    files = [f for f in files if _selected(f.rel_path)]
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    for directory in dirs:
+        (output_path / directory.rel_path).mkdir(parents=True, exist_ok=True)
+        result.directories_created += 1
+
+    if selectors_norm is not None:
+        for sel in selectors_norm:
+            if sel not in matched:
+                result.warnings.append(f"--only: no exFAT entry matched '{sel}'")
+
+    total_bytes: int = sum(max(0, f.length) for f in files)
+    progress_total: int = max(total_bytes, 1)
+    last_reported: int = 0
+    update_interval: int = 8 * 1024 * 1024
+    if progress is not None:
+        progress.status(f"\nExtracting {len(files)} files from exFAT image to {output_path}...")
+
+    for file_entry in files:
+        target: Path = output_path / file_entry.rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with target.open("wb") as out_fh:
+                for chunk in reader.read_file(file_entry):
+                    out_fh.write(chunk)
+                    result.bytes_written += len(chunk)
+                    if progress is not None and result.bytes_written - last_reported >= update_interval:
+                        last_reported = result.bytes_written
+                        progress.step(
+                            "extract",
+                            min(result.bytes_written, total_bytes),
+                            progress_total,
+                            bytes_processed=result.bytes_written,
+                        )
+        except (OSError, ValueError, ExfatError) as exc:
+            result.errors.append(f"failed to extract '{file_entry.rel_path}': {exc}")
+            if fh is not None:
+                fh.close()
+            return result
+        result.files_written += 1
+
+    if progress is not None:
+        progress.step(
+            "extract",
+            progress_total,
+            progress_total,
+            bytes_processed=result.bytes_written,
+        )
+
+    if fh is not None:
+        fh.close()
+
+    return result
+
+
+def _extract_inner_exfat(
+    image: Path,
+    output_path: Path,
+    progress: Progress | None,
+    ekpfs: bytes | None,
+    new_crypt: bool,
+    selectors: list[str] | None = None,
+) -> PFSExtractionResult | None:
+    """Extract the contents of an inner exFAT image, or None if there isn't one.
+
+    Returns ``None`` (so the caller can fall back to normal unpack) when the image
+    is not a single inner file or that file is not an exFAT volume. When
+    ``selectors`` is given, only files and directories matching one of the
+    selectors (by exact path or directory prefix) are written.
+    """
+    opened: tuple[_LogicalFileView, BinaryIO, str] | None = open_inner_file_view(
+        image, ekpfs=ekpfs, new_crypt=new_crypt
+    )
+    if opened is None:
+        return None
+    view, fh, _inner_name = opened
+    try:
+        view.seek(0)
+        if view.read(len(EXFAT_SIGNATURE) + 3)[3:] != EXFAT_SIGNATURE:
+            return None
+        reader: ExfatReader = ExfatReader(view)
+        result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
+        if output_path.exists() and not output_path.is_dir():
+            result.errors.append(f"output path exists and is not a directory: {output_path}")
+            return result
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        dirs, files = _flatten_exfat_entries(reader.root_entries())
+
+        # Optional cherry-pick: keep only entries matching a selector (exact path
+        # or directory prefix). Each selected file's parents are created in the
+        # write loop, so here we only pre-create directories that match directly.
+        selectors_norm: list[str] | None = _normalize_extract_selectors(selectors)
+        matched: set[str] = set()
+
+        def _selected(rel_path: str) -> bool:
+            if selectors_norm is None:
+                return True
+            hit: bool = False
+            for sel in selectors_norm:
+                if rel_path == sel or rel_path.startswith(sel + "/"):
+                    matched.add(sel)
+                    hit = True
+            return hit
+
+        dirs = [d for d in dirs if _selected(d.rel_path)]
+        files = [f for f in files if _selected(f.rel_path)]
+
+        for directory in dirs:
+            (output_path / directory.rel_path).mkdir(parents=True, exist_ok=True)
+            result.directories_created += 1
+
+        if selectors_norm is not None:
+            for sel in selectors_norm:
+                if sel not in matched:
+                    result.warnings.append(f"--only: no inner exFAT entry matched '{sel}'")
+
+        total_bytes: int = sum(f.length for f in files)
+        progress_total: int = max(total_bytes, 1)
+        last_reported: int = 0
+        update_interval: int = 8 * 1024 * 1024
+        if progress is not None:
+            progress.status(f"\nExtracting {len(files)} files from inner exFAT to {output_path}...")
+        for file_entry in files:
+            target: Path = output_path / file_entry.rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with target.open("wb") as out_fh:
+                    for chunk in reader.read_file(file_entry):
+                        out_fh.write(chunk)
+                        result.bytes_written += len(chunk)
+                        if progress is not None and result.bytes_written - last_reported >= update_interval:
+                            last_reported = result.bytes_written
+                            progress.step(
+                                "extract",
+                                min(result.bytes_written, total_bytes),
+                                progress_total,
+                                bytes_processed=result.bytes_written,
+                            )
+            except (OSError, ValueError) as exc:
+                result.errors.append(f"failed to extract '{file_entry.rel_path}': {exc}")
+                return result
+            result.files_written += 1
+        if progress is not None:
+            progress.step(
+                "extract",
+                progress_total,
+                progress_total,
+                bytes_processed=result.bytes_written,
+            )
+        return result
+    finally:
+        fh.close()
+
+
 def extract_pfs_image(
     image: Path,
     output_path: Path,
     progress: Progress | None = None,
     ekpfs: bytes | None = None,
     new_crypt: bool = False,
+    deep: bool = False,
+    selectors: list[str] | None = None,
 ) -> PFSExtractionResult:
     """Extract all logical files from a PFS image.
 
@@ -5609,12 +6944,35 @@ def extract_pfs_image(
         progress: Optional progress reporter.
         ekpfs: Optional EKPFS key material for encrypted images.
         new_crypt: When True, use the alternate newCrypt key derivation path.
+        deep: When True and the image wraps a single inner exFAT, extract the
+            files inside that exFAT instead of the inner image file itself.
+        selectors: Optional list of inner exFAT paths (files or directory
+            prefixes) to extract; when given, only matching entries are written.
+            Only honored together with ``deep``.
 
     Returns:
         A structured extraction result.
     """
     result: PFSExtractionResult = PFSExtractionResult(image=image, output_path=output_path, bytes_written=0)
-    inspection: PFSImageInspection = inspect_pfs_image(image=image, ekpfs=ekpfs, new_crypt=new_crypt)
+
+    if selectors and not deep:
+        result.warnings.append("path selection is only supported with --deep; extracting everything")
+
+    # Deep mode: descend one level into a wrapped exFAT and extract its contents
+    # with no temporary inner image. Falls back to a normal unpack otherwise.
+    if deep:
+        deep_result: PFSExtractionResult | None = _extract_inner_exfat(
+            image, output_path, progress, ekpfs, new_crypt, selectors=selectors
+        )
+        if deep_result is not None:
+            return deep_result
+        result.warnings.append("--deep: no inner exFAT found; extracting image contents as-is")
+
+    # Structure only: extraction decodes each payload once while writing, so the
+    # upfront payload-hash verification would be a redundant second decode.
+    inspection: PFSImageInspection = inspect_pfs_image(
+        image=image, ekpfs=ekpfs, new_crypt=new_crypt, verify_payloads=False
+    )
     result.warnings.extend(inspection.warnings)
     result.errors.extend(inspection.errors)
 
@@ -5629,7 +6987,10 @@ def extract_pfs_image(
 
     directory_targets: list[Path] = [
         output_path / Path(rel_dir)
-        for rel_dir in sorted(inspection.dir_inodes.keys(), key=lambda value: (value.count("/"), value.lower(), value))
+        for rel_dir in sorted(
+            inspection.dir_inodes.keys(),
+            key=lambda value: (value.count("/"), value.lower(), value),
+        )
         if rel_dir != ""
     ]
     file_targets: list[tuple[str, Path, int]] = [
@@ -5659,26 +7020,50 @@ def extract_pfs_image(
                     directory_target.mkdir(parents=True, exist_ok=False)
                     result.directories_created += 1
 
-            total_files: int = len(file_targets)
-            for index, (rel_path, file_target, inode_num) in enumerate(file_targets, start=1):
+            # Drive progress by logical bytes so a single large file shows smooth
+            # intra-file movement instead of one jump to 100% at the end.
+            total_bytes: int = sum(
+                max(0, inspection.inodes[inode_num].logical_size) for _rel, _target, inode_num in file_targets
+            )
+            progress_total: int = max(total_bytes, 1)
+            last_reported: int = 0
+            update_interval: int = 8 * 1024 * 1024
+            for rel_path, file_target, inode_num in file_targets:
                 inode: ParsedInode = inspection.inodes[inode_num]
                 file_target.parent.mkdir(parents=True, exist_ok=True)
                 # Stream logical blocks straight to disk to keep memory flat for large files.
                 try:
                     with file_target.open("wb") as out_fh:
                         for chunk in iter_inode_logical_blocks(
-                            fh, inspection.header, inode, ekpfs=ekpfs, new_crypt=new_crypt
+                            fh,
+                            inspection.header,
+                            inode,
+                            ekpfs=ekpfs,
+                            new_crypt=new_crypt,
                         ):
                             out_fh.write(chunk)
                             result.bytes_written += len(chunk)
+                            if progress is not None and result.bytes_written - last_reported >= update_interval:
+                                last_reported = result.bytes_written
+                                progress.step(
+                                    "extract",
+                                    min(result.bytes_written, total_bytes),
+                                    progress_total,
+                                    bytes_processed=result.bytes_written,
+                                )
                 except ValueError as exc:
                     result.errors.append(f"failed to decode file '{rel_path}' payload: {exc}")
                     return result
 
                 result.files_written += 1
 
-                if progress is not None:
-                    progress.step("extract", index, total_files, bytes_processed=result.bytes_written)
+            if progress is not None:
+                progress.step(
+                    "extract",
+                    progress_total,
+                    progress_total,
+                    bytes_processed=result.bytes_written,
+                )
     except (OSError, ValueError) as exc:
         result.errors.append(f"failed to extract image: {exc}")
 
