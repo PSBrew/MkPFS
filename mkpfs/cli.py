@@ -12,7 +12,10 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from enum import StrEnum
+try:
+    from enum import StrEnum  # Python 3.11+
+except ImportError:
+    from backports.strenum import StrEnum  # Python 3.10 and below
 from pathlib import Path
 
 from . import __version__, consts
