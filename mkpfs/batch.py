@@ -414,7 +414,6 @@ def run_batch(
                 elapsed_seconds=0.0,
             )
             results.append(result)
-            info(f"  [{idx}/{total}] 🔍 Would pack {item.kind} '{item.name}' → {output_path}")
             print_item_status(index=idx, total=total, result=result)
             continue
 

@@ -2045,18 +2045,16 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
     """Batch convert multiple items in a source directory into .ffpfsc images."""
     source_dir: Path = Path(args.source_dir).expanduser().resolve()
     output_dir: Path = Path(args.output_dir).expanduser().resolve()
+    print_version_header()
     try:
         from .batch import (
             BatchItem,
             BatchSummary,
-            _validate_batch_dirs,
             discover_batch_items,
             print_batch_pre_stats,
             print_batch_summary,
             run_batch,
         )
-
-        _validate_batch_dirs(source_dir=source_dir, output_dir=output_dir)
 
         # Resolve --block-size the same way as the pack-folder command so the
         # user-supplied value is honoured.  Batch does not support auto-fit
@@ -2107,12 +2105,12 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
             items=items,
         )
         print_batch_summary(summary)
+        info(f"Total elapsed: {summary.elapsed_seconds:.1f}s")
+        info(f"Output directory: {output_dir}")
+        return 0 if summary.errors == 0 else 1
     except BuildError as exc:
         error(str(exc))
         return 1
-    info(f"Total elapsed: {summary.elapsed_seconds:.1f}s")
-    info(f"Output directory: {output_dir}")
-    return 0 if summary.errors == 0 else 1
 
 
 def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:

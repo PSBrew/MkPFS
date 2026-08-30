@@ -2986,3 +2986,32 @@ class TestCliTreeDeep(CliTestCase):
             rc = cli_mkpfs_main(["tree", str(out)])
         self.assertEqual(rc, 0)
         self.assertIn("PPSA25872.exfat", buf.getvalue())
+
+
+class TestCliBatchRun(CliTestCase):
+    """`batch` command error handling: clean error messages, no tracebacks."""
+
+    def test_batch_invalid_block_size_gives_clean_error(self) -> None:
+        """--block-size 7 (not power of two) → rc 1, clean error, no traceback."""
+        src = self.make_temp_path()
+        out = self.make_temp_path()
+        err_buf = StringIO()
+        with redirect_stdout(StringIO()), redirect_stderr(err_buf):
+            rc = cli_mkpfs_main(["batch", str(src), str(out), "--block-size", "7"])
+        self.assertEqual(rc, 1)
+        stderr = err_buf.getvalue()
+        self.assertIn("--block-size must be a power of two", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_batch_nonexistent_source_gives_clean_error(self) -> None:
+        """Nonexistent source dir → rc 1, clean error with path, no traceback."""
+        out = self.make_temp_path()
+        missing_src = self.make_temp_path() / "does_not_exist"
+        err_buf = StringIO()
+        with redirect_stdout(StringIO()), redirect_stderr(err_buf):
+            rc = cli_mkpfs_main(["batch", str(missing_src), str(out), "--block-size", "65536"])
+        self.assertEqual(rc, 1)
+        stderr = err_buf.getvalue()
+        self.assertIn("unable to read source directory", stderr)
+        self.assertIn(str(missing_src), stderr)
+        self.assertNotIn("Traceback", stderr)

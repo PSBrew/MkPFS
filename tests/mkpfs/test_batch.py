@@ -889,8 +889,8 @@ class TestBatchReporting(unittest.TestCase):
         # Dry-run suffix
         self.assertIn("dry-run (no output written)", msgs[3])
 
-    def test_run_batch_dry_run_logging_order(self) -> None:
-        """dry_run prints 'Would pack' first, then per-item status second."""
+    def test_run_batch_dry_run_single_info_line(self) -> None:
+        """dry_run prints a single per-item status line (no separate announce)."""
         import tempfile
 
         from mkpfs import batch as batch_module
@@ -910,14 +910,11 @@ class TestBatchReporting(unittest.TestCase):
                 )
 
         msgs = [c.args[0] for c in mock_info.call_args_list]
-        self.assertGreaterEqual(len(msgs), 2)
-        # First info call: announce line
-        self.assertIn("Would pack folder 'GameA'", msgs[0])
+        # Exactly one info line per item: the print_item_status output.
+        self.assertEqual(len(msgs), 1)
         self.assertIn("[1/1]", msgs[0])
-        # Second info call: per-item status line
-        self.assertIn("dry-run (no output written)", msgs[1])
-        self.assertIn("[1/1]", msgs[1])
-        self.assertIn("GameA", msgs[1])
+        self.assertIn("GameA", msgs[0])
+        self.assertIn("dry-run (no output written)", msgs[0])
 
     def test_print_batch_summary_outputs_table_and_rows(self) -> None:
         from mkpfs import batch as batch_module
