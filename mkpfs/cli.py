@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+
 try:
     from enum import StrEnum  # Python 3.11+
 except ImportError:
