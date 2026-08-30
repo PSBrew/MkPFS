@@ -105,13 +105,25 @@ def discover_batch_items(source_dir: Path) -> list[BatchItem]:
     Returns items sorted by ``name.lower()`` for deterministic ordering.
     """
     items: list[BatchItem] = []
-    for entry in source_dir.iterdir():
+    try:
+        entries = list(source_dir.iterdir())
+    except OSError as exc:
+        from .pfs import BuildError
+
+        raise BuildError(f"unable to read source directory: {source_dir}: {exc}") from exc
+    for entry in entries:
         name: str = entry.name
         if name.startswith(".") or is_ignored_name(name):
             continue
-        if entry.is_dir():
+        try:
+            is_dir = entry.is_dir()
+            is_file = (not is_dir) and entry.is_file()
+        except OSError as exc:
+            warning(f"Skipping unreadable entry '{name}': {exc}")
+            continue
+        if is_dir:
             items.append(BatchItem(name=name, source=entry, kind="folder"))
-        elif entry.is_file():
+        elif is_file:
             suffix: str = entry.suffix.lower()
             if suffix in (".exfat", ".ffpkg"):
                 items.append(BatchItem(name=name, source=entry, kind="file"))
@@ -128,8 +140,10 @@ def _validate_batch_dirs(*, source_dir: Path, output_dir: Path) -> None:
     """Validate source and output directory constraints.
 
     Raises:
-        BuildError: If *source_dir* is missing, not a directory, or if
-            *output_dir* resolves inside *source_dir*.
+        BuildError: If *source_dir* is missing or not a directory, or if
+            *output_dir* is a strict descendant of *source_dir* (i.e. inside
+            it but not equal to it).  Writing output directly into the source
+            directory (output_dir == source_dir) is allowed.
     """
     from .pfs import BuildError
 
@@ -137,7 +151,7 @@ def _validate_batch_dirs(*, source_dir: Path, output_dir: Path) -> None:
         raise BuildError(f"source directory does not exist or is not a directory: {source_dir}")
     resolved_src: Path = source_dir.resolve()
     resolved_out: Path = output_dir.resolve()
-    if resolved_out == resolved_src or resolved_src in resolved_out.parents:
+    if resolved_src in resolved_out.parents:
         raise BuildError("output directory cannot be inside the source directory")
 
 
@@ -191,6 +205,8 @@ def print_item_status(*, index: int, total: int, result: BatchItemResult) -> Non
         icon = "✅"
     elif result.status == "skipped":
         icon = "⏭"
+    elif result.status == "dry_run":
+        icon = "🔍"
     else:
         icon = "❌"
 
@@ -209,6 +225,8 @@ def print_item_status(*, index: int, total: int, result: BatchItemResult) -> Non
         if len(msg) > 80:
             msg = msg[:77] + "..."
         parts.append(f"→ {msg}")
+    elif result.status == "dry_run":
+        parts.append("→ dry-run (no output written)")
 
     info("  " + "  ".join(parts))
 
@@ -314,8 +332,15 @@ def run_batch(
     overwrite: bool = False,
     pack_flags: dict[str, Any],
     progress: Any = None,
+    items: list[BatchItem] | None = None,
 ) -> BatchSummary:
     """Discover items, pack each one, and return a summary.
+
+    The list of items to process is precalculated at the very start of this
+    function (either discovered from *source_dir* or taken from *items* when
+    provided by the caller).  Only those originally-identified files are
+    processed; any new files appearing in *source_dir* later (e.g. output
+    written into the same directory) are ignored.
 
     For each discovered item:
 
@@ -342,17 +367,23 @@ def run_batch(
     )
 
     _validate_batch_dirs(source_dir=source_dir, output_dir=output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    items: list[BatchItem] = discover_batch_items(source_dir)
-    if not items:
+    # Precalculate the file list at the very start so only those
+    # originally-identified files are processed; any new files appearing
+    # later (e.g. output written into the same directory) are ignored.
+    batch_items: list[BatchItem] = items if items is not None else discover_batch_items(source_dir)
+    if not batch_items:
         return BatchSummary(results=[], elapsed_seconds=0.0)
+
+    # output_dir is created lazily inside the loop, only when an actual
+    # conversion is about to happen (skipped/dry-run items don't write).
 
     batch_start: float = time.time()
     results: list[BatchItemResult] = []
     dry_run: bool = pack_flags.get("dry_run", False)
+    total: int = len(batch_items)
 
-    for idx, item in enumerate(items, start=1):
+    for idx, item in enumerate(batch_items, start=1):
         output_path: Path = output_dir / f"{item.name}.ffpfsc"
         item_start: float = time.time()
 
@@ -368,7 +399,7 @@ def run_batch(
                 compressed_size=output_path.stat().st_size,
             )
             results.append(result)
-            print_item_status(index=idx, total=len(items), result=result)
+            print_item_status(index=idx, total=total, result=result)
             continue
 
         if dry_run:
@@ -383,10 +414,15 @@ def run_batch(
                 elapsed_seconds=0.0,
             )
             results.append(result)
-            info(f"  [{idx}/{len(items)}] 🔍 {item.name} → would pack to {output_path}")
+            info(f"  [{idx}/{total}] 🔍 Would pack {item.kind} '{item.name}' → {output_path}")
+            print_item_status(index=idx, total=total, result=result)
             continue
 
+        # Verbose: announce what is about to be converted and where.
+        info(f"  [{idx}/{total}] 📦 Converting {item.kind} '{item.name}' → {output_path}")
+
         try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             stats: BuildStats
             if item.kind == "folder":
                 stats = build_pfs_stream_from_exfat(
@@ -454,7 +490,7 @@ def run_batch(
                 except Exception as exc:  # pragma: no cover - defensive
                     result.status = "error"
                     result.error_message = f"verification failed: {exc}"
-            print_item_status(index=idx, total=len(items), result=result)
+            print_item_status(index=idx, total=total, result=result)
 
         except BuildError as exc:
             elapsed = time.time() - item_start
@@ -470,7 +506,7 @@ def run_batch(
                     error_message=str(exc),
                 )
             )
-            warning(f"  [{idx}/{len(items)}] ❌ {item.name} failed: {exc}")
+            warning(f"  [{idx}/{total}] ❌ {item.name} failed: {exc}")
             continue
         except Exception as exc:
             elapsed = time.time() - item_start
@@ -486,7 +522,7 @@ def run_batch(
                     error_message=str(exc),
                 )
             )
-            warning(f"  [{idx}/{len(items)}] ❌ {item.name} failed: {exc}")
+            warning(f"  [{idx}/{total}] ❌ {item.name} failed: {exc}")
             continue
 
     batch_elapsed: float = time.time() - batch_start

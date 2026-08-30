@@ -278,7 +278,8 @@ class TestValidateBatchDirs(unittest.TestCase):
             _validate_batch_dirs(source_dir=src, output_dir=out)
         self.assertIn("does not exist", str(ctx.exception))
 
-    def test_output_inside_source(self) -> None:
+    def test_output_inside_source_rejected(self) -> None:
+        """Output as a strict descendant of source is still rejected."""
         from mkpfs.pfs import BuildError
 
         src = self._make_temp_dir()
@@ -287,6 +288,11 @@ class TestValidateBatchDirs(unittest.TestCase):
         with self.assertRaises(BuildError) as ctx:
             _validate_batch_dirs(source_dir=src, output_dir=out)
         self.assertIn("output directory cannot be inside", str(ctx.exception))
+
+    def test_output_same_as_source_allowed(self) -> None:
+        """output_dir == source_dir is allowed (not rejected)."""
+        src = self._make_temp_dir()
+        _validate_batch_dirs(source_dir=src, output_dir=src)  # no raise
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +657,7 @@ class TestRunBatch(unittest.TestCase):
         self.assertIn("verification failed", summary.results[0].error_message)
 
     def test_run_batch_output_inside_source_rejected(self) -> None:
+        """Output as a strict descendant of source is still rejected by run_batch."""
         src = self._make_temp_dir()
         out = src / "sub"
         out.mkdir()
@@ -663,6 +670,68 @@ class TestRunBatch(unittest.TestCase):
                 output_dir=out,
                 pack_flags=self._default_pack_flags(),
             )
+
+    def test_run_batch_same_output_as_source_allowed(self) -> None:
+        """output_dir == source_dir is allowed by run_batch."""
+        src = self._make_temp_dir()
+        _populate_source_dir(src)
+
+        with patch(
+            "mkpfs.pfs.build_pfs_stream_from_exfat",
+            side_effect=lambda **kw: _mock_build(kw["output_path"], 1000, 800),
+        ):
+            summary = run_batch(
+                source_dir=src,
+                output_dir=src,
+                pack_flags=self._default_pack_flags(),
+            )
+
+        self.assertEqual(summary.converted, 3)
+        for name in ("GameA", "GameB", "GameC"):
+            self.assertTrue((src / f"{name}.ffpfsc").exists())
+
+    def test_run_batch_verbose_before_line(self) -> None:
+        """run_batch prints a 'Converting …' line before each actual conversion."""
+        src = self._make_temp_dir()
+        (src / "GameA").mkdir()
+        (src / "GameA" / "f.txt").write_text("hi")
+        out = self._make_temp_dir()
+
+        with (
+            patch(
+                "mkpfs.pfs.build_pfs_stream_from_exfat",
+                side_effect=lambda **kw: _mock_build(kw["output_path"], 1000, 800),
+            ),
+            patch("mkpfs.batch.info") as mock_info,
+        ):
+            summary = run_batch(
+                source_dir=src,
+                output_dir=out,
+                pack_flags=self._default_pack_flags(),
+            )
+
+        self.assertEqual(summary.converted, 1)
+        called = " ".join(c.args[0] for c in mock_info.call_args_list)
+        self.assertIn("Converting", called)
+        self.assertIn("[1/1]", called)
+        self.assertIn("GameA", called)
+
+    def test_run_batch_dry_run_does_not_create_output_dir(self) -> None:
+        """dry-run must not create the output directory."""
+        src = self._make_temp_dir()
+        (src / "GameA").mkdir()
+        (src / "GameA" / "f.txt").write_text("hi")
+        out_root = self._make_temp_dir()
+        out = out_root / "nonexistent_output"
+
+        summary = run_batch(
+            source_dir=src,
+            output_dir=out,
+            pack_flags=self._default_pack_flags(dry_run=True),
+        )
+
+        self.assertFalse(out.exists(), "dry-run should not create output directory")
+        self.assertEqual(summary.dry_run, 1)
 
 
 class TestBatchReporting(unittest.TestCase):
@@ -792,14 +861,24 @@ class TestBatchReporting(unittest.TestCase):
         long_msg = "E" * 200
         r_err = batch_module.BatchItemResult(name="GameC", kind="folder", status="error", error_message=long_msg)
 
+        # Dry run
+        r_dry = batch_module.BatchItemResult(
+            name="GameD",
+            kind="folder",
+            status="dry_run",
+            output_path=Path("/out/GameD.ffpfsc"),
+            raw_size=500,
+        )
+
         with patch("mkpfs.batch.info") as mock_info:
-            batch_module.print_item_status(index=1, total=3, result=r_conv)
-            batch_module.print_item_status(index=2, total=3, result=r_skip)
-            batch_module.print_item_status(index=3, total=3, result=r_err)
+            batch_module.print_item_status(index=1, total=4, result=r_conv)
+            batch_module.print_item_status(index=2, total=4, result=r_skip)
+            batch_module.print_item_status(index=3, total=4, result=r_err)
+            batch_module.print_item_status(index=4, total=4, result=r_dry)
 
         msgs = [c.args[0] for c in mock_info.call_args_list]
         combined = " ".join(msgs)
-        self.assertIn("[1/3]", combined)
+        self.assertIn("[1/4]", combined)
         self.assertIn("→", combined)
         # Savings percentage formatted
         self.assertIn("saved", combined)
@@ -807,6 +886,38 @@ class TestBatchReporting(unittest.TestCase):
         self.assertIn("skipped", combined)
         # Ensure long error got truncated (ends with '...')
         self.assertIn("...", combined)
+        # Dry-run suffix
+        self.assertIn("dry-run (no output written)", msgs[3])
+
+    def test_run_batch_dry_run_logging_order(self) -> None:
+        """dry_run prints 'Would pack' first, then per-item status second."""
+        import tempfile
+
+        from mkpfs import batch as batch_module
+
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "src"
+            src.mkdir()
+            (src / "GameA").mkdir()
+            (src / "GameA" / "f.txt").write_text("hi")
+            out = Path(d) / "out"
+
+            with patch("mkpfs.batch.info") as mock_info:
+                batch_module.run_batch(
+                    source_dir=src,
+                    output_dir=out,
+                    pack_flags={"dry_run": True},
+                )
+
+        msgs = [c.args[0] for c in mock_info.call_args_list]
+        self.assertGreaterEqual(len(msgs), 2)
+        # First info call: announce line
+        self.assertIn("Would pack folder 'GameA'", msgs[0])
+        self.assertIn("[1/1]", msgs[0])
+        # Second info call: per-item status line
+        self.assertIn("dry-run (no output written)", msgs[1])
+        self.assertIn("[1/1]", msgs[1])
+        self.assertIn("GameA", msgs[1])
 
     def test_print_batch_summary_outputs_table_and_rows(self) -> None:
         from mkpfs import batch as batch_module
