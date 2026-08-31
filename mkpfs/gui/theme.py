@@ -1,5 +1,7 @@
 """Neon glassmorphism theme constants for the mkpfs GUI."""
 
+import sys
+
 # Backgrounds — deep space
 _BG_DEEP = "#0B0E17"  # deepest background
 _BG_PANEL = "#121626"  # card / panel body
@@ -28,7 +30,10 @@ _WARNING = _NEON_AMBER
 # UI constants
 _SIDEBAR_W: int = 210
 _CORNER: int = 14
-_FONT_MONO = ("Consolas", 12)
+_MONO_FAMILY: str = (
+    "Consolas" if sys.platform.startswith("win") else "Menlo" if sys.platform == "darwin" else "DejaVu Sans Mono"
+)
+_FONT_MONO = (_MONO_FAMILY, 12)
 _FONT_UI = ("Segoe UI", 13)
 _FONT_LABEL = ("Segoe UI", 11)
 _FONT_SMALL = ("Segoe UI", 10)
