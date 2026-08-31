@@ -11,6 +11,25 @@ import logging
 import os
 import sys
 
+# Icon maps kept at module scope so fallback logic can force ASCII without
+# consulting `supports_utf8()` again during error handling.
+UTF8_ICON_MAP: dict[str, str] = {
+    "info": "ℹ️",
+    "ok": "✅",
+    "warning": "⚠️",
+    "error": "❌",
+    "file": "📄",
+    "success": "🎉",
+}
+ASCII_ICON_MAP: dict[str, str] = {
+    "info": "INFO",
+    "ok": "OK",
+    "warning": "WARN",
+    "error": "ERROR",
+    "file": "FILE",
+    "success": "SUCCESS",
+}
+
 
 def supports_utf8() -> bool:
     """Return True when terminal appears to support UTF-8 icons.
@@ -29,17 +48,8 @@ def supports_utf8() -> bool:
 
 def icon(name: str | None) -> str:
     """Map a semantic icon name to a UTF-8 glyph or an ASCII fallback."""
-    utf8: dict[str, str] = {"info": "ℹ️", "ok": "✅", "warning": "⚠️", "error": "❌", "file": "📄", "success": "🎉"}
-    ascii_map: dict[str, str] = {
-        "info": "INFO",
-        "ok": "OK",
-        "warning": "WARN",
-        "error": "ERROR",
-        "file": "FILE",
-        "success": "SUCCESS",
-    }
     name_key: str = name or ""
-    return utf8.get(name_key, "") if supports_utf8() else ascii_map.get(name_key, "")
+    return UTF8_ICON_MAP.get(name_key, "") if supports_utf8() else ASCII_ICON_MAP.get(name_key, "")
 
 
 def log(message: str, level: int = logging.INFO, icon_name: str | None = None) -> None:
@@ -77,10 +87,15 @@ def log(message: str, level: int = logging.INFO, icon_name: str | None = None) -
             color_code = ""
 
     colored_text: str = f"{color_code}{text}{reset_code}" if color_code else text
-    if level >= logging.ERROR:
-        print(colored_text, file=sys.stderr)
-    else:
-        print(colored_text, file=sys.stdout)
+    stream = sys.stderr if level >= logging.ERROR else sys.stdout
+    try:
+        print(colored_text, file=stream)
+    except UnicodeEncodeError:
+        # Fall back to ASCII-only icon + ASCII-safe message when the stream codec
+        # (e.g. cp1252 on Windows pipes) cannot encode the original text.
+        ascii_prefix: str = (ASCII_ICON_MAP.get(icon_name or "", "") + " ") if icon_name else ""
+        ascii_message: str = str(message).encode("ascii", "replace").decode()
+        print(ascii_prefix + ascii_message, file=stream)
 
 
 def info(message: str, icon_name: str | None = None) -> None:

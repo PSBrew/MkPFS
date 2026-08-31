@@ -1,6 +1,7 @@
 """Base panel class for the mkpfs GUI operation panels."""
 
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -20,24 +21,11 @@ from ..theme import (
 )
 from ..widgets import GlassCard, LogPane, NeonButton, SectionLabel
 
-
 # ---------------------------------------------------------------------------
 # Panel base class
 # ---------------------------------------------------------------------------
-class QueuedProgress:
-    """Adapter that forwards progress events to a queue for UI-thread polling.
-
-    Wired as ``default_listener`` so **every** Progress instance created during
-    an in-process build automatically pushes progress/status tuples to the
-    queue.  The panel's ``_poll_log_queue`` drains the queue and updates the
-    progress bar / phase label on the UI thread.
-    """
-
-    def __init__(self, q: queue.Queue) -> None:
-        self._q = q
-
-    def __call__(self, action: str, *args: Any) -> None:
-        self._q.put_nowait((action, *args))
+# Matches pbar.py progress lines: [##########----------] N% phase
+_PROGRESS_RE: re.Pattern[str] = re.compile(r"^\[[#-]+\]\s*(\d+)%\s*(\S+)")
 
 
 class BasePanel(ctk.CTkFrame):
@@ -115,11 +103,6 @@ class BasePanel(ctk.CTkFrame):
         )
         self._phase_label.pack(anchor="w", padx=26, pady=(0, 4))
 
-        # Progress event queue — QueuedProgress is registered as the module-level
-        # listener so every background-phase Progress.step() / status() call
-        # pushes structured tuples here instead of writing \r-delimited stderr.
-        self._progress_queue: queue.Queue = queue.Queue()
-        self._queued_progress: QueuedProgress = QueuedProgress(self._progress_queue)
         self._progress.stop()
         self._progress.set(0)
 
@@ -216,14 +199,25 @@ class BasePanel(ctk.CTkFrame):
 
     def _poll_log_queue(self) -> None:
         """Drain the log queue and update the UI; reschedules itself."""
-        # Drain progress events (pbar listener)
-        self._drain_progress_events()
-
         # Drain log messages
         try:
             while True:
                 tag, text = self._log_queue.get_nowait()
-                if tag == "error":
+                if tag == "__progress__":
+                    # Progress update from subprocess: format "pct\tphase"
+                    parts: list[str] = text.split("\t", 1)
+                    pct: int = int(parts[0]) if parts and parts[0] else 0
+                    phase: str = parts[1] if len(parts) > 1 else ""
+                    if self._progress.cget("mode") != "determinate":
+                        self._progress.stop()
+                        self._progress.configure(mode="determinate")
+                        self._progress.set(0)
+                    self._progress.set(max(0.0, min(1.0, pct / 100.0)))
+                    if phase:
+                        self._phase_label.configure(text=phase)
+                    self._last_phase = phase
+                    self._last_progress = (pct, 100)
+                elif tag == "error":
                     self._failed = True
                     self._log.append(text, tag)
                 elif tag == "__done__":
@@ -268,42 +262,6 @@ class BasePanel(ctk.CTkFrame):
             pass
         self.after(80, self._poll_log_queue)
 
-    def _drain_progress_events(self) -> None:
-        """Drain progress events from the progress queue and update widgets."""
-        try:
-            while True:
-                action, *args = self._progress_queue.get_nowait()
-                if action == "step":
-                    phase_name, done, total, _bytes_processed = args
-                    # Emit a log line when a phase completes (done reaches total)
-                    # or when the phase changes to a new one.
-                    if phase_name != self._last_phase and self._last_phase:
-                        prev_done, prev_total = self._last_progress
-                        pct: int = int(prev_done / prev_total * 100) if prev_total > 0 else 100
-                        self._emit(f"✓ {self._last_phase}: {pct}%", "success")
-                    self._last_phase = phase_name
-                    self._last_progress = (done, total)
-                    # Switch to determinate mode on first progress event
-                    if self._progress.cget("mode") != "determinate":
-                        self._progress.stop()
-                        self._progress.configure(mode="determinate")
-                        self._progress.set(0)
-                    if total > 0:
-                        ratio = done / total
-                    else:
-                        ratio = 0.0
-                    # Clamp ratio to [0.0, 1.0] to guard against out-of-range listener values
-                    ratio = max(0.0, min(1.0, ratio))
-                    self._progress.set(ratio)
-                    # Update phase label with the current operation name
-                    if phase_name:
-                        self._phase_label.configure(text=phase_name)
-                elif action == "status":
-                    (message,) = args
-                    self._phase_label.configure(text=message.strip())
-        except queue.Empty:
-            pass
-
     def _on_export_log(self) -> None:
         """Open a save dialog and write the current log content to a file."""
         import json as _json
@@ -341,38 +299,44 @@ class BasePanel(ctk.CTkFrame):
     def _run_mkpfs(self, args: list[str]) -> None:
         r"""Run mkpfs as a child process and stream each output line to the log pane.
 
-        The CLI runs in a separate process (``sys.executable --gui-subprocess …``)
-        rather than in-process so the GUI's drawing thread is never blocked by
-        long-running compression/multiprocessing work.  The spawned process handle
-        is stored on ``self._proc`` so a future stop button can call
-        ``terminate()``.
+        The CLI runs in a separate process so the GUI's drawing thread is never
+        blocked by long-running compression/multiprocessing work.  The spawned
+        process handle is stored on ``self._proc`` so a future stop button can
+        call ``terminate()``.
+
+        Progress lines from ``pbar.py`` (``\r``-delimited ``[bar] N% phase``
+        updates) are parsed and forwarded to the UI thread as ``__progress__``
+        events so the determinate progress bar tracks real progress.  Other
+        output lines are emitted to the log pane as usual.
 
         On Windows a console-window flash is suppressed via
-        ``CREATE_NO_WINDOW``.  ``stdin`` is fed ``"y\\n"`` so any
-        ``Overwrite? [Y/n]`` prompt is auto-confirmed (matching the previous
-        in-process ``builtins.input`` patch).  Progress-bar determinate mode is
-        not available across a process boundary; the log pane still shows all
-        output.
+        ``CREATE_NO_WINDOW``.  ``stdin`` is fed ``"y\n"`` so any
+        ``Overwrite? [Y/n]`` prompt is auto-confirmed.
 
         Args:
             args: CLI argument list passed verbatim to the CLI entrypoint.
         """
         self._emit(f"$ mkpfs {' '.join(args)}", "muted")
 
-        # Build the subprocess invocation.  ``--gui-subprocess`` tells the
-        # frozen entry point (mkpfs/gui/__main__.py) to route to the CLI instead
-        # of the GUI; everything after it is passed to ``cli_mkpfs_main``.
-        cmd: list[str] = [sys.executable, "--gui-subprocess", *args]
+        # Build the subprocess invocation.  In a frozen PyInstaller binary
+        # ``sys.executable`` is the binary itself and ``--gui-subprocess`` lands
+        # in ``sys.argv``; in dev mode ``sys.executable`` is the interpreter and
+        # we route through ``-m mkpfs.gui`` to hit ``__main__.py``.
+        if getattr(sys, "frozen", False):
+            cmd: list[str] = [sys.executable, "--gui-subprocess", *args]
+        else:
+            cmd = [sys.executable, "-m", "mkpfs.gui", "--gui-subprocess", *args]
 
-        # On Windows, suppress the console-window flash that subprocess.Popen
-        # would otherwise create for every operation (visible regression under
-        # a --windowed PyInstaller build).  Harmless on the frozen windowed exe;
-        # essential in dev mode where sys.executable is python.exe (console).
+        # ``text=True`` enables universal newlines (``\r`` → ``\n``) so each
+        # progress-bar tick becomes its own line.  ``encoding="utf-8"`` ensures
+        # non-ASCII output decodes cleanly on all platforms.
         popen_kwargs: dict[str, Any] = {
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "stdin": subprocess.PIPE,
             "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
         }
         if sys.platform == "win32":
             popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -380,9 +344,10 @@ class BasePanel(ctk.CTkFrame):
         try:
             proc: subprocess.Popen = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as exc:
-            self._emit(f"✗ Failed to start mkpfs: {exc}", "error")
+            self._emit(f"\u2717 Failed to start mkpfs: {exc}", "error")
             return
         self._proc = proc
+
         # Auto-confirm any "Overwrite? [Y/n]" prompt from the CLI by piping
         # "y\n" to the child's stdin, then close it so the child sees EOF.
         if proc.stdin is not None:
@@ -390,27 +355,28 @@ class BasePanel(ctk.CTkFrame):
                 proc.stdin.write("y\n")
                 proc.stdin.close()
             except (BrokenPipeError, OSError):
-                # Child already closed stdin (e.g. crashed before reading);
-                # nothing to recover — streaming will surface the error.
                 pass
 
-        # Stream child stdout/stderr line by line through the log pane.
+        # Stream child stdout/stderr line by line.  ``text=True`` universal
+        # newlines split ``\r``-delimited progress ticks into individual lines;
+        # we parse each as a progress update or emit it to the log pane.
         assert proc.stdout is not None
         try:
             line: str
             for line in proc.stdout:
-                # ``\r`` overwrites: keep only the content after the last ``\r``
-                # (terminal progress semantics) so the log pane doesn't
-                # accumulate incremental progress bars.
-                if "\r" in line:
-                    line = line.rsplit("\r", 1)[1]
                 stripped: str = line.rstrip()
                 if not stripped:
                     continue
+                # Check if this is a pbar progress line: [####--] N% phase
+                m: re.Match[str] | None = _PROGRESS_RE.match(stripped)
+                if m:
+                    pct: int = int(m.group(1))
+                    phase: str = m.group(2)
+                    self._log_queue.put(("__progress__", f"{pct}\t{phase}"))
+                    continue
+                # Not a progress line — classify and emit to the log pane.
                 lower: str = stripped.lower()
                 tag: str = ""
-                # Match error prefix (❌ / ERROR ) not substring so "Errors: 0"
-                # doesn't falsely set the failed flag on success.
                 if lower.startswith(("\u2713", "done:", "complete:", "success:")):
                     tag = "success"
                 elif lower.startswith("error ") or "\u274c" in stripped:

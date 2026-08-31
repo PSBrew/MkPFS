@@ -42,3 +42,66 @@ class TestLoggingHelpers(unittest.TestCase):
 
         self.assertIn("hello world", stdout_buffer.getvalue())
         self.assertIn("bad stuff", stderr_buffer.getvalue())
+
+    def test_log_falls_back_when_stream_rejects_message_body_unicode(self) -> None:
+        """If the stream codec rejects non-ASCII in the message body, log() should print an ASCII-safe fallback."""
+
+        class FailingStdout:
+            encoding: str = "cp1252"  # simulate Windows pipe
+
+            def __init__(self) -> None:
+                self.data: str = ""
+
+            def write(self, s: str) -> int:
+                # Reject any non-ASCII bytes (simulate cp1252 failure on emoji)
+                if any(ord(ch) > 0x7F for ch in s):
+                    raise UnicodeEncodeError("cp1252", s, 0, 1, "non-ASCII not encodable")
+                self.data += s
+                return len(s)
+
+            def flush(self) -> None:  # pragma: no cover - noop
+                return
+
+            def isatty(self) -> bool:  # pragma: no cover
+                return False
+
+        fake = FailingStdout()
+        with patch.object(sys, "stdout", fake):
+            # Emoji in the message body should trigger the fallback
+            mlogging.info("🎉 done", icon_name=None)
+        # Fallback should have printed ASCII-safe content containing the message text
+        self.assertIn("done", fake.data)
+        # Ensure no raw emoji slipped through
+        self.assertNotIn("🎉", fake.data)
+
+    def test_log_falls_back_when_icon_glyph_rejected_despite_utf8_claim(self) -> None:
+        """If stdout claims UTF-8 but rejects glyphs at write(), log() must fall back to ASCII icon."""
+
+        class LyingStdout:
+            # Report UTF-8 to make supports_utf8() return True
+            encoding: str = "utf-8"
+
+            def __init__(self) -> None:
+                self.data: str = ""
+
+            def write(self, s: str) -> int:
+                # Reject any non-ASCII to simulate downstream cp1252 pipe
+                if any(ord(ch) > 0x7F for ch in s):
+                    raise UnicodeEncodeError("cp1252", s, 0, 1, "non-ASCII not encodable")
+                self.data += s
+                return len(s)
+
+            def flush(self) -> None:  # pragma: no cover - noop
+                return
+
+            def isatty(self) -> bool:  # pragma: no cover
+                return False
+
+        fake = LyingStdout()
+        with patch.object(sys, "stdout", fake), patch.dict("os.environ", {}, clear=True):
+            mlogging.info("done", icon_name="success")
+        # Fallback should have switched the icon to ASCII and preserved message text
+        self.assertIn("SUCCESS", fake.data)
+        self.assertIn("done", fake.data)
+        # No raw emoji should be present
+        self.assertNotIn("🎉", fake.data)

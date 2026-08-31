@@ -1637,7 +1637,7 @@ def _run_stream_pack_file(*, args: argparse.Namespace, source_file: Path) -> int
             hide_headers=True,
         )
         if rc == 0:
-            info("🎉 Image created successfully!")
+            info("Image created successfully!", icon_name="success")
         return rc
 
 

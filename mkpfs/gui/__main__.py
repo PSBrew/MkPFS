@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import multiprocessing
 import sys
+from contextlib import suppress
 
 # Important on Windows: ensure multiprocessing-spawned children are handled
 # before we decide which entrypoint to take.
@@ -22,6 +23,11 @@ multiprocessing.freeze_support()
 #   ``freeze_support()`` so multiprocessing-spawned children never take this
 #   branch.
 if "--gui-subprocess" in sys.argv:
+    # Force UTF-8 on stdout/stderr so piped output on Windows (where the
+    # OEM code page is cp1252) does not crash on non-ASCII glyphs.
+    for _stream in (sys.stdout, sys.stderr):
+        with suppress(AttributeError, OSError):
+            _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     idx: int = sys.argv.index("--gui-subprocess")
     cli_args: list[str] = sys.argv[idx + 1 :]
     from mkpfs.cli import cli_mkpfs_main
