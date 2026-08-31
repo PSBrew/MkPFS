@@ -1,7 +1,6 @@
 """Base panel class for the mkpfs GUI operation panels."""
 
 import queue
-import re
 import subprocess
 import sys
 import threading
@@ -24,8 +23,6 @@ from ..widgets import GlassCard, LogPane, NeonButton, SectionLabel
 # ---------------------------------------------------------------------------
 # Panel base class
 # ---------------------------------------------------------------------------
-# Matches pbar.py progress lines: [##########----------] N% phase
-_PROGRESS_RE: re.Pattern[str] = re.compile(r"^\[[#-]+\]\s*(\d+)%\s*(\S+)")
 
 
 class BasePanel(ctk.CTkFrame):
@@ -203,21 +200,7 @@ class BasePanel(ctk.CTkFrame):
         try:
             while True:
                 tag, text = self._log_queue.get_nowait()
-                if tag == "__progress__":
-                    # Progress update from subprocess: format "pct\tphase"
-                    parts: list[str] = text.split("\t", 1)
-                    pct: int = int(parts[0]) if parts and parts[0] else 0
-                    phase: str = parts[1] if len(parts) > 1 else ""
-                    if self._progress.cget("mode") != "determinate":
-                        self._progress.stop()
-                        self._progress.configure(mode="determinate")
-                        self._progress.set(0)
-                    self._progress.set(max(0.0, min(1.0, pct / 100.0)))
-                    if phase:
-                        self._phase_label.configure(text=phase)
-                    self._last_phase = phase
-                    self._last_progress = (pct, 100)
-                elif tag == "error":
+                if tag == "error":
                     self._failed = True
                     self._log.append(text, tag)
                 elif tag == "__done__":
@@ -230,11 +213,6 @@ class BasePanel(ctk.CTkFrame):
                         self._progress.set(0)
                         self._phase_label.configure(text="")
                     else:
-                        # Emit a final log line for the last completed phase
-                        if self._last_phase:
-                            prev_done, prev_total = self._last_progress
-                            pct: int = int(prev_done / prev_total * 100) if prev_total > 0 else 100
-                            self._log.append(f"✓ {self._last_phase}: {pct}%", "success")
                         # Freeze progress bar at 100% and show completion label briefly
                         self._progress.stop()
                         self._progress.configure(mode="determinate")
@@ -318,29 +296,17 @@ class BasePanel(ctk.CTkFrame):
         """
         self._emit(f"$ mkpfs {' '.join(args)}", "muted")
 
-        # Build the subprocess invocation.  In a frozen PyInstaller binary
-        # ``sys.executable`` is the binary itself and ``--gui-subprocess`` lands
-        # in ``sys.argv``; in dev mode ``sys.executable`` is the interpreter and
-        # we route through ``-m mkpfs.gui`` to hit ``__main__.py``.
-        if getattr(sys, "frozen", False):
-            cmd: list[str] = [sys.executable, "--gui-subprocess", *args]
-        else:
-            cmd = [sys.executable, "-m", "mkpfs.gui", "--gui-subprocess", *args]
-
-        # ``text=True`` enables universal newlines (``\r`` → ``\n``) so each
-        # progress-bar tick becomes its own line.  ``encoding="utf-8"`` ensures
-        # non-ASCII output decodes cleanly on all platforms.
+        # ``text=True`` enables universal newlines; stderr merged into stdout.
+        # Build subprocess command for CLI execution
+        cmd: list[str] = [sys.executable, "--gui-subprocess", *args]
         popen_kwargs: dict[str, Any] = {
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "stdin": subprocess.PIPE,
             "text": True,
-            "encoding": "utf-8",
-            "errors": "replace",
         }
         if sys.platform == "win32":
             popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
         try:
             proc: subprocess.Popen = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as exc:
@@ -357,24 +323,18 @@ class BasePanel(ctk.CTkFrame):
             except (BrokenPipeError, OSError):
                 pass
 
-        # Stream child stdout/stderr line by line.  ``text=True`` universal
-        # newlines split ``\r``-delimited progress ticks into individual lines;
-        # we parse each as a progress update or emit it to the log pane.
+        # Stream child stdout/stderr line by line. Handle carriage-return style
+        # progress by keeping only the content after the last '\r' so the log
+        # pane does not accumulate intermediate bar states.
         assert proc.stdout is not None
         try:
             line: str
             for line in proc.stdout:
+                if "\r" in line:
+                    line = line.rsplit("\r", 1)[1]
                 stripped: str = line.rstrip()
                 if not stripped:
                     continue
-                # Check if this is a pbar progress line: [####--] N% phase
-                m: re.Match[str] | None = _PROGRESS_RE.match(stripped)
-                if m:
-                    pct: int = int(m.group(1))
-                    phase: str = m.group(2)
-                    self._log_queue.put(("__progress__", f"{pct}\t{phase}"))
-                    continue
-                # Not a progress line — classify and emit to the log pane.
                 lower: str = stripped.lower()
                 tag: str = ""
                 if lower.startswith(("\u2713", "done:", "complete:", "success:")):
