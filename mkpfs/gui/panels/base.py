@@ -390,6 +390,8 @@ class BasePanel(ctk.CTkFrame):
                 proc.stdin.write("y\n")
                 proc.stdin.close()
             except (BrokenPipeError, OSError):
+                # Child already closed stdin (e.g. crashed before reading);
+                # nothing to recover — streaming will surface the error.
                 pass
 
         # Stream child stdout/stderr line by line through the log pane.
