@@ -670,7 +670,7 @@ class TestCliOutputFormatting(CliTestCase):
         self.assertIn("PFS Image Builder - Parameters", output_text)
         self.assertIn("Header magic:      PFS (20130315)", output_text)
         self.assertIn("Compression Setup: PFSC (0x43534650)", output_text)
-        self.assertIn("Temp folder:       /tmp/mkpfs", output_text)
+        self.assertIn(f"Temp folder:       {Path('/tmp/mkpfs')}", output_text)
         self.assertIn("CPU cores:         1 (auto)", output_text)
         self.assertIn("Zlib level:        9", output_text)
 

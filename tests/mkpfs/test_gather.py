@@ -29,6 +29,11 @@ _posix = pytest.mark.skipif(
     reason="symlink creation needs elevated privileges on Windows",
 )
 
+_posix_permissions = pytest.mark.skipif(
+    platform.system() == "Windows",
+    reason="POSIX permission bits are not enforced the same way on Windows",
+)
+
 
 # ---------------------------------------------------------------------------
 # Basic traversal equivalence with rglob
@@ -204,6 +209,7 @@ def test_broken_symlink_excluded(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@_posix_permissions
 def test_unreadable_subdirectory_skipped(tmp_path: Path) -> None:
     """A directory without read permission must be skipped."""
     good = tmp_path / "good"
