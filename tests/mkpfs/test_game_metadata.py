@@ -37,6 +37,23 @@ def _make_game_source(root: Path) -> Path:
     return source
 
 
+def test_reads_game_metadata_from_source_folder(tmp_path: Path) -> None:
+    source = _make_game_source(tmp_path)
+
+    metadata = read_game_metadata(source)
+
+    assert metadata.error == ""
+    assert metadata.package_type == "FOLDER"
+    assert metadata.game_title == "Spectrum Test Game"
+    assert metadata.title_id == "PPSA99999"
+    assert metadata.content_id == "UP9000-PPSA99999_00-ABCDEFGHIJKLMNOP"
+    assert metadata.version == "01.234"
+    assert metadata.region == "USA"
+    assert metadata.has_apr_emu is True
+    assert metadata.icon_bytes == _PNG_BYTES
+    assert metadata.size_display.endswith(("B", "KB", "MB"))
+
+
 def test_reads_game_metadata_from_exfat_image(tmp_path: Path) -> None:
     source = _make_game_source(tmp_path)
     image = tmp_path / "game.exfat"

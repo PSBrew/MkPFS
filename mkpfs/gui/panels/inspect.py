@@ -5,6 +5,7 @@ from typing import Any
 import customtkinter as ctk
 
 from ..i18n import tr
+from ..metadata_preview import MetadataPreview
 from ..theme import _BG_INPUT, _BORDER_BRIGHT, _FONT_LABEL, _FONT_MONO, _TEXT_PRIMARY, _TEXT_SECONDARY
 from ..widgets import GlassCard, OptionRow, PathRow, SectionLabel
 from .base import BasePanel
@@ -26,14 +27,22 @@ class InspectPanel(BasePanel):
         self._image: ctk.StringVar = ctk.StringVar()
         self._fmt: ctk.StringVar = ctk.StringVar(value="text")
         self._ekpfs: ctk.StringVar = ctk.StringVar()
+        self._metadata_preview: MetadataPreview | None = None
         super().__init__(parent)
+        self._image.trace_add("write", self._on_image_changed)
 
     def _build_controls(self, card: GlassCard) -> None:
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=1)
 
+        self._metadata_preview = MetadataPreview(card, self._accent)
+        self._metadata_preview.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self._metadata_preview.load(self._image.get().strip())
+
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16)
+
         SectionLabel(card, tr("paths"), color=self._accent).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
+            row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
         PathRow(
             card,
@@ -43,15 +52,15 @@ class InspectPanel(BasePanel):
             filetypes=[("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")],
             placeholder=tr("i_image_ph"),
             browse_label=tr("browse"),
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16)
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=4, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("options"), color=self._accent).grid(
-            row=3, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
+            row=5, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
 
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
-        opt.grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        opt.grid(row=6, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
 
         OptionRow(opt, tr("i_format"), self._fmt, ["text", "json"], accent=self._accent).grid(
@@ -73,6 +82,10 @@ class InspectPanel(BasePanel):
             font=_FONT_MONO,
             text_color=_TEXT_PRIMARY,
         ).pack(fill="x")
+
+    def _on_image_changed(self, *_args: Any) -> None:
+        if self._metadata_preview is not None:
+            self._metadata_preview.load(self._image.get().strip())
 
     def _run_command(self) -> None:
         image: str = self._image.get().strip()

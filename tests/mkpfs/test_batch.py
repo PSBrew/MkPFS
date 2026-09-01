@@ -211,6 +211,20 @@ class TestDiscoverBatchItems(unittest.TestCase):
         self.assertEqual(len(items), 2)
         self.assertTrue(all(i.kind == "file" for i in items))
 
+    def test_discovers_all_supported_image_files(self) -> None:
+        root = self._make_temp_dir()
+        (root / "game.pkg").write_bytes(b"x")
+        for name in ("image.exfat", "pkg.ffpkg", "raw.ffpfs", "wrapped.ffpfsc"):
+            (root / name).write_bytes(b"x")
+
+        items = discover_batch_items(root)
+
+        self.assertEqual(
+            [item.name for item in items],
+            ["image.exfat", "pkg.ffpkg", "raw.ffpfs", "wrapped.ffpfsc"],
+        )
+        self.assertTrue(all(i.kind == "file" for i in items))
+
     def test_skips_dotfiles(self) -> None:
         root = self._make_temp_dir()
         (root / ".hidden").mkdir()

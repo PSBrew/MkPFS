@@ -1,4 +1,4 @@
-"""Game metadata extraction helpers for GUI file imports.
+"""Game metadata extraction helpers for GUI imports.
 
 The readers mirror the Spectrum client import flow: package/game files may
 carry a cover, title ID, content ID, version, region, size, and APR-EMU marker.
@@ -69,19 +69,21 @@ class GameMetadata:
 
 
 def read_game_metadata(file_path: str | Path) -> GameMetadata:
-    """Read game metadata from a supported package/image file.
+    """Read game metadata from a supported package, image, or source folder.
 
     Args:
-        file_path: File selected by the user.
+        file_path: File or folder selected by the user.
 
     Returns:
         Best-effort metadata for the GUI preview.
     """
     path = Path(file_path).expanduser()
     meta = _base_metadata(path)
-    if not path.exists() or not path.is_file():
-        meta.error = f"File not found: {path}"
+    if not path.exists():
+        meta.error = f"Path not found: {path}"
         return meta
+    if path.is_dir():
+        return _read_folder_metadata(path, meta)
 
     suffix = path.suffix.lower()
     try:
@@ -136,9 +138,7 @@ def detect_region_from_content_id(content_id: str) -> str:
 
 
 def _base_metadata(path: Path) -> GameMetadata:
-    size = 0
-    with contextlib.suppress(OSError):
-        size = path.stat().st_size
+    size = _path_size(path)
     title_id = _fallback_title_id(path)
     return GameMetadata(
         file_path=path,
@@ -149,9 +149,28 @@ def _base_metadata(path: Path) -> GameMetadata:
     )
 
 
+def _path_size(path: Path) -> int:
+    if path.is_dir():
+        total = 0
+        for child in path.rglob("*"):
+            if child.is_file():
+                with contextlib.suppress(OSError):
+                    total += child.stat().st_size
+        return total
+    with contextlib.suppress(OSError):
+        return path.stat().st_size
+    return 0
+
+
 def _fallback_title_id(path: Path) -> str:
     match = _TITLE_ID_PATTERN.search(path.stem)
     return match.group(0).upper() if match else path.stem
+
+
+def _read_folder_metadata(path: Path, meta: GameMetadata) -> GameMetadata:
+    meta.package_type = "FOLDER"
+    _fill_from_source_folder(path, meta)
+    return meta
 
 
 def _read_pkg_metadata(path: Path, meta: GameMetadata) -> GameMetadata:
@@ -193,11 +212,7 @@ def _read_pkg_metadata(path: Path, meta: GameMetadata) -> GameMetadata:
 
         if sfo_offset is not None and sfo_size is not None and 0 < sfo_size <= _MAX_PARAM_SIZE:
             params = _parse_sfo(_read_at(fh, sfo_offset, sfo_size))
-            category = params.get("CATEGORY", "")
-            meta.package_type = _pkg_category_to_type(category) if category else _pkg_type_from_flags(flags)
-            meta.title_id = params.get("TITLE_ID", meta.title_id).strip() or meta.title_id
-            meta.version = params.get("APP_VER", meta.version).strip() or meta.version
-            meta.game_title = params.get("TITLE", meta.game_title).strip() or meta.game_title
+            _fill_from_sfo_params(params, meta, default_package_type=_pkg_type_from_flags(flags))
         else:
             meta.package_type = _pkg_type_from_flags(flags)
 
@@ -290,6 +305,30 @@ def _fill_from_exfat_reader(reader: ExfatReader, meta: GameMetadata) -> None:
             meta.icon_bytes = icon_bytes
 
 
+def _fill_from_source_folder(path: Path, meta: GameMetadata) -> None:
+    meta.has_apr_emu = (path / "fakelib" / "libSceAmpr.sprx").is_file()
+
+    param_json = path / "sce_sys" / "param.json"
+    if param_json.is_file():
+        with contextlib.suppress(OSError, ValueError, json.JSONDecodeError):
+            if 0 < param_json.stat().st_size <= _MAX_PARAM_SIZE:
+                _fill_from_param_json(param_json.read_bytes(), meta)
+
+    param_sfo = path / "sce_sys" / "param.sfo"
+    if param_sfo.is_file() and not meta.game_title:
+        with contextlib.suppress(OSError, ValueError):
+            if 0 < param_sfo.stat().st_size <= _MAX_PARAM_SIZE:
+                _fill_from_sfo_params(_parse_sfo(param_sfo.read_bytes()), meta)
+
+    icon = path / "sce_sys" / "icon0.png"
+    if icon.is_file():
+        with contextlib.suppress(OSError):
+            if 0 < icon.stat().st_size <= _MAX_ICON_SIZE:
+                icon_bytes = icon.read_bytes()
+                if _is_png(icon_bytes):
+                    meta.icon_bytes = icon_bytes
+
+
 def _fill_from_param_json(data: bytes, meta: GameMetadata) -> None:
     root = json.loads(data.decode("utf-8-sig"))
     if not isinstance(root, dict):
@@ -311,6 +350,28 @@ def _fill_from_param_json(data: bytes, meta: GameMetadata) -> None:
     title = _extract_game_title(root)
     if title:
         meta.game_title = title
+
+
+def _fill_from_sfo_params(
+    params: dict[str, str],
+    meta: GameMetadata,
+    default_package_type: str | None = None,
+) -> None:
+    category = params.get("CATEGORY", "")
+    if category:
+        meta.package_type = _pkg_category_to_type(category)
+    elif default_package_type:
+        meta.package_type = default_package_type
+
+    content_id = params.get("CONTENT_ID", "").strip()
+    if content_id:
+        meta.content_id = content_id
+        meta.title_id = _title_id_from_content_id(content_id) or meta.title_id
+        meta.region = detect_region_from_content_id(content_id)
+
+    meta.title_id = params.get("TITLE_ID", meta.title_id).strip() or meta.title_id
+    meta.version = params.get("APP_VER", meta.version).strip() or meta.version
+    meta.game_title = params.get("TITLE", meta.game_title).strip() or meta.game_title
 
 
 def _extract_game_title(root: dict[str, object]) -> str:

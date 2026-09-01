@@ -6337,16 +6337,25 @@ def inspect_pfs_image(
                 # Payload-content passes (decode every file). Skipped for callers that
                 # only need structure, such as unpack, which decodes once while writing.
                 if verify_payloads:
-                    validate_ps5_checklist(
+                    wraps_exfat = _pfs_wraps_single_exfat(
                         fh,
                         header,
                         inodes,
                         inspection.file_inodes,
-                        inspection.warnings,
-                        inspection.errors,
                         ekpfs=ekpfs,
                         new_crypt=new_crypt,
                     )
+                    if not wraps_exfat:
+                        validate_ps5_checklist(
+                            fh,
+                            header,
+                            inodes,
+                            inspection.file_inodes,
+                            inspection.warnings,
+                            inspection.errors,
+                            ekpfs=ekpfs,
+                            new_crypt=new_crypt,
+                        )
 
                     try:
                         (
@@ -6416,6 +6425,29 @@ def inspect_pfs_image(
         inspection.errors.append(f"failed to inspect image: {exc}")
 
     return inspection
+
+
+def _pfs_wraps_single_exfat(
+    fh: BinaryIO,
+    header: ParsedHeader,
+    inodes: list[ParsedInode],
+    file_inodes: dict[str, int],
+    ekpfs: bytes | None = None,
+    new_crypt: bool = False,
+) -> bool:
+    """Return True when the PFS tree is a single inner exFAT payload."""
+    if len(file_inodes) != 1:
+        return False
+    _rel_name, inode_num = next(iter(file_inodes.items()))
+    inode = inodes[inode_num]
+    if inode.db_sig or inode.ib_sig or inode.blocks <= 0 or inode.logical_size < len(EXFAT_SIGNATURE) + 3:
+        return False
+    try:
+        view = _LogicalFileView(fh, header, inode, ekpfs=ekpfs, new_crypt=new_crypt)
+        view.seek(0)
+        return view.read(len(EXFAT_SIGNATURE) + 3)[3:] == EXFAT_SIGNATURE
+    except (OSError, ValueError):
+        return False
 
 
 def analyze_pfs_image(image: Path, new_crypt: bool = False) -> PFSImageInspection:

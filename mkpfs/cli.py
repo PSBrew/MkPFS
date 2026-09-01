@@ -1817,6 +1817,14 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
     image: Path = Path(args.image_file).expanduser().resolve()
     ekpfs: bytes = parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None))
     new_crypt: bool = bool(getattr(args, "new_crypt", False))
+
+    if image.is_dir():
+        print_version_header()
+        info("/")
+        for line in render_source_tree(image):
+            info(line)
+        return 0
+
     fmt: ImageFormat = ImageFormat(getattr(args, "format", ImageFormat.AUTO.value))
     detected: ImageFormat = detect_image_format(image=image, hint=fmt)
 
@@ -1844,7 +1852,7 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
                     return 0
             finally:
                 fh.close()
-        info("--deep: no inner exFAT found; showing the image tree")
+        info("No wrapped exFAT detected; showing the PFS image tree.")
 
     errors: list[str]
     _warnings: list[str]
@@ -1868,6 +1876,23 @@ def cli_mkpfs_ls_run(args: argparse.Namespace) -> int:
     for line in render_tree(tree, uroot):
         info(line)
     return 0
+
+
+def render_source_tree(root: Path, prefix: str = "") -> list[str]:
+    """Render a local source folder with the same branch markers used for images."""
+    try:
+        children = sorted(root.iterdir(), key=lambda child: (not child.is_dir(), child.name.lower()))
+    except OSError as exc:
+        return [f"[unreadable] {root.name}: {exc}"]
+
+    lines: list[str] = []
+    for index, child in enumerate(children):
+        last = index == len(children) - 1
+        marker = "`-- " if last else "|-- "
+        lines.append(f"{prefix}{marker}{child.name}")
+        if child.is_dir():
+            lines.extend(render_source_tree(child, prefix + ("    " if last else "|   ")))
+    return lines
 
 
 def cli_mkpfs_info_run(args: argparse.Namespace) -> int:
@@ -2261,8 +2286,8 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--new-crypt", action="store_true", help="Use alternate newCrypt EKPFS derivation")
     inspect_parser.set_defaults(func=cli_mkpfs_inspect_run)
 
-    ls_parser = sub.add_parser("tree", help="Print image tree representation")
-    ls_parser.add_argument("image_file", help="Path to input image (.ffpfs or .exfat)")
+    ls_parser = sub.add_parser("tree", help="Print source folder or image tree representation")
+    ls_parser.add_argument("image_file", help="Path to input folder or image (.ffpfs, .ffpfsc, or .exfat)")
     ls_parser.add_argument(
         "--deep",
         action="store_true",
@@ -2517,6 +2542,7 @@ def cli_mkpfs_inspect_run(args: argparse.Namespace) -> int:
     inspection: PFSImageInspection = inspect_pfs_image(
         image=image,
         ekpfs=parse_ekpfs_key_hex(getattr(args, "ekpfs_key", None)),
+        new_crypt=bool(getattr(args, "new_crypt", False)),
     )
 
     if args.format == "json":
@@ -2543,8 +2569,8 @@ def cli_mkpfs_inspect_run(args: argparse.Namespace) -> int:
         info(f"Warnings: {len(inspection.warnings)}")
         info(f"Errors:   {len(inspection.errors)}")
         for warning_text in inspection.warnings:
-            info(warning_text)
+            warning(f"Warning: {warning_text}", icon_name="warning")
         for error_text in inspection.errors:
-            info(error_text)
+            error(f"Error: {error_text}", icon_name="error")
 
     return 1 if inspection.errors else 0

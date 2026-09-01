@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from ...utils import ui_sanitize_basename
 from ..i18n import tr
+from ..metadata_preview import MetadataPreview
 from ..theme import _BORDER_BRIGHT
 from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
 from .base import BasePanel
@@ -32,6 +33,7 @@ class PackFolderPanel(BasePanel):
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
+        self._metadata_preview: MetadataPreview | None = None
         super().__init__(parent)
         # Auto-populate output filename from source when empty.
         self._src.trace_add("write", self._on_src_changed)
@@ -40,8 +42,14 @@ class PackFolderPanel(BasePanel):
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=1)
 
+        self._metadata_preview = MetadataPreview(card, self._accent)
+        self._metadata_preview.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self._metadata_preview.load(self._src.get().strip())
+
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16)
+
         SectionLabel(card, tr("paths"), color=self._accent).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
+            row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
 
         PathRow(
@@ -51,7 +59,7 @@ class PackFolderPanel(BasePanel):
             mode="folder",
             placeholder=tr("pf_src_ph"),
             browse_label=tr("browse"),
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
 
         PathRow(
             card,
@@ -61,15 +69,15 @@ class PackFolderPanel(BasePanel):
             filetypes=[("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")],
             placeholder=tr("pf_out_ph"),
             browse_label=tr("browse"),
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        ).grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=5, column=0, columnspan=2, sticky="ew", padx=16)
 
         SectionLabel(card, tr("options"), color=self._accent).grid(
-            row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
+            row=6, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
-        opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        opt.grid(row=7, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
 
         chk_left: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
@@ -110,9 +118,11 @@ class PackFolderPanel(BasePanel):
         canonical .ffpfsc extension. Only triggers when the output field is
         currently empty and the source resolves to an existing directory.
         """
+        src_path: str = self._src.get().strip()
+        if self._metadata_preview is not None:
+            self._metadata_preview.load(src_path)
         if self._out.get().strip():
             return
-        src_path: str = self._src.get().strip()
         if not src_path:
             return
 

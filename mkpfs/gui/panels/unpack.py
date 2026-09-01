@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from ...utils import ui_sanitize_basename
 from ..i18n import tr
+from ..metadata_preview import MetadataPreview
 from ..theme import _BG_INPUT, _BORDER_BRIGHT, _FONT_LABEL, _FONT_MONO, _TEXT_PRIMARY, _TEXT_SECONDARY
 from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
 from .base import BasePanel
@@ -30,6 +31,7 @@ class UnpackPanel(BasePanel):
         self._overwrite: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._ekpfs: ctk.StringVar = ctk.StringVar()
         self._new_crypt: ctk.BooleanVar = ctk.BooleanVar(value=False)
+        self._metadata_preview: MetadataPreview | None = None
         super().__init__(parent)
         # Auto-populate output folder from selected image when empty.
         self._image.trace_add("write", self._on_image_changed)
@@ -38,8 +40,14 @@ class UnpackPanel(BasePanel):
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=1)
 
+        self._metadata_preview = MetadataPreview(card, self._accent)
+        self._metadata_preview.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self._metadata_preview.load(self._image.get().strip())
+
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16)
+
         SectionLabel(card, tr("paths"), color=self._accent).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
+            row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
         PathRow(
             card,
@@ -49,7 +57,7 @@ class UnpackPanel(BasePanel):
             filetypes=[("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")],
             placeholder=tr("u_image_ph"),
             browse_label=tr("browse"),
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
 
         PathRow(
             card,
@@ -58,15 +66,15 @@ class UnpackPanel(BasePanel):
             mode="folder",
             placeholder=tr("u_out_ph"),
             browse_label=tr("browse"),
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        ).grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=5, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("options"), color=self._accent).grid(
-            row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
+            row=6, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
 
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
-        opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        opt.grid(row=7, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
 
         NeonCheckbox(opt, text=tr("u_overwrite"), variable=self._overwrite, accent=self._accent).grid(
@@ -100,9 +108,11 @@ class UnpackPanel(BasePanel):
         image's parent directory. Only fills when the output is currently empty
         and the selected path exists as a file.
         """
+        img_path: str = self._image.get().strip()
+        if self._metadata_preview is not None:
+            self._metadata_preview.load(img_path)
         if self._output.get().strip():
             return
-        img_path: str = self._image.get().strip()
         if not img_path:
             return
         p: Path = Path(img_path)
