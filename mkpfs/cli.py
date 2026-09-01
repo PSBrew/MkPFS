@@ -12,7 +12,11 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from enum import StrEnum
+
+try:
+    from enum import StrEnum  # Python 3.11+
+except ImportError:
+    from backports.strenum import StrEnum  # Python 3.10 and below
 from pathlib import Path
 
 from . import __version__, consts
@@ -2041,76 +2045,72 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
     """Batch convert multiple items in a source directory into .ffpfsc images."""
     source_dir: Path = Path(args.source_dir).expanduser().resolve()
     output_dir: Path = Path(args.output_dir).expanduser().resolve()
+    print_version_header()
+    try:
+        from .batch import (
+            BatchItem,
+            BatchSummary,
+            discover_batch_items,
+            print_batch_pre_stats,
+            print_batch_summary,
+            run_batch,
+        )
 
-    # Validate source and output directories early so CLI errors are consistent
-    # with run_batch and present user-friendly messages.
-    if not source_dir.exists() or not source_dir.is_dir():
-        error(f"Source directory does not exist or is not a directory: {source_dir}")
+        # Resolve --block-size the same way as the pack-folder command so the
+        # user-supplied value is honoured.  Batch does not support auto-fit
+        # (which requires a full tree walk), so only "auto" and a literal
+        # integer are accepted.
+        block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
+        if block_size_arg == "auto":
+            block_size: int = 65536
+        else:
+            try:
+                block_size = int(args.block_size)
+            except (TypeError, ValueError) as exc:
+                raise BuildError("--block-size must be an integer value or 'auto' for batch conversion") from exc
+        config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
+        pack_flags: dict = {
+            "block_size": config.block_size,
+            "pfs_version": config.pfs_version,
+            "case_insensitive": config.case_insensitive,
+            "zlib_level": config.zlib_level,
+            "threshold_gain": config.threshold_gain,
+            "min_file_gain": config.min_file_gain,
+            "min_compress_size": config.min_compress_size,
+            "cpu_count": config.cpu_count,
+            "compress": config.compress,
+            "skip_executable_compression": config.skip_executable_compression,
+            "encrypted": config.encrypted,
+            "new_crypt": config.new_crypt,
+            "ekpfs": config.ekpfs_key,
+            "verbose": bool(getattr(args, "verbose", False)),
+            "dry_run": bool(getattr(args, "dry_run", False)),
+            "verify": bool(getattr(args, "verify", False)),
+        }
+        items: list[BatchItem] = discover_batch_items(source_dir)
+        if not items:
+            info(f"No packable items found in {source_dir}")
+            return 0
+        print_batch_pre_stats(
+            source_dir=source_dir,
+            output_dir=output_dir,
+            items=items,
+            pack_flags=pack_flags,
+        )
+        summary: BatchSummary = run_batch(
+            source_dir=source_dir,
+            output_dir=output_dir,
+            overwrite=bool(getattr(args, "overwrite", False)),
+            pack_flags=pack_flags,
+            items=items,
+        )
+        print_batch_summary(summary)
+        info(f"Total elapsed: {summary.elapsed_seconds:.1f}s")
+        info(f"Output directory: {output_dir}")
+        return 0 if summary.errors == 0 else 1
+    except BuildError as exc:
+        error(str(exc))
         return 1
-    if output_dir == source_dir or source_dir in output_dir.parents:
-        error("Output directory cannot be inside the source directory")
-        return 1
-
-    # Resolve --block-size the same way as the pack-folder command so the
-    # user-supplied value is honoured.  Batch does not support auto-fit
-    # (which requires a full tree walk), so only "auto" and a literal
-    # integer are accepted.
-    block_size_arg: str = str(args.block_size).strip().lower() if isinstance(args.block_size, str) else ""
-    if block_size_arg == "auto":
-        block_size: int = 65536
-    else:
-        try:
-            block_size = int(args.block_size)
-        except (TypeError, ValueError) as exc:
-            raise BuildError("--block-size must be an integer value or 'auto' for batch conversion") from exc
-    config: PackBuildConfig = _resolve_pack_build_config(args, block_size=block_size)
-    pack_flags: dict = {
-        "block_size": config.block_size,
-        "pfs_version": config.pfs_version,
-        "case_insensitive": config.case_insensitive,
-        "zlib_level": config.zlib_level,
-        "threshold_gain": config.threshold_gain,
-        "min_file_gain": config.min_file_gain,
-        "min_compress_size": config.min_compress_size,
-        "cpu_count": config.cpu_count,
-        "compress": config.compress,
-        "skip_executable_compression": config.skip_executable_compression,
-        "encrypted": config.encrypted,
-        "new_crypt": config.new_crypt,
-        "ekpfs": config.ekpfs_key,
-        "verbose": bool(getattr(args, "verbose", False)),
-        "dry_run": bool(getattr(args, "dry_run", False)),
-        "verify": bool(getattr(args, "verify", False)),
-    }
-    from .batch import (
-        BatchItem,
-        BatchSummary,
-        discover_batch_items,
-        print_batch_pre_stats,
-        print_batch_summary,
-        run_batch,
-    )
-
-    items: list[BatchItem] = discover_batch_items(source_dir)
-    if not items:
-        info(f"No packable items found in {source_dir}")
-        return 0
-    print_batch_pre_stats(
-        source_dir=source_dir,
-        output_dir=output_dir,
-        items=items,
-        pack_flags=pack_flags,
-    )
-    summary: BatchSummary = run_batch(
-        source_dir=source_dir,
-        output_dir=output_dir,
-        overwrite=bool(getattr(args, "overwrite", False)),
-        pack_flags=pack_flags,
-    )
-    print_batch_summary(summary)
-    info(f"Total elapsed: {summary.elapsed_seconds:.1f}s")
-    info(f"Output directory: {output_dir}")
-    return 0 if summary.errors == 0 else 1
 
 
 def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:

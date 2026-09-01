@@ -117,7 +117,7 @@ class BatchPanel(BasePanel):
         self._run_mkpfs(args)
 
     def _on_src_changed(self, *_args: Any) -> None:
-        """Auto-populate an output folder inside the selected source directory.
+        """Auto-populate the output folder to match the selected source directory.
 
         Only runs when the output field is currently empty and the source
         resolves to an existing directory to avoid interfering with manual
@@ -131,5 +131,5 @@ class BatchPanel(BasePanel):
         p: Path = Path(src_path)
         if not p.is_dir():
             return
-        # Place converted output as a subdirectory of the source folder.
-        self._out.set(str(p / "converted"))
+        # Default output = same as source folder.
+        self._out.set(src_path)
