@@ -150,6 +150,7 @@ class PathRow(ctk.CTkFrame):
         filetypes: list[tuple[str, str]] | None = None,
         placeholder: str = "",
         browse_label: str = "Browse",
+        folder_label: str = "Folder",
     ) -> None:
         """Initialise a PathRow.
 
@@ -157,10 +158,11 @@ class PathRow(ctk.CTkFrame):
             parent: Parent widget.
             label: Field label text.
             variable: StringVar bound to the entry.
-            mode: One of 'folder', 'open', or 'save'.
+            mode: One of 'folder', 'open', 'save', or 'any'.
             filetypes: File type filters for 'open' / 'save' dialogs.
             placeholder: Placeholder text for the entry.
             browse_label: Button label (supports i18n).
+            folder_label: Folder button label for 'any' mode.
         """
         super().__init__(parent, fg_color="transparent")
         self._var: ctk.StringVar = variable
@@ -184,19 +186,47 @@ class PathRow(ctk.CTkFrame):
             text_color=_TEXT_PRIMARY,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
-        ctk.CTkButton(
-            row,
-            text=browse_label,
-            width=86,
-            corner_radius=8,
-            fg_color=_BG_PANEL,
-            hover_color=_BORDER_BRIGHT,
-            border_width=1,
-            border_color=_BORDER_BRIGHT,
-            font=_FONT_LABEL,
-            text_color=_TEXT_SECONDARY,
-            command=self._browse,
-        ).grid(row=0, column=1)
+        if self._mode == "any":
+            ctk.CTkButton(
+                row,
+                text=browse_label,
+                width=68,
+                corner_radius=8,
+                fg_color=_BG_PANEL,
+                hover_color=_BORDER_BRIGHT,
+                border_width=1,
+                border_color=_BORDER_BRIGHT,
+                font=_FONT_LABEL,
+                text_color=_TEXT_SECONDARY,
+                command=lambda: _browse_file(self._var, self._filetypes),
+            ).grid(row=0, column=1, padx=(0, 6))
+            ctk.CTkButton(
+                row,
+                text=folder_label,
+                width=76,
+                corner_radius=8,
+                fg_color=_BG_PANEL,
+                hover_color=_BORDER_BRIGHT,
+                border_width=1,
+                border_color=_BORDER_BRIGHT,
+                font=_FONT_LABEL,
+                text_color=_TEXT_SECONDARY,
+                command=lambda: _browse_folder(self._var),
+            ).grid(row=0, column=2)
+        else:
+            ctk.CTkButton(
+                row,
+                text=browse_label,
+                width=86,
+                corner_radius=8,
+                fg_color=_BG_PANEL,
+                hover_color=_BORDER_BRIGHT,
+                border_width=1,
+                border_color=_BORDER_BRIGHT,
+                font=_FONT_LABEL,
+                text_color=_TEXT_SECONDARY,
+                command=self._browse,
+            ).grid(row=0, column=1)
 
     def _browse(self) -> None:
         """Open the appropriate dialog based on the mode setting."""
@@ -206,6 +236,8 @@ class PathRow(ctk.CTkFrame):
             _browse_file(self._var, self._filetypes)
         elif self._mode == "save":
             _browse_save(self._var, self._filetypes)
+        elif self._mode == "any":
+            _browse_file(self._var, self._filetypes)
         else:
             raise ValueError(f"Unsupported PathRow mode: {self._mode!r}")
 

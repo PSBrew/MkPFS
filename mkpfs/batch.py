@@ -98,7 +98,7 @@ def discover_batch_items(source_dir: Path) -> list[BatchItem]:
     * Skip entries matching :func:`is_ignored_name` (OS metadata like
       ``.DS_Store``, ``Thumbs.db``, etc.).
     * Directories -> ``BatchItem(kind="folder")``.
-    * Files with suffix ``.exfat`` or ``.ffpkg`` (case-insensitive) ->
+    * Files with a supported image suffix (case-insensitive) ->
       ``BatchItem(kind="file")``.
     * All other files are silently ignored.
 
@@ -125,7 +125,7 @@ def discover_batch_items(source_dir: Path) -> list[BatchItem]:
             items.append(BatchItem(name=name, source=entry, kind="folder"))
         elif is_file:
             suffix: str = entry.suffix.lower()
-            if suffix in (".exfat", ".ffpkg"):
+            if suffix in (".exfat", ".ffpkg", ".ffpfs", ".ffpfsc"):
                 items.append(BatchItem(name=name, source=entry, kind="file"))
     items.sort(key=lambda i: i.name.lower())
     return items

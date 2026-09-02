@@ -91,14 +91,22 @@ class BasePanel(ctk.CTkFrame):
         # Neon divider bar
         ctk.CTkFrame(self, height=1, fg_color=self._accent).pack(fill="x", padx=24, pady=(12, 0))
 
+        self._body: ctk.CTkScrollableFrame = ctk.CTkScrollableFrame(
+            self,
+            fg_color="transparent",
+            scrollbar_button_color=_BG_INPUT,
+            scrollbar_button_hover_color=self._accent,
+        )
+        self._body.pack(fill="both", expand=True, padx=0, pady=0)
+
         # Controls card with accent border
-        self._card: GlassCard = GlassCard(self, accent=self._accent)
+        self._card: GlassCard = GlassCard(self._body, accent=self._accent)
         self._card.pack(fill="x", padx=24, pady=14)
         self._build_controls(self._card)
 
         # Progress bar (neon colour matching panel)
         self._progress: ctk.CTkProgressBar = ctk.CTkProgressBar(
-            self,
+            self._body,
             mode="indeterminate",
             fg_color=_BG_INPUT,
             progress_color=self._accent,
@@ -109,7 +117,7 @@ class BasePanel(ctk.CTkFrame):
 
         # Phase label shown between progress bar and log area
         self._phase_label: ctk.CTkLabel = ctk.CTkLabel(
-            self,
+            self._body,
             text="",
             font=_FONT_SMALL,
             text_color=_NEON_BLUE,
@@ -126,7 +134,7 @@ class BasePanel(ctk.CTkFrame):
 
         # Run button in panel's accent colour
         self._run_btn: NeonButton = NeonButton(
-            self,
+            self._body,
             text=tr("run"),
             command=self._on_run,
             color=self._accent,
@@ -134,7 +142,7 @@ class BasePanel(ctk.CTkFrame):
         self._run_btn.pack(padx=24, pady=(10, 0), anchor="e")
 
         # Log header row: label + export button side by side
-        log_header: ctk.CTkFrame = ctk.CTkFrame(self, fg_color="transparent")
+        log_header: ctk.CTkFrame = ctk.CTkFrame(self._body, fg_color="transparent")
         log_header.pack(fill="x", padx=24, pady=(14, 4))
         self._log_section_label: SectionLabel = SectionLabel(log_header, tr("output_log"), color=self._accent)
         self._log_section_label.pack(side="left", anchor="w")
@@ -153,8 +161,8 @@ class BasePanel(ctk.CTkFrame):
             command=self._on_export_log,
         )
         self._export_btn.pack(side="right", anchor="e")
-        self._log: LogPane = LogPane(self)
-        self._log.pack(fill="both", expand=True, padx=24, pady=(0, 16))
+        self._log: LogPane = LogPane(self._body, height=190)
+        self._log.pack(fill="x", padx=24, pady=(0, 16))
 
         self.after(100, self._poll_log_queue)
 
@@ -174,7 +182,7 @@ class BasePanel(ctk.CTkFrame):
         # Destroy and rebuild the controls card with the new locale strings.
         # pack(before=) keeps the card between the divider and the progress bar.
         self._card.destroy()
-        self._card = GlassCard(self, accent=self._accent)
+        self._card = GlassCard(self._body, accent=self._accent)
         self._card.pack(fill="x", padx=24, pady=14, before=self._progress)
         self._build_controls(self._card)
 

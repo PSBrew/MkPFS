@@ -5,6 +5,7 @@ from typing import Any
 import customtkinter as ctk
 
 from ..i18n import tr
+from ..metadata_preview import MetadataPreview
 from ..theme import _BG_INPUT, _BORDER_BRIGHT, _FONT_LABEL, _FONT_MONO, _FONT_UI, _TEXT_PRIMARY, _TEXT_SECONDARY
 from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
 from .base import BasePanel
@@ -29,14 +30,22 @@ class VerifyPanel(BasePanel):
         self._sha256: ctk.StringVar = ctk.StringVar()
         self._ekpfs: ctk.StringVar = ctk.StringVar()
         self._new_crypt: ctk.BooleanVar = ctk.BooleanVar(value=False)
+        self._metadata_preview: MetadataPreview | None = None
         super().__init__(parent)
+        self._image.trace_add("write", self._on_image_changed)
 
     def _build_controls(self, card: GlassCard) -> None:
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=1)
 
+        self._metadata_preview = MetadataPreview(card, self._accent)
+        self._metadata_preview.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self._metadata_preview.load(self._image.get().strip())
+
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16)
+
         SectionLabel(card, tr("paths"), color=self._accent).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
+            row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
         PathRow(
             card,
@@ -46,7 +55,7 @@ class VerifyPanel(BasePanel):
             filetypes=[("PFS image", "*.ffpfs *.ffpfsc"), ("All files", "*.*")],
             placeholder=tr("v_image_ph"),
             browse_label=tr("browse"),
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
 
         PathRow(
             card,
@@ -55,11 +64,11 @@ class VerifyPanel(BasePanel):
             mode="folder",
             placeholder=tr("v_source_ph"),
             browse_label=tr("browse"),
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        ).grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=5, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("v_hashes"), color=self._accent).grid(
-            row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
+            row=6, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
 
         for col, (lkey, var, phkey) in enumerate(
@@ -69,7 +78,7 @@ class VerifyPanel(BasePanel):
             ]
         ):
             hf: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
-            hf.grid(row=5, column=col, sticky="ew", padx=(16 if col == 0 else 6, 6 if col == 0 else 16), pady=(0, 14))
+            hf.grid(row=7, column=col, sticky="ew", padx=(16 if col == 0 else 6, 6 if col == 0 else 16), pady=(0, 14))
             ctk.CTkLabel(hf, text=tr(lkey), font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(anchor="w", pady=(0, 3))
             ctk.CTkEntry(
                 hf,
@@ -82,13 +91,13 @@ class VerifyPanel(BasePanel):
                 text_color=_TEXT_PRIMARY,
             ).pack(fill="x")
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=6, column=0, columnspan=2, sticky="ew", padx=16)
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=8, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("encryption"), color=self._accent).grid(
-            row=7, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
+            row=9, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
 
         enc: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
-        enc.grid(row=8, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        enc.grid(row=10, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         ctk.CTkLabel(enc, text=tr("v_ekpfs"), font=_FONT_LABEL, text_color=_TEXT_SECONDARY).pack(
             anchor="w", pady=(0, 3)
         )
@@ -103,6 +112,10 @@ class VerifyPanel(BasePanel):
             text_color=_TEXT_PRIMARY,
         ).pack(fill="x", pady=(0, 6))
         NeonCheckbox(enc, text=tr("v_newcrypt"), variable=self._new_crypt, accent=self._accent).pack(anchor="w")
+
+    def _on_image_changed(self, *_args: Any) -> None:
+        if self._metadata_preview is not None:
+            self._metadata_preview.load(self._image.get().strip())
 
     def _run_command(self) -> None:
         image: str = self._image.get().strip()

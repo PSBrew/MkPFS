@@ -5,6 +5,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ..batch_preview import BatchQueuePreview
 from ..i18n import tr
 from ..theme import _BORDER_BRIGHT
 from ..widgets import NeonCheckbox, PathRow, SectionLabel
@@ -30,6 +31,7 @@ class BatchPanel(BasePanel):
         self._overwrite: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
+        self._queue_preview: BatchQueuePreview | None = None
         super().__init__(parent)
         self._src.trace_add("write", self._on_src_changed)
 
@@ -37,8 +39,14 @@ class BatchPanel(BasePanel):
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=1)
 
+        self._queue_preview = BatchQueuePreview(card, self._accent)
+        self._queue_preview.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self._queue_preview.load(self._src.get().strip())
+
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16)
+
         SectionLabel(card, tr("paths"), color=self._accent).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6)
+            row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
 
         PathRow(
@@ -47,7 +55,7 @@ class BatchPanel(BasePanel):
             variable=self._src,
             placeholder=tr("bt_src_ph"),
             mode="folder",
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
 
         PathRow(
             card,
@@ -55,15 +63,15 @@ class BatchPanel(BasePanel):
             variable=self._out,
             placeholder=tr("bt_out_ph"),
             mode="folder",
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        ).grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16)
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=5, column=0, columnspan=2, sticky="ew", padx=16)
         SectionLabel(card, tr("options"), color=self._accent).grid(
-            row=4, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
+            row=6, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)
         )
 
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
-        opt.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        opt.grid(row=7, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
 
         chk_left: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
@@ -123,9 +131,11 @@ class BatchPanel(BasePanel):
         resolves to an existing directory to avoid interfering with manual
         typing.
         """
+        src_path: str = self._src.get().strip()
+        if self._queue_preview is not None:
+            self._queue_preview.load(src_path)
         if self._out.get().strip():
             return
-        src_path: str = self._src.get().strip()
         if not src_path:
             return
         p: Path = Path(src_path)

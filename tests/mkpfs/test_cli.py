@@ -670,7 +670,7 @@ class TestCliOutputFormatting(CliTestCase):
         self.assertIn("PFS Image Builder - Parameters", output_text)
         self.assertIn("Header magic:      PFS (20130315)", output_text)
         self.assertIn("Compression Setup: PFSC (0x43534650)", output_text)
-        self.assertIn("Temp folder:       /tmp/mkpfs", output_text)
+        self.assertIn(f"Temp folder:       {Path('/tmp/mkpfs')}", output_text)
         self.assertIn("CPU cores:         1 (auto)", output_text)
         self.assertIn("Zlib level:        9", output_text)
 
@@ -707,10 +707,15 @@ class TestCliOutputFormatting(CliTestCase):
         inspection.warnings = ["warn"]
         inspection.errors = ["err"]
         stdout_buffer: StringIO = StringIO()
-        with patch.object(cli, "inspect_pfs_image", return_value=inspection), redirect_stdout(stdout_buffer):
+        stderr_buffer: StringIO = StringIO()
+        with (
+            patch.object(cli, "inspect_pfs_image", return_value=inspection),
+            redirect_stdout(stdout_buffer),
+            redirect_stderr(stderr_buffer),
+        ):
             exit_code: int = cli.cli_mkpfs_inspect_run(SimpleNamespace(image_file="img.ffpfs", format="text"))
         self.assertEqual(exit_code, 1)
-        output_text: str = stdout_buffer.getvalue()
+        output_text: str = stdout_buffer.getvalue() + stderr_buffer.getvalue()
         self.assertIn(cli.get_output_title(), output_text)
         self.assertIn("PFS Image Inspection", output_text)
         self.assertIn("Magic:    PFS (20130315)", output_text)
@@ -2986,6 +2991,37 @@ class TestCliTreeDeep(CliTestCase):
             rc = cli_mkpfs_main(["tree", str(out)])
         self.assertEqual(rc, 0)
         self.assertIn("PPSA25872.exfat", buf.getvalue())
+
+    def test_tree_accepts_source_folder(self) -> None:
+        tmp = self.make_temp_path()
+        source = tmp / "game"
+        (source / "sce_sys").mkdir(parents=True)
+        (source / "sce_sys" / "param.json").write_text('{"titleId": "PPSA25872"}', encoding="utf-8")
+        (source / "eboot.bin").write_bytes(b"BOOT")
+
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["tree", str(source)])
+
+        self.assertEqual(rc, 0)
+        text = buf.getvalue()
+        self.assertIn("sce_sys", text)
+        self.assertIn("param.json", text)
+        self.assertIn("eboot.bin", text)
+
+    def test_inspect_wrapped_exfat_skips_outer_game_file_warnings(self) -> None:
+        tmp = self.make_temp_path()
+        out = self._wrapped(tmp)
+
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            rc = cli_mkpfs_main(["inspect", str(out)])
+
+        self.assertEqual(rc, 0)
+        text = buf.getvalue()
+        self.assertIn("Warnings: 0", text)
+        self.assertNotIn("sce_sys/param.json not found", text)
+        self.assertNotIn("eboot.bin not found", text)
 
 
 class TestCliBatchRun(CliTestCase):
