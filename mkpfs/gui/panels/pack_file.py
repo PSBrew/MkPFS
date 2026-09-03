@@ -9,7 +9,7 @@ from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..metadata_preview import MetadataPreview
 from ..theme import _BORDER_BRIGHT
-from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
+from ..widgets import GlassCard, NeonCheckbox, OptionRow, PathRow, SectionLabel
 from .base import BasePanel
 
 
@@ -28,6 +28,7 @@ class PackFilePanel(BasePanel):
         """
         self._src: ctk.StringVar = ctk.StringVar()
         self._out: ctk.StringVar = ctk.StringVar()
+        self._version: ctk.StringVar = ctk.StringVar(value="PS5")
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
         self._metadata_preview: MetadataPreview | None = None
@@ -88,6 +89,10 @@ class PackFilePanel(BasePanel):
         opt.grid(row=7, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         opt.columnconfigure((0, 1), weight=1)
 
+        OptionRow(opt, tr("pkf_version"), self._version, ["PS5", "PS4"], accent=self._accent).grid(
+            row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 8)
+        )
+
         chk: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
         chk.grid(row=0, column=1, sticky="nw", padx=(8, 0))
 
@@ -130,7 +135,7 @@ class PackFilePanel(BasePanel):
         if not src or not out:
             self._emit(tr("pkf_err"), "error")
             return
-        args: list[str] = ["pack", "file", src, out]
+        args: list[str] = ["pack", "file", src, out, "--version", self._version.get()]
         if not self._compress.get():
             args.append("--no-compress")
         if temp := self._temp_folder.get().strip():

@@ -9,7 +9,7 @@ from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..metadata_preview import MetadataPreview
 from ..theme import _BORDER_BRIGHT
-from ..widgets import GlassCard, NeonCheckbox, PathRow, SectionLabel
+from ..widgets import GlassCard, NeonCheckbox, OptionRow, PathRow, SectionLabel
 from .base import BasePanel
 
 
@@ -28,6 +28,7 @@ class PackFolderPanel(BasePanel):
         """
         self._src: ctk.StringVar = ctk.StringVar()
         self._out: ctk.StringVar = ctk.StringVar()
+        self._version: ctk.StringVar = ctk.StringVar(value="PS5")
         self._compress: ctk.BooleanVar = ctk.BooleanVar(value=True)
         self._signed: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
@@ -78,13 +79,17 @@ class PackFolderPanel(BasePanel):
         )
         opt: ctk.CTkFrame = ctk.CTkFrame(card, fg_color="transparent")
         opt.grid(row=7, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
-        opt.columnconfigure((0, 1), weight=1)
+        opt.columnconfigure((0, 1, 2), weight=1)
+
+        OptionRow(opt, tr("pf_version"), self._version, ["PS5", "PS4"], accent=self._accent).grid(
+            row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 8)
+        )
 
         chk_left: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
-        chk_left.grid(row=0, column=0, sticky="nw")
+        chk_left.grid(row=0, column=1, sticky="nw", padx=(8, 0))
 
         chk_right: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
-        chk_right.grid(row=0, column=1, sticky="nw", padx=(8, 0))
+        chk_right.grid(row=0, column=2, sticky="nw", padx=(8, 0))
 
         # Left column: Compression, Signed
         NeonCheckbox(chk_left, text=tr("pf_compress"), variable=self._compress, accent=self._accent).pack(
@@ -140,7 +145,7 @@ class PackFolderPanel(BasePanel):
         if not out:
             self._emit(tr("pf_err_out"), "error")
             return
-        args: list[str] = ["pack", "folder", src, out]
+        args: list[str] = ["pack", "folder", src, out, "--version", self._version.get()]
         if not self._compress.get():
             args.append("--no-compress")
         if self._signed.get():
