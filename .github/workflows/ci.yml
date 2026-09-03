@@ -16,7 +16,7 @@ on:
     branches:
       - '**'
   release:
-    types: [published, prereleased]
+    types: [published, released, prereleased]
 jobs:
   build:
     name: 📦 Builds the Python package
@@ -473,7 +473,7 @@ jobs:
 
   virustotal-scan:
     name: 🔒 VirusTotal scan release assets
-    if: github.event_name == 'release' && (github.event.action == 'published' || github.event.action == 'prereleased')
+    if: github.event_name == 'release' && (github.event.action == 'published' || github.event.action == 'released' || github.event.action == 'prereleased')
     needs:
       - attach-to-release
     runs-on: ubuntu-latest
