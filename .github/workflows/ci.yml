@@ -459,10 +459,21 @@ jobs:
             exit 0
           fi
           BASE_URL=${UPLOAD_URL%%\{*}
+          RELEASE_ID=${UPLOAD_URL##*/}
           echo "Using upload URL: $BASE_URL"
+          echo "Release ID: $RELEASE_ID"
+          # Delete any existing asset with the same name before re-uploading
+          EXISTING=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets")
           while IFS= read -r -d '' f; do
             name=$(basename "$f")
             mime=$(file -b --mime-type "$f" 2>/dev/null || echo application/octet-stream)
+            asset_id=$(echo "$EXISTING" | python3 -c "import sys,json; assets=json.load(sys.stdin); print(next((str(a['id']) for a in assets if a.get('name')=='$name'), ''), end='')")
+            if [ -n "$asset_id" ]; then
+              echo "Deleting existing asset $name (id=$asset_id)"
+              curl -sS -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" || true
+            fi
             echo "Uploading $name ($mime)"
             http=$(curl -sS -o /tmp/upload_resp.json -w "%{http_code}" -X POST \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
