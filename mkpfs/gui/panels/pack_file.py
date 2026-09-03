@@ -44,9 +44,7 @@ class PackFilePanel(BasePanel):
         self._metadata_preview.grid(row=0, column=0, columnspan=2, sticky="ew")
         self._metadata_preview.load(self._src.get().strip())
 
-        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(
-            row=1, column=0, columnspan=2, sticky="ew", padx=16
-        )
+        ctk.CTkFrame(card, height=1, fg_color=_BORDER_BRIGHT).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16)
 
         SectionLabel(card, tr("paths"), color=self._accent).grid(
             row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 6)

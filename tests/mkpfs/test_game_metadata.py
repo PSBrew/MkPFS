@@ -118,9 +118,9 @@ def test_unknown_file_uses_safe_fallbacks(tmp_path: Path) -> None:
 def test_reads_ffpkg_title_and_apr_emu_from_header_regions(tmp_path: Path) -> None:
     path = tmp_path / "game.ffpkg"
     data = bytearray(0x39000)
-    data[0xFFEC : 0xFFF0] = b"\x19\x01\x54\x19"
+    data[0xFFEC:0xFFF0] = b"\x19\x01\x54\x19"
     name = b"PPSA54321.complete"
-    data[0x38000 : 0x38008] = b"\x01\x00\x00\x00\x20\x00\x01" + bytes([len(name)])
+    data[0x38000:0x38008] = b"\x01\x00\x00\x00\x20\x00\x01" + bytes([len(name)])
     data[0x38008 : 0x38008 + len(name)] = name
     data[0x20000 : 0x20000 + len(b"fakelib/libSceAmpr.sprx")] = b"fakelib/libSceAmpr.sprx"
     path.write_bytes(data)
