@@ -451,6 +451,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLOAD_URL: ${{ github.event.release.upload_url }}
+          RELEASE_ID: ${{ github.event.release.id }}
         run: |
           set -euo pipefail
           ASSETS_DIR=release_assets
@@ -459,7 +460,6 @@ jobs:
             exit 0
           fi
           BASE_URL=${UPLOAD_URL%%\{*}
-          RELEASE_ID=${UPLOAD_URL##*/}
           echo "Using upload URL: $BASE_URL"
           echo "Release ID: $RELEASE_ID"
           # Delete any existing asset with the same name before re-uploading
