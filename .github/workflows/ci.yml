@@ -42,7 +42,7 @@ jobs:
       - name: Run tests
         run: SKIP_VENV=1 ./run-tests.sh
       - name: Upload coverage report
-        if: (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        if: github.repository == 'PSBrew/MkPFS' && ((github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
         uses: actions/upload-code-coverage@v1
         with:
           file: coverage.xml
