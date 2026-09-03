@@ -169,6 +169,11 @@ jobs:
           VERSION_FILE="dist/version_info.txt"
           VER="${VERSION:-0.0.0}"
           VER_SHORT="${VERSION_SHORT:-${VER%%-*}}"
+          # strip leading tag prefix v/V if present (e.g., v1.2.3 -> 1.2.3)
+          case "$VER_SHORT" in
+            v*) VER_SHORT="${VER_SHORT#v}" ;;
+            V*) VER_SHORT="${VER_SHORT#V}" ;;
+          esac
           IFS='.' read -r MAJ MIN PAT <<<"${VER_SHORT}"
           : "${MAJ:=0}"; : "${MIN:=0}"; : "${PAT:=0}"
           FILE_TUPLE="${MAJ}, ${MIN}, ${PAT}, 0"
