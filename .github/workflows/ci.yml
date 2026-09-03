@@ -66,7 +66,11 @@ jobs:
           src=$(ls dist/*.whl | head -n1)
           if [ -z "$src" ]; then echo "No wheel found"; exit 1; fi
           base="mkpfs-${ART_VERSION}-py3-none-any.whl"
-          cp "$src" "dist/$base"
+          if [ "$(basename "$src")" != "$base" ]; then
+            cp "$src" "dist/$base"
+          else
+            echo "Wheel already named $base"
+          fi
           echo "WHEEL_NAME=$base" >> "$GITHUB_ENV"
 
       - name: Store the distribution packages (wheel)
