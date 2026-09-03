@@ -164,6 +164,27 @@ jobs:
         shell: bash
         run: |
           SITE_PACKAGES="$PWD/.venv/Lib/site-packages"
+          # Build VERSIONINFO from template with real version to reduce AV heuristics
+          mkdir -p dist
+          VERSION_FILE="dist/version_info.txt"
+          VER="${VERSION:-0.0.0}"
+          VER_SHORT="${VERSION_SHORT:-${VER%%-*}}"
+          # strip leading tag prefix v/V if present (e.g., v1.2.3 -> 1.2.3)
+          case "$VER_SHORT" in
+            v*) VER_SHORT="${VER_SHORT#v}" ;;
+            V*) VER_SHORT="${VER_SHORT#V}" ;;
+          esac
+          IFS='.' read -r MAJ MIN PAT <<<"${VER_SHORT}"
+          : "${MAJ:=0}"; : "${MIN:=0}"; : "${PAT:=0}"
+          FILE_TUPLE="${MAJ}, ${MIN}, ${PAT}, 0"
+          PROD_STR="${MAJ}.${MIN}.${PAT}.0"
+          YEAR="$(date +%Y)"
+          DATE_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')"
+          sed -e "s/__FILE_VERSION_TUPLE__/${FILE_TUPLE}/g" \
+              -e "s/__PRODUCT_VERSION_STR__/${PROD_STR}/g" \
+              -e "s/__YEAR__/${YEAR}/g" \
+              -e "s/__DATE__/${DATE_ISO}/g" \
+              scripts/version_info.txt > "$VERSION_FILE"
 
           uvx pyinstaller \
             --noconfirm \
@@ -174,6 +195,8 @@ jobs:
             --paths "$SITE_PACKAGES" \
             --name MkPFS \
             --icon dist/icon.ico \
+            --version-file "$VERSION_FILE" \
+            --noupx \
             --collect-all customtkinter \
             --collect-submodules customtkinter \
             --collect-all PIL \
