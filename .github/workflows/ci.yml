@@ -78,6 +78,13 @@ jobs:
         with:
           name: ${{ env.WHEEL_NAME }}
           path: dist/${{ env.WHEEL_NAME }}
+          if-no-files-found: error
+      - name: Store Python distributions (sdist/wheel)
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/*
+          if-no-files-found: error
 
   build-binaries:
     name: 🖥️ Build desktop binaries (${{ matrix.os }})
