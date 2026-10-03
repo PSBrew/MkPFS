@@ -9,7 +9,7 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 
@@ -88,6 +88,14 @@ _SINGLE_FILE_RENAME_WARNING_TEXT: str = (
     "WARNING: The inner file was renamed to a safer file name to improve compatibility."
 )
 
+_ISAL_BACKEND_WARNING_TEXT: str = (
+    "WARNING: The ISA-L compression backend is faster at compressing, but it has a known bug "
+    "that produces PFSC blocks the PS5 hardware decompressor rejects for some games, "
+    "causing the console to kernel panic shortly after launch.\n"
+    "Only use it if you accept this risk. Prefer zlib-ng or zlib instead.\n"
+    "See: https://github.com/PSBrew/MkPFS/issues/132\n"
+)
+
 
 def _emit_game_folder_compression_warning() -> None:
     """Emit the red warning about compressing direct game-folder images."""
@@ -120,6 +128,12 @@ def _emit_single_file_verify_name_mismatch_warning(*, external_name: str, intern
         f"Comparing {external_name} with {internal_name} as the same file.",
         icon_name="warning",
     )
+
+
+def _emit_isal_backend_warning() -> None:
+    """Emit the red warning when the compression backend resolves to ISA-L."""
+    info("")  # Adds an empty line before the warning.
+    warning(_ISAL_BACKEND_WARNING_TEXT, icon_name="warning")
 
 
 def _resolve_single_file_internal_name(*, source_file: Path, rename_inner_image: bool) -> str:
@@ -801,7 +815,10 @@ def cli_mkpfs_add_create_args(
         "--compression-backend",
         choices=("auto", "zlib-ng", "zlib", "isal"),
         default="auto",
-        help="Compression backend to use for PFSC block compression (default: auto — isal > zlib-ng > zlib)",
+        help=(
+            "Compression backend to use for PFSC block compression "
+            "(default: auto — zlib-ng > zlib; isal is never auto-selected, see issue #132)"
+        ),
     )
 
     parser.add_argument(
@@ -1286,7 +1303,7 @@ def _run_pack_build(
 @contextmanager
 def _stage_single_file_source_root(
     *, source_file: Path, temp_folder: Path | None = None, staged_file_name: str | None = None
-) -> Iterator[Path]:
+) -> Generator[Path, None, None]:
     """Yield a temporary source root exposing one file, avoiding data copies when possible.
 
     The staged file is created as a hard link when possible, with a symlink
@@ -2419,7 +2436,7 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         "--compression-backend",
         choices=("auto", "zlib-ng", "zlib", "isal"),
         default="auto",
-        help="Compression backend (default: auto)",
+        help="Compression backend (default: auto — zlib-ng > zlib; isal is never auto-selected)",
     )
     batch_parser.add_argument(
         "--max-compressed-ratio",
@@ -2520,6 +2537,8 @@ def cli_mkpfs_main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             error(f"Unable to select compression backend '{getattr(args, 'compression_backend', None)}': {exc}")
             return 2
+        if comp.get_backend_name() == "isal":
+            _emit_isal_backend_warning()
 
     return int(args.func(args))
 

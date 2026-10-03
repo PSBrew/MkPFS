@@ -6,7 +6,7 @@ pfs.py so callsites can stay simple.
 
 API::
 
-    set_backend(name: str) -> None   # pick "zlib-ng", "isal", or "zlib"
+    set_backend(name: str) -> None   # pick "auto", "zlib-ng", "isal", or "zlib"
     get_backend_name() -> str         # returns current backend name
     init_worker(backend_name=None)    # per-process bootstrap for multiprocessing
     compress_block(data, level=6)     # compress bytes (level 1-9, std zlib scale)
@@ -24,6 +24,8 @@ Notes:
   PFSC in mkpfs.pfs. The PFSC encoder/decoder lives entirely in pfs.py.
 * Decompression is backend-agnostic: any backend can decompress output from any
   other because the zlib stream format is interoperable.
+* ISA-L is never auto-selected because its streams can trigger PS5 hardware
+  inflater errors (issue #132); manual selection still works.
 """
 
 from __future__ import annotations
@@ -83,15 +85,16 @@ def set_backend(name: str) -> None:
     global _backend_name, _backend
 
     normalised = name.lower()
-    # Auto-selection tries backends in preferred order: isal > zlib-ng > zlib
+    # Auto-selection tries zlib-ng > zlib; isal is excluded due to PS5 ZCN
+    # incompatibility (issue #132).
     if normalised == "auto":
-        for candidate in ("isal", "zlib-ng", "zlib"):
+        for candidate in ("zlib-ng", "zlib"):
             try:
                 set_backend(candidate)
                 return
             except ImportError:
                 continue
-        raise ImportError("no available compression backend (isal, zlib-ng, zlib)")
+        raise ImportError("no available compression backend (zlib-ng, zlib)")
 
     if normalised == "zlib-ng":
         loader = _load_zlib_ng
@@ -122,10 +125,9 @@ def init_worker(backend_name: str | None = None) -> None:
     Call this as ``Pool(initializer=init_worker, initargs=(name,))`` so each
     spawned process loads the correct backend before compressing data.
 
-    Args:
         backend_name: Name of the backend to load (e.g. ``"zlib-ng"``).  If
             *None*, re-uses whatever was last set on the parent side or falls
-            back to ``"isal"`` / ``"zlib-ng"`` / ``"zlib"`` in that order.
+            back to ``"zlib-ng"`` / ``"zlib"`` in that order.
     """
     global _backend, _backend_name
 
@@ -139,7 +141,7 @@ def init_worker(backend_name: str | None = None) -> None:
 
     # If nothing was passed (or explicit load failed) and default wasn't loaded, attempt preferred fallbacks.
     if _backend is None:
-        for fallback in ("isal", "zlib-ng", "zlib"):
+        for fallback in ("zlib-ng", "zlib"):
             try:
                 set_backend(fallback)
                 break
