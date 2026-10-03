@@ -188,7 +188,8 @@ The benchmark below was run on **macOS ARM64 (Apple M-series)** using the includ
 | **isal** | 277.30 MiB | 0.2708 | 446.9 | **4.02x** | 1142.9 |
 
 - **zlib-ng** compresses **1.66x faster** than stdlib zlib with nearly identical compression ratio — the best all-rounder for maximum compression with speed.
-- **ISAL** compresses **4.02x faster** than stdlib zlib, trading a slight ~1% larger output for dramatically better throughput — ideal for large game images.
+- **ISAL** compresses **4.02x faster** than stdlib zlib, but is **not auto-selected** because its output can trigger PS5 hardware decompressor errors and kernel panics for some games. Use only with `--compression-backend isal` at your own risk; see [issue #132](https://github.com/PSBrew/MkPFS/issues/132).
+- **auto** selects `zlib-ng`, then `zlib`.
 - **stdlib zlib** is always available as a fallback; it produces the smallest output but is the slowest to compress.
 - Decompress speeds are excellent across all backends (1142–2287 MB/s), so compressed images load fast regardless of which backend created them.
 

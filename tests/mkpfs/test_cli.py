@@ -263,6 +263,22 @@ class TestCliArgumentHelpers(CliTestCase):
         )
         self.assertEqual(threshold_action.default, 0)
 
+    def test_pack_folder_compression_backend_defaults_to_auto_and_documents_order(self) -> None:
+        """The pack folder parser should default to safe automatic backend selection."""
+        parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
+        pack_parser: argparse.ArgumentParser = next(
+            action.choices["pack"] for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        pack_choices: dict[str, argparse.ArgumentParser] = next(
+            action.choices for action in pack_parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        folder_parser: argparse.ArgumentParser = pack_choices["folder"]
+        compression_action: argparse.Action = next(
+            action for action in folder_parser._actions if getattr(action, "dest", "") == "compression_backend"
+        )
+        self.assertEqual(compression_action.default, "auto")
+        self.assertIn("zlib-ng > zlib", compression_action.help or "")
+
     def test_pack_parser_uses_thirty_two_as_default_inode_bits(self) -> None:
         """The pack parser should expose 32 as the default inode width."""
         parser: argparse.ArgumentParser = cli.cli_mkpfs_main_parsers()
@@ -2608,6 +2624,46 @@ class TestRunImageCheck(CliTestCase):
             )
         self.assertEqual(rc, 0)
         self.assertFalse(out.exists())
+
+    def test_pack_folder_warns_when_isal_backend_is_selected(self) -> None:
+        """Folder packing should warn when ISA-L is explicitly selected."""
+        import pytest
+
+        import mkpfs.compression as comp
+
+        original_backend_name: str = comp._backend_name
+        original_backend: object | None = comp._backend
+        self.addCleanup(setattr, comp, "_backend_name", original_backend_name)
+        self.addCleanup(setattr, comp, "_backend", original_backend)
+
+        try:
+            comp.set_backend("isal")
+        except ImportError:
+            pytest.skip("isal backend is not available in this environment")
+
+        tmp_path: Path = self.make_temp_path()
+        source: Path = self.make_valid_source(tmp_path)
+        output: Path = tmp_path / "output.ffpfs"
+        stdout_buffer: StringIO = StringIO()
+        stderr_buffer: StringIO = StringIO()
+        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            return_code: int = cli_mkpfs_main(
+                [
+                    "pack",
+                    "folder",
+                    str(source),
+                    str(output),
+                    "--compression-backend",
+                    "isal",
+                    "--dry-run",
+                    "--no-adjust-output-file-extension",
+                ]
+            )
+
+        self.assertEqual(return_code, 0)
+        output_text: str = stdout_buffer.getvalue() + stderr_buffer.getvalue()
+        self.assertIn("ISA-L", output_text)
+        self.assertIn("issues/132", output_text)
 
 
 class TestCliTreeStructureOnly(CliTestCase):
