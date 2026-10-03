@@ -37,6 +37,25 @@ class TestCompressionBackends:
         comp.set_backend("zlib-ng")
         assert comp.get_backend_name() == "zlib-ng"
 
+    def test_auto_never_selects_isal_even_when_available(self) -> None:
+        import mkpfs.compression as comp
+
+        def fake_load_isal() -> object:
+            class FakeIsal:
+                def compress(self, data: bytes, level: int = 2) -> bytes:
+                    return b"fake"
+
+            return FakeIsal()
+
+        original = comp._load_isal
+        comp._load_isal = fake_load_isal  # type: ignore[assignment]
+        try:
+            comp.set_backend("auto")
+            assert comp.get_backend_name() != "isal"
+            assert comp.get_backend_name() in ("zlib-ng", "zlib")
+        finally:
+            comp._load_isal = original  # type: ignore[assignment]
+
     def test_compress_decompress_roundtrip(self) -> None:
         import mkpfs.compression as comp
 
