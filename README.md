@@ -763,7 +763,7 @@ Special thanks to the people and communities helping shape MkPFS:
 ## 💻 Contributors
 
 <a href="https://github.com/PSBrew/MkPFS/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=PSBrew/MkPFS" />
+   <img src="https://contrib.rocks/image?repo=PSBrew/MkPFS" />
 </a>
 
 ## 📘 Disclaimer
