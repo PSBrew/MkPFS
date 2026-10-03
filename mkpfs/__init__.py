@@ -3,4 +3,4 @@
 MkPFS is a toolkit for building, verifying, browsing, and managing PlayStation PFS images.
 """
 
-__version__: str = "1.0.1"
+__version__: str = "1.1.0"
