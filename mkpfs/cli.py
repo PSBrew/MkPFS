@@ -21,9 +21,17 @@ from pathlib import Path
 
 from . import __version__, consts
 from .ampr import ensure_ampr_index
-from .archive_source import ArchiveError, ArchiveSubtree, describe_source, is_archive_path, prepare_archive_subtree
+from .archive_source import (
+    ArchiveError,
+    ArchiveSubtree,
+    SourceTree,
+    describe_source,
+    is_archive_path,
+    prepare_archive_subtree,
+)
 from .exfat import EXFAT_SIGNATURE, ExfatReader, render_exfat_tree
 from .exfat_writer import iter_exfat_image, write_exfat_image
+from .layered_source import LayeredSource, prepare_layered_source
 from .logging import error, info, warning
 from .pbar import Progress
 from .pfs import (
@@ -1412,12 +1420,13 @@ def cli_mkpfs_pack_exfat_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path | ArchiveSubtree) -> int:
+def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path | SourceTree) -> int:
     """Wrap a folder in an exFAT and compress it into a .ffpfsc in one pass.
 
     Args:
         args: Parsed pack-folder CLI arguments.
-        source_path: Resolved source directory, or an archive subtree streamed without extraction.
+        source_path: Resolved source directory, an archive subtree streamed without extraction,
+            or several layers merged together.
 
     Returns:
         Process exit code.
@@ -1475,7 +1484,7 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path | ArchiveSubt
         ekpfs=config.ekpfs_key,
         verbose=args.verbose,
     )
-    stats.input_path = source_path.path if isinstance(source_path, ArchiveSubtree) else source_path
+    stats.input_path = source_path.path if isinstance(source_path, SourceTree) else source_path
     print_summary(stats)
     if not args.verify:
         return 0
@@ -1522,8 +1531,47 @@ def _run_archive_pack(*, args: argparse.Namespace, archive_path: Path) -> int:
     return _run_exfat_pack(args=args, source_path=subtree)
 
 
+def _run_layered_pack(*, args: argparse.Namespace, base_path: Path, layer_specs: list[str]) -> int:
+    """Pack a game together with the updates/DLC layered on top of it, without copying.
+
+    The base (folder or archive) and every ``--layer`` are listed, merged so that the
+    highest layer wins for each path, and streamed into the exFAT-wrapped ``.ffpfsc``
+    builder.
+
+    Args:
+        args: Parsed pack-folder CLI arguments.
+        base_path: Resolved base folder or archive.
+        layer_specs: ``--layer`` values, bottom to top.
+
+    Returns:
+        Process exit code.
+
+    Raises:
+        BuildError: If ``--raw`` was requested, a layer cannot be opened, or the
+            strict game-file check fails.
+    """
+    if bool(getattr(args, "raw", False)):
+        raise BuildError("--raw is not supported with --layer; layered sources are always packed exFAT-wrapped")
+    password: str | None = getattr(args, "password", None) or os.environ.get("MKPFS_ARCHIVE_PASSWORD") or None
+    try:
+        source: LayeredSource = prepare_layered_source(
+            base_path,
+            layer_specs,
+            password=password,
+            archive_root=getattr(args, "archive_root", None),
+            ampr_index=bool(getattr(args, "ampr_index", True)),
+        )
+    except ArchiveError as exc:
+        raise BuildError(str(exc)) from exc
+    if bool(getattr(args, "require_game_files", False)) and not (
+        source.has_file("sce_sys/param.json") and source.has_file("eboot.bin")
+    ):
+        raise BuildError("--require-game-files: the merged layers do not provide sce_sys/param.json and eboot.bin")
+    return _run_exfat_pack(args=args, source_path=source)
+
+
 def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
-    """Pack a folder (or a RAR/ZIP archive holding one) into a PFS image.
+    """Pack a folder (or a RAR/ZIP archive holding one, or a game plus layers) into a PFS image.
 
     Args:
         args: Parsed CLI arguments with ``source_dir`` and ``image_file``.
@@ -1532,6 +1580,9 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
         Process exit code for the folder packing workflow.
     """
     source_path: Path = Path(args.source_dir).expanduser().resolve()
+    layer_specs: list[str] = list(getattr(args, "layers", None) or [])
+    if layer_specs:
+        return _run_layered_pack(args=args, base_path=source_path, layer_specs=layer_specs)
     if is_archive_path(source_path):
         return _run_archive_pack(args=args, archive_path=source_path)
     temp_folder: Path = _resolve_pack_temp_folder(args)
@@ -2226,6 +2277,18 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         dest="archive_root",
         default=None,
         help="Directory inside the archive to pack when it holds several games (default: auto-detect)",
+    )
+    folder_parser.add_argument(
+        "--layer",
+        dest="layers",
+        action="append",
+        default=None,
+        metavar="PATH[::FOLDER]",
+        help=(
+            "Folder or .rar/.zip (update, backport, DLC) laid on top of the source, repeatable from bottom "
+            "to top: a file in a later layer replaces the same file below it. '::FOLDER' names the game "
+            "folder inside the layer (default: auto-detect). Nothing is copied."
+        ),
     )
     folder_parser.add_argument(
         "--no-ampr-index",

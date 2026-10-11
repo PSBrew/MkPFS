@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from . import compression as comp
 from . import consts
-from .archive_source import ArchiveSubtree, describe_source, source_image_basename
+from .archive_source import SourceTree, describe_source, source_image_basename
 from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
 from .exfat_writer import iter_exfat_image
 from .gather import gather_files_scandir
@@ -4497,7 +4497,7 @@ def build_pfs_stream_single_file(
 
 def build_pfs_stream_from_exfat(
     *,
-    source_root: Path | ArchiveSubtree,
+    source_root: Path | SourceTree,
     output_path: Path,
     block_size: int,
     pfs_version: int,
@@ -4541,8 +4541,8 @@ def build_pfs_stream_from_exfat(
     start: float = time.time()
     progress: Progress = Progress(enabled=True)
     source_display: str = describe_source(source_root)
-    source_file_path: Path = source_root.path if isinstance(source_root, ArchiveSubtree) else source_root
-    if not isinstance(source_root, ArchiveSubtree) and not source_root.is_dir():
+    source_file_path: Path = source_root.path if isinstance(source_root, SourceTree) else source_root
+    if not isinstance(source_root, SourceTree) and not source_root.is_dir():
         raise BuildError(f"source must be an existing directory: {source_root}")
     now: int = int(time.time())
     resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)

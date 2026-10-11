@@ -59,6 +59,9 @@ rm './pfs_image.dat'
 python -m mkpfs pack folder './BREW1234.rar' './BREW1234.ffpfsc'
 python -m mkpfs pack folder './BREW1234.part1.rar' './BREW1234.ffpfsc' --password 'secret'
 
+# Creating Images: Option 7: Game + update + DLC merged into one .ffpfsc, without copying anything (layers, bottom to top)
+python -m mkpfs pack folder './BREW1234' './BREW1234.ffpfsc' --layer './BREW1234-update' --layer './BREW1234-dlc.zip'
+
 # Extracting Existing Images (Reverse operation; --deep lists/extracts inside a wrapped exFAT)
 python -m mkpfs unpack  --deep './BREW1234.ffpfsc' './BREW1234-extracted/'
 ```
@@ -261,9 +264,12 @@ By default, `pack folder` wraps the folder in an exFAT image and compresses that
 
 `source_dir` may also be a `.rar` or `.zip` file: the game inside it is packed straight out of the archive, with no extraction and no temporary copy. The archive is listed once, the game folder (`sce_sys/param.json` + `eboot.bin`) is located automatically, and each member is streamed into the compressor. RAR needs the `unrar` tool on `PATH` (or `MKPFS_UNRAR`); multi-volume sets (`.part1.rar`, `.r00`) and passwords are supported.
 
+`--layer` lays an update, a backport or DLC on top of the source before packing, without copying anything. Each layer is a folder or a `.rar`/`.zip`; repeat the flag from bottom to top, and a file in a later layer replaces the same file in the layers below it. The result is the image you would get from copying every piece over the game folder by hand.
+
 ```text
 mkpfs pack folder [-h] [--adjust-output-file-extension | --no-adjust-output-file-extension]
                   [--raw] [--password PASSWORD] [--archive-root ARCHIVE_ROOT]
+                  [--layer PATH[::FOLDER]]
                   [--compress | --no-compress] [--threshold-gain THRESHOLD_GAIN]
                   [--block-size BLOCK_SIZE] [--version {PS4,PS5}] [--inode-bits {32,64}]
                   [--case-sensitive | --case-insensitive] [--cpu-count CPU_COUNT]
@@ -284,6 +290,7 @@ mkpfs pack folder ./input ./game.ffpfs --require-game-files --verify
 mkpfs pack folder ./input ./game.ffpfs --temp-folder ./tmp/mkpfs
 mkpfs pack folder ./Game.rar ./game.ffpfsc
 mkpfs pack folder ./Game.part1.rar ./game.ffpfsc --password secret --archive-root PPSA12345-app
+mkpfs pack folder ./Game ./game.ffpfsc --layer ./Game-Update-v1.05 --layer ./Game-DLC.zip::PPSA12345-app
 ```
 
 | Parameter | Description                                                                                                                                                                                                                                   |
@@ -294,6 +301,7 @@ mkpfs pack folder ./Game.part1.rar ./game.ffpfsc --password secret --archive-roo
 | `--raw` | Pack the folder directly into a PFS image instead of the default exFAT-wrapped `.ffpfsc`. Not available for archive sources.                                                                                                                  |
 | `--password PASSWORD` | Password for an encrypted RAR/ZIP source. `MKPFS_ARCHIVE_PASSWORD` is used when the flag is omitted.                                                                                                                                 |
 | `--archive-root ARCHIVE_ROOT` | Directory inside the archive to pack. Default: the single game folder found in the archive (the archive root when there is none); required when the archive holds several games.                                             |
+| `--layer PATH[::FOLDER]` | Folder or `.rar`/`.zip` laid on top of the source (update, backport, DLC). Repeatable, bottom to top: a file in a later layer replaces the same file below it. `::FOLDER` names the game folder inside the layer; by default it is detected (`eboot.bin`/`sce_sys`, a `*-app` folder, or the single folder inside). Not available with `--raw`. |
 | `--adjust-output-file-extension` | Automatically adjust the output extension to match the detected pack mode. This is the default.                                                                                                                                               |
 | `--no-adjust-output-file-extension` | Keep the requested output file name unchanged.                                                                                                                                                                                                |
 | `--compress` | Enable PFSC block compression. This is the default.                                                                                                                                                                                           |
@@ -330,6 +338,7 @@ Notes:
 - `--ekpfs-key` is only meaningful when used with `--encrypted`.
 - Archive sources (`.rar`/`.zip`) produce the same image as the extracted folder would. Members are read in the order the exFAT serializer needs them, which matches how release archives are usually stored, so even solid RARs read mostly forward (a warning is printed for solid archives because out-of-order members are slow). For emulation builds the `ampr_emu.index` is generated in memory from the archive listing. `--verify` on an archive source checks the image structure only.
 - RAR support shells out to `unrar` (`unrar`, `UnRAR.exe`, or the path in `MKPFS_UNRAR`). ZIP support is built in; AES-encrypted ZIPs additionally need the `pyzipper` package (`pip install "mkpfs[archives]"`).
+- Layers (`--layer`) are merged by listing: the highest layer wins for every path, a file replaces a whole folder of the same name below it, and folders are merged. Nothing is written to the source folders; the `ampr_emu.index` of emulation builds is generated in memory from the merged listing (an index found in any layer is replaced). `--password` applies to every encrypted archive among the layers. Release notes (`.nfo`, `.txt`, ...) next to a layer's game folder are not packed.
 
 ### `pack file`
 

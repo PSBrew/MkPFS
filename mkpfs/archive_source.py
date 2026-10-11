@@ -578,8 +578,80 @@ class ArchiveSource:
         return ", ".join(flags)
 
 
+class SourceTree:
+    """A tree of files served from somewhere other than a plain directory.
+
+    ``pack folder`` accepts a ``Path`` or any ``SourceTree``: an archive subtree
+    (:class:`ArchiveSubtree`) or several layers merged together
+    (:class:`~mkpfs.layered_source.LayeredSource`). Subclasses provide the listing and
+    the streams; the helpers below derive everything else from them.
+    """
+
+    extra_files: dict[str, bytes]
+
+    @property
+    def path(self) -> Path:
+        """The file or directory on disk this tree comes from."""
+        raise NotImplementedError
+
+    @property
+    def name(self) -> str:
+        """Display name of the tree (used for the image name when there is no title ID)."""
+        raise NotImplementedError
+
+    def entries(self) -> list[ArchiveEntry]:
+        """Return the files and directories of the tree, paths relative to its root."""
+        raise NotImplementedError
+
+    def has_file(self, rel_path: str) -> bool:
+        """Return True when ``rel_path`` is a file of the tree."""
+        raise NotImplementedError
+
+    def open(self, rel_path: str) -> BinaryIO:
+        """Open a file of the tree for sequential reading."""
+        raise NotImplementedError
+
+    def display(self) -> str:
+        """Return a display string for logs and summaries."""
+        raise NotImplementedError
+
+    def read_bytes(self, rel_path: str, *, limit: int = 16 * 1024 * 1024) -> bytes:
+        """Read up to ``limit`` bytes of a file (meant for small metadata files)."""
+        stream: BinaryIO = self.open(rel_path)
+        try:
+            return stream.read(limit)
+        finally:
+            stream.close()
+
+    def total_size(self) -> int:
+        """Return the byte total of all files in the tree."""
+        return sum(e.size for e in self.entries() if not e.is_dir)
+
+    def title_id(self) -> str | None:
+        """Return ``titleId`` from ``sce_sys/param.json`` when present and valid."""
+        if not self.has_file("sce_sys/param.json"):
+            return None
+        try:
+            parsed: object = json.loads(
+                self.read_bytes("sce_sys/param.json", limit=4 * 1024 * 1024).decode("utf-8-sig")
+            )
+        except (ArchiveError, OSError, ValueError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        value: object = parsed.get("titleId") or parsed.get("title_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    def image_basename(self) -> str:
+        """Return the output base name: the title ID, else the tree name."""
+        base: str = self.title_id() or self.name or "image"
+        return _sanitize_name_component(base) or "image"
+
+
 @dataclass
-class ArchiveSubtree:
+class ArchiveSubtree(SourceTree):
     """A directory inside an archive, exposed as a pack source.
 
     ``extra_files`` holds in-memory members (such as a freshly generated
@@ -644,45 +716,23 @@ class ArchiveSubtree:
             return self.extra_files[rel_path][:limit]
         return self.source.read_bytes(self._head() + rel_path, limit=limit)
 
-    def total_size(self) -> int:
-        """Return the uncompressed byte total of all files in the subtree."""
-        return sum(e.size for e in self.entries() if not e.is_dir)
-
-    def title_id(self) -> str | None:
-        """Return ``titleId`` from ``sce_sys/param.json`` when present and valid."""
-        if not self.has_file("sce_sys/param.json"):
-            return None
-        try:
-            parsed: object = json.loads(
-                self.read_bytes("sce_sys/param.json", limit=4 * 1024 * 1024).decode("utf-8-sig")
-            )
-        except (ArchiveError, ValueError):
-            return None
-        if not isinstance(parsed, dict):
-            return None
-        value: object = parsed.get("titleId") or parsed.get("title_id")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        return None
-
-    def image_basename(self) -> str:
-        """Return the output base name: the title ID, else the subtree or archive name."""
-        base: str = self.title_id() or self.name or "image"
-        return _sanitize_name_component(base) or "image"
+    def display(self) -> str:
+        """Return a display string for logs and summaries."""
+        inner: str = f"/{self.prefix}" if self.prefix else ""
+        return f"{self.path}{inner} ({self.source.describe()})"
 
 
-def source_image_basename(source: Path | ArchiveSubtree) -> str:
-    """Return the default image base name for a folder or an archive subtree."""
-    if isinstance(source, ArchiveSubtree):
+def source_image_basename(source: Path | SourceTree) -> str:
+    """Return the default image base name for a folder, an archive subtree or merged layers."""
+    if isinstance(source, SourceTree):
         return source.image_basename()
     return default_image_basename(source)
 
 
-def describe_source(source: Path | ArchiveSubtree) -> str:
+def describe_source(source: Path | SourceTree) -> str:
     """Return a display string for logs and summaries."""
-    if isinstance(source, ArchiveSubtree):
-        inner: str = f"/{source.prefix}" if source.prefix else ""
-        return f"{source.path}{inner} ({source.source.describe()})"
+    if isinstance(source, SourceTree):
+        return source.display()
     return str(source)
 
 

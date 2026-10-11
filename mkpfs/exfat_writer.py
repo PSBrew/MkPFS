@@ -8,7 +8,7 @@ out contiguously). Because nothing is written out of order, the byte stream can
 be consumed straight into the compressor with no temporary image.
 
 The source may also be a directory inside a RAR/ZIP archive
-(:class:`~mkpfs.archive_source.ArchiveSubtree`): the layout is planned from the
+(:class:`~mkpfs.archive_source.SourceTree`): the layout is planned from the
 archive listing and member contents are streamed straight out of the archive, so
 no extraction is needed either.
 
@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from ._exfat_upcase import UPCASE_CHECKSUM, UPCASE_TABLE
-from .archive_source import ArchiveEntry, ArchiveSubtree, source_image_basename
+from .archive_source import ArchiveEntry, SourceTree, source_image_basename
 from .pbar import Progress
 from .utils import is_ignored_name
 
@@ -77,7 +77,7 @@ class _Node:
         return self.abs_path.open("rb")
 
 
-def _scan_archive_tree(subtree: ArchiveSubtree) -> _Node:
+def _scan_archive_tree(subtree: SourceTree) -> _Node:
     """Build the directory tree of an archive subtree from its listing.
 
     Mirrors :func:`_scan_tree`: children are sorted case-insensitively by name and
@@ -391,7 +391,7 @@ def _build_fat(
 
 
 def iter_exfat_image(
-    source_root: Path | ArchiveSubtree,
+    source_root: Path | SourceTree,
     cluster_size: int | None = None,
     on_layout: Callable[[int], None] | None = None,
 ) -> Iterator[bytes]:
@@ -408,9 +408,7 @@ def iter_exfat_image(
     Yields:
         Image byte chunks in increasing offset order; concatenation is the volume.
     """
-    root: _Node = (
-        _scan_archive_tree(source_root) if isinstance(source_root, ArchiveSubtree) else _scan_tree(source_root)
-    )
+    root: _Node = _scan_archive_tree(source_root) if isinstance(source_root, SourceTree) else _scan_tree(source_root)
     cluster_size = cluster_size or _choose_cluster_size(root)
     spc: int = cluster_size // BYTES_PER_SECTOR
     spc_shift: int = (cluster_size // BYTES_PER_SECTOR).bit_length() - 1
@@ -487,7 +485,7 @@ def iter_exfat_image(
 
 
 def write_exfat_image(
-    source_root: Path | ArchiveSubtree,
+    source_root: Path | SourceTree,
     output_path: Path,
     cluster_size: int | None = None,
     progress: Progress | None = None,
