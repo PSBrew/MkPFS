@@ -5,6 +5,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ...archive_source import is_archive_path
 from ...utils import ui_sanitize_basename
 from ..i18n import tr
 from ..metadata_preview import MetadataPreview
@@ -34,6 +35,7 @@ class PackFolderPanel(BasePanel):
         self._verify_after: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._dry_run: ctk.BooleanVar = ctk.BooleanVar(value=False)
         self._temp_folder: ctk.StringVar = ctk.StringVar()
+        self._password: ctk.StringVar = ctk.StringVar()
         self._metadata_preview: MetadataPreview | None = None
         super().__init__(parent)
         # Auto-populate output filename from source when empty.
@@ -57,9 +59,11 @@ class PackFolderPanel(BasePanel):
             card,
             tr("pf_src_label"),
             self._src,
-            mode="folder",
+            mode="any",
+            filetypes=[("RAR / ZIP archives", "*.rar *.zip *.RAR *.ZIP"), ("All files", "*.*")],
             placeholder=tr("pf_src_ph"),
-            browse_label=tr("browse"),
+            browse_label=tr("pf_archive_btn"),
+            folder_label=tr("pf_folder_btn"),
         ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10))
 
         PathRow(
@@ -116,12 +120,21 @@ class PackFolderPanel(BasePanel):
             browse_label=tr("browse"),
         ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
+        # Archive password (only used when the source is a RAR/ZIP file)
+        pw: ctk.CTkFrame = ctk.CTkFrame(opt, fg_color="transparent")
+        pw.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(10, 0))
+        pw.columnconfigure(0, weight=1)
+        ctk.CTkLabel(pw, text=tr("pf_password"), anchor="w").grid(row=0, column=0, sticky="w", pady=(0, 3))
+        ctk.CTkEntry(pw, textvariable=self._password, show="•", placeholder_text=tr("pf_password_ph")).grid(
+            row=1, column=0, sticky="ew"
+        )
+
     def _on_src_changed(self, *_args: Any) -> None:
         """Auto-populate an output basename for pack-folder when the source is chosen.
 
-        Applies ui_sanitize_basename to the source folder name, and uses the
-        canonical .ffpfsc extension. Only triggers when the output field is
-        currently empty and the source resolves to an existing directory.
+        Applies ui_sanitize_basename to the source folder name (or the archive stem),
+        and uses the canonical .ffpfsc extension. Only triggers when the output field
+        is currently empty and the source resolves to an existing directory or archive.
         """
         src_path: str = self._src.get().strip()
         if self._metadata_preview is not None:
@@ -132,9 +145,10 @@ class PackFolderPanel(BasePanel):
             return
 
         p: Path = Path(src_path)
-        if not p.is_dir():
-            return
-        self._out.set(str(p.parent / (ui_sanitize_basename(p.name) + ".ffpfsc")))
+        if p.is_dir():
+            self._out.set(str(p.parent / (ui_sanitize_basename(p.name) + ".ffpfsc")))
+        elif is_archive_path(p):
+            self._out.set(str(p.parent / (ui_sanitize_basename(p.stem) + ".ffpfsc")))
 
     def _run_command(self) -> None:
         src: str = self._src.get().strip()
@@ -156,4 +170,6 @@ class PackFolderPanel(BasePanel):
             args.append("--dry-run")
         if temp := self._temp_folder.get().strip():
             args += ["--temp-folder", temp]
+        if (password := self._password.get()) and is_archive_path(Path(src)):
+            args += ["--password", password]
         self._run_mkpfs(args)

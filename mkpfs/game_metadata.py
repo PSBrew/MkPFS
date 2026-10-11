@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from .archive_source import ArchiveError, ArchiveSource, ArchiveSubtree, is_archive_path
 from .exfat import ExfatEntry, ExfatReader
 from .pfs import (
     inspect_pfs_image,
@@ -95,6 +96,8 @@ def read_game_metadata(file_path: str | Path) -> GameMetadata:
             return _read_ffpkg_metadata(path, meta)
         if suffix in {".ffpfs", ".ffpfsc"}:
             return _read_pfs_metadata(path, meta)
+        if is_archive_path(path):
+            return _read_archive_metadata(path, meta)
         meta.package_type = suffix.lstrip(".").upper() or _DASH
     except Exception as exc:
         meta.error = str(exc)
@@ -170,6 +173,29 @@ def _fallback_title_id(path: Path) -> str:
 def _read_folder_metadata(path: Path, meta: GameMetadata) -> GameMetadata:
     meta.package_type = "FOLDER"
     _fill_from_source_folder(path, meta)
+    return meta
+
+
+def _read_archive_metadata(path: Path, meta: GameMetadata) -> GameMetadata:
+    """Fill metadata from a RAR/ZIP archive by reading its listing and small members."""
+    meta.package_type = path.suffix.lstrip(".").upper() or "ARCHIVE"
+    try:
+        source = ArchiveSource(path)
+    except ArchiveError as exc:
+        meta.error = str(exc)
+        return meta
+    roots = source.game_roots()
+    subtree: ArchiveSubtree = source.subtree(roots[0] if roots else "")
+    meta.file_size = subtree.total_size()
+    meta.has_apr_emu = subtree.has_file("fakelib/libSceAmpr.sprx")
+    if subtree.has_file("sce_sys/param.json"):
+        with contextlib.suppress(ArchiveError, ValueError, json.JSONDecodeError):
+            _fill_from_param_json(subtree.read_bytes("sce_sys/param.json", limit=_MAX_PARAM_SIZE), meta)
+    if subtree.has_file("sce_sys/icon0.png"):
+        with contextlib.suppress(ArchiveError):
+            icon_bytes = subtree.read_bytes("sce_sys/icon0.png", limit=_MAX_ICON_SIZE)
+            if _is_png(icon_bytes):
+                meta.icon_bytes = icon_bytes
     return meta
 
 
