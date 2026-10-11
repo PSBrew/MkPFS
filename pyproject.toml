@@ -28,6 +28,9 @@ dependencies = [
 gui = [
     "customtkinter>=5.2.0",
 ]
+archives = [
+    "pyzipper>=0.3.6",
+]
 
 [project.scripts]
 mkpfs = "mkpfs.cli:main"
@@ -55,6 +58,7 @@ dev = [
     "twine>=6.1.0",
     "customtkinter>=5.2.0",
     "Pillow>=9.0.0",
+    "pyzipper>=0.3.6",
 ]
 
 [tool.pytest.ini_options]
