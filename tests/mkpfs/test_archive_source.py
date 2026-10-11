@@ -299,11 +299,21 @@ Details: RAR 5, volume, solid
        mtime: 2025-09-24 17:22:10,000000000
   Attributes: ...D...
      Host OS: Windows
+
+        Name: QO
+        Type: Service
+        Size: 455
+ Packed size: 455
+       Ratio: 100%
+       mtime: 2025-09-24 17:22:10,000000000
+     Host OS: Windows
+ Compression: RAR 5.0(v50) -m0 -md=128k
 """
         entries, solid, encrypted = parse_unrar_listing(text)
         self.assertTrue(solid)
         self.assertTrue(encrypted)
         by_path = {e.rel_path: e for e in entries}
+        # The quick-open service header that UnRAR 7.30 lists is not a member.
         self.assertEqual(set(by_path), {"GAME-app/sce_sys/param.json", "GAME-app/data/big.pak", "GAME-app"})
         self.assertEqual(by_path["GAME-app/data/big.pak"].size, 5_000_000)  # split volumes collapsed
         self.assertTrue(by_path["GAME-app"].is_dir)

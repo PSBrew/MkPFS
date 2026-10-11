@@ -312,7 +312,11 @@ def parse_unrar_listing(text: str) -> tuple[list[ArchiveEntry], bool, bool]:
             current.clear()
             return
         rel_path: str = _normalize_member_path(name)
-        is_dir: bool = current.get("Type", "File").lower().startswith("dir")
+        kind: str = current.get("Type", "File").lower()
+        if not (kind.startswith("file") or kind.startswith("dir")):
+            current.clear()  # service headers (quick open "QO", recovery...) and links are not members
+            return
+        is_dir: bool = kind.startswith("dir")
         size: int = int(current.get("Size", "0") or 0)
         mtime: int = _parse_unrar_mtime(current.get("mtime", ""))
         if "encrypted" in current.get("Flags", "").lower():
