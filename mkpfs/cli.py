@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import __version__, consts
 from .ampr import ensure_ampr_index
+from .archive_source import ArchiveError, ArchiveSubtree, describe_source, is_archive_path, prepare_archive_subtree
 from .exfat import EXFAT_SIGNATURE, ExfatReader, render_exfat_tree
 from .exfat_writer import iter_exfat_image, write_exfat_image
 from .logging import error, info, warning
@@ -1004,7 +1005,7 @@ def _resolve_pack_build_config(args: argparse.Namespace, *, block_size: int) -> 
 def _print_pack_parameters(
     *,
     config: PackBuildConfig,
-    display_source_path: Path,
+    display_source_path: Path | str,
     output_path: Path,
     temp_folder: Path,
     signed: bool,
@@ -1015,7 +1016,7 @@ def _print_pack_parameters(
 
     Args:
         config: Resolved pack build configuration.
-        display_source_path: Original user-facing source path.
+        display_source_path: Original user-facing source path (or archive description).
         output_path: Final output image path.
         temp_folder: Temporary folder used for pack artifacts.
         signed: Whether signed mode is enabled.
@@ -1411,12 +1412,12 @@ def cli_mkpfs_pack_exfat_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
+def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path | ArchiveSubtree) -> int:
     """Wrap a folder in an exFAT and compress it into a .ffpfsc in one pass.
 
     Args:
         args: Parsed pack-folder CLI arguments.
-        source_path: Resolved source directory.
+        source_path: Resolved source directory, or an archive subtree streamed without extraction.
 
     Returns:
         Process exit code.
@@ -1431,11 +1432,12 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
     if args.signed:
         raise BuildError("--exfat wrapping does not support --signed images")
 
+    source_display: str = describe_source(source_path)
     config: PackBuildConfig = _resolve_pack_build_config(args, block_size=65536)
     temp_folder: Path = _resolve_pack_temp_folder(args)
     _print_pack_parameters(
         config=config,
-        display_source_path=source_path,
+        display_source_path=source_display,
         output_path=output_path,
         temp_folder=temp_folder,
         signed=False,
@@ -1451,7 +1453,7 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
         finally:
             blocks.close()
         info(
-            f"Dry run: would wrap {source_path} into a {human_readable_size(size_box[0])} "
+            f"Dry run: would wrap {source_display} into a {human_readable_size(size_box[0])} "
             f"exFAT and compress it to {output_path}; nothing written."
         )
         return 0
@@ -1473,7 +1475,7 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
         ekpfs=config.ekpfs_key,
         verbose=args.verbose,
     )
-    stats.input_path = source_path
+    stats.input_path = source_path.path if isinstance(source_path, ArchiveSubtree) else source_path
     print_summary(stats)
     if not args.verify:
         return 0
@@ -1489,8 +1491,39 @@ def _run_exfat_pack(*, args: argparse.Namespace, source_path: Path) -> int:
     return 1 if errors else 0
 
 
+def _run_archive_pack(*, args: argparse.Namespace, archive_path: Path) -> int:
+    """Pack a game straight out of a RAR/ZIP archive, without extracting it.
+
+    The archive is listed once, the game folder inside it is located, and member
+    contents are streamed into the exFAT-wrapped ``.ffpfsc`` builder.
+
+    Args:
+        args: Parsed pack-folder CLI arguments.
+        archive_path: Resolved archive file path.
+
+    Returns:
+        Process exit code.
+
+    Raises:
+        BuildError: If ``--raw`` was requested or the archive cannot be used as a source.
+    """
+    if bool(getattr(args, "raw", False)):
+        raise BuildError("--raw is not supported for archive sources; archives are always packed exFAT-wrapped")
+    password: str | None = getattr(args, "password", None) or os.environ.get("MKPFS_ARCHIVE_PASSWORD") or None
+    try:
+        subtree: ArchiveSubtree = prepare_archive_subtree(
+            archive_path,
+            password=password,
+            archive_root=getattr(args, "archive_root", None),
+            ampr_index=bool(getattr(args, "ampr_index", True)),
+        )
+    except ArchiveError as exc:
+        raise BuildError(str(exc)) from exc
+    return _run_exfat_pack(args=args, source_path=subtree)
+
+
 def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
-    """Pack a folder into a PFS image.
+    """Pack a folder (or a RAR/ZIP archive holding one) into a PFS image.
 
     Args:
         args: Parsed CLI arguments with ``source_dir`` and ``image_file``.
@@ -1499,6 +1532,8 @@ def cli_mkpfs_create_run(args: argparse.Namespace) -> int:
         Process exit code for the folder packing workflow.
     """
     source_path: Path = Path(args.source_dir).expanduser().resolve()
+    if is_archive_path(source_path):
+        return _run_archive_pack(args=args, archive_path=source_path)
     temp_folder: Path = _resolve_pack_temp_folder(args)
     # Generate the AMPR emulation index into the source tree before packing so it
     # is included in the image (only when an emulation build marker is present).
@@ -2128,6 +2163,7 @@ def cli_mkpfs_batch_run(args: argparse.Namespace) -> int:
             "verbose": bool(getattr(args, "verbose", False)),
             "dry_run": bool(getattr(args, "dry_run", False)),
             "verify": bool(getattr(args, "verify", False)),
+            "password": getattr(args, "password", None) or os.environ.get("MKPFS_ARCHIVE_PASSWORD") or None,
         }
         items: list[BatchItem] = discover_batch_items(source_dir)
         if not items:
@@ -2170,12 +2206,26 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
     pack_parser.epilog = "Examples:\r\n   mkpfs pack file ./payload.exfat ./payload.ffpfsc\r\n"
     pack_sub = pack_parser.add_subparsers(dest="pack_command", required=True, parser_class=MkPFSArgumentParser)
 
-    folder_parser = pack_sub.add_parser("folder", help="Build image from a source directory")
-    cli_mkpfs_add_create_args(folder_parser)
+    folder_parser = pack_sub.add_parser("folder", help="Build image from a source directory or a RAR/ZIP archive")
+    cli_mkpfs_add_create_args(
+        folder_parser,
+        source_help="Source app or homebrew folder, or a .rar/.zip archive holding one (packed without extracting)",
+    )
     folder_parser.add_argument(
         "--raw",
         action="store_true",
         help="Pack the folder directly into a PFS image instead of the default exFAT-wrapped .ffpfsc",
+    )
+    folder_parser.add_argument(
+        "--password",
+        default=None,
+        help="Password for an encrypted RAR/ZIP source (or set MKPFS_ARCHIVE_PASSWORD)",
+    )
+    folder_parser.add_argument(
+        "--archive-root",
+        dest="archive_root",
+        default=None,
+        help="Directory inside the archive to pack when it holds several games (default: auto-detect)",
     )
     folder_parser.add_argument(
         "--no-ampr-index",
@@ -2362,7 +2412,12 @@ def cli_mkpfs_main_parsers() -> argparse.ArgumentParser:
         help="Batch convert multiple items in a directory into .ffpfsc images",
     )
     batch_parser.epilog = "Examples:\r\n   mkpfs batch ./games/ ./output/\r\n"
-    batch_parser.add_argument("source_dir", help="Directory containing items to convert")
+    batch_parser.add_argument("source_dir", help="Directory containing items to convert (folders, images, .rar/.zip)")
+    batch_parser.add_argument(
+        "--password",
+        default=None,
+        help="Password for encrypted RAR/ZIP items (or set MKPFS_ARCHIVE_PASSWORD)",
+    )
     batch_parser.add_argument("output_dir", help="Directory where .ffpfsc images are written")
     batch_parser.add_argument("--verify", action="store_true", help="Run full verification after a successful pack")
 
