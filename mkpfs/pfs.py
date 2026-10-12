@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from . import compression as comp
 from . import consts
+from .archive_source import SourceTree, describe_source, source_image_basename
 from .exfat import EXFAT_SIGNATURE, ExfatEntry, ExfatError, ExfatReader
 from .exfat_writer import iter_exfat_image
 from .gather import gather_files_scandir
@@ -42,7 +43,6 @@ from .pbar import Progress
 from .utils import (
     _read_exact,
     ceil_div,
-    default_image_basename,
     human_readable_size,
     is_ignored_name,
     read_param_json,
@@ -4497,7 +4497,7 @@ def build_pfs_stream_single_file(
 
 def build_pfs_stream_from_exfat(
     *,
-    source_root: Path,
+    source_root: Path | SourceTree,
     output_path: Path,
     block_size: int,
     pfs_version: int,
@@ -4517,9 +4517,11 @@ def build_pfs_stream_from_exfat(
     into the PFS payload region with no temporary ``.exfat`` on disk: the exFAT
     serializer streams forward into the PFSC encoder. The single inner file is
     named ``<titleId>.exfat`` (from ``sce_sys/param.json``, else the folder name).
+    ``source_root`` may be an archive subtree, in which case members are streamed
+    out of the RAR/ZIP without extraction.
 
     Args:
-        source_root: Source directory to wrap.
+        source_root: Source directory (or archive subtree) to wrap.
         output_path: Final ``.ffpfsc`` path.
         block_size: PFS filesystem block size in bytes.
         pfs_version: PFS profile version.
@@ -4538,12 +4540,14 @@ def build_pfs_stream_from_exfat(
     """
     start: float = time.time()
     progress: Progress = Progress(enabled=True)
-    if not source_root.is_dir():
+    source_display: str = describe_source(source_root)
+    source_file_path: Path = source_root.path if isinstance(source_root, SourceTree) else source_root
+    if not isinstance(source_root, SourceTree) and not source_root.is_dir():
         raise BuildError(f"source must be an existing directory: {source_root}")
     now: int = int(time.time())
     resolved_ekpfs: bytes = resolve_ekpfs_key(ekpfs=ekpfs)
     seed: bytes = consts.ZERO_PFS_SEED
-    inner_name: str = f"{default_image_basename(source_root)}.exfat"
+    inner_name: str = f"{source_image_basename(source_root)}.exfat"
 
     # Plan the exFAT layout to learn the inner payload size before laying out the
     # PFS container, then stream the same image forward into the PFSC encoder.
@@ -4598,7 +4602,7 @@ def build_pfs_stream_from_exfat(
 
     file_node = FileNode(
         rel_path=inner_name,
-        abs_path=source_root,
+        abs_path=source_file_path,
         parent_rel_dir="",
         name=inner_name,
         raw_size=raw_size,
@@ -4662,7 +4666,7 @@ def build_pfs_stream_from_exfat(
         encrypted=encrypted,
     )
 
-    progress.status(f"\nWrapping {source_root} into an exFAT and compressing to {output_path} (no temp image)...")
+    progress.status(f"\nWrapping {source_display} into an exFAT and compressing to {output_path} (no temp image)...")
     progress.status(f"Inner image: {inner_name} ({human_readable_size(raw_size)})")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path = Path(str(output_path) + ".tmp")
@@ -4789,7 +4793,7 @@ def build_pfs_stream_from_exfat(
         raise
 
     return _single_file_build_stats(
-        source_file=source_root,
+        source_file=source_file_path,
         output_path=output_path,
         raw_size=raw_size,
         stored_size=stored_size,

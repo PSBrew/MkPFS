@@ -7,6 +7,11 @@ image strictly in offset order: boot regions, FAT, then the cluster heap
 out contiguously). Because nothing is written out of order, the byte stream can
 be consumed straight into the compressor with no temporary image.
 
+The source may also be a directory inside a RAR/ZIP archive
+(:class:`~mkpfs.archive_source.SourceTree`): the layout is planned from the
+archive listing and member contents are streamed straight out of the archive, so
+no extraction is needed either.
+
 Allocation is contiguous per node and the FAT carries an explicit chain for each
 run (the widely compatible form). OS-generated metadata is excluded at scan time.
 """
@@ -18,10 +23,12 @@ import struct
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import BinaryIO
 
 from ._exfat_upcase import UPCASE_CHECKSUM, UPCASE_TABLE
+from .archive_source import ArchiveEntry, SourceTree, source_image_basename
 from .pbar import Progress
-from .utils import default_image_basename, is_ignored_name
+from .utils import is_ignored_name
 
 BYTES_PER_SECTOR: int = 512
 BYTES_PER_SECTOR_SHIFT: int = 9
@@ -57,9 +64,64 @@ class _Node:
     is_dir: bool
     size: int = 0
     abs_path: Path | None = None
+    opener: Callable[[], BinaryIO] | None = None  # set for archive members; ``abs_path`` otherwise
     children: list[_Node] = field(default_factory=list)
     first_cluster: int = 0
     cluster_count: int = 0
+
+    def open(self) -> BinaryIO:
+        """Open this file node for sequential reading."""
+        if self.opener is not None:
+            return self.opener()
+        assert self.abs_path is not None
+        return self.abs_path.open("rb")
+
+
+def _scan_archive_tree(subtree: SourceTree) -> _Node:
+    """Build the directory tree of an archive subtree from its listing.
+
+    Mirrors :func:`_scan_tree`: children are sorted case-insensitively by name and
+    OS metadata is excluded (the subtree already filters it). Directories that only
+    exist implicitly through member paths are materialized.
+    """
+    root_node = _Node(rel_path="", name="", is_dir=True)
+    dirs: dict[str, _Node] = {"": root_node}
+
+    def _dir_node(rel_dir: str) -> _Node:
+        node: _Node | None = dirs.get(rel_dir)
+        if node is not None:
+            return node
+        parent_rel, _, name = rel_dir.rpartition("/")
+        node = _Node(rel_path=rel_dir, name=name, is_dir=True)
+        _dir_node(parent_rel).children.append(node)
+        dirs[rel_dir] = node
+        return node
+
+    entry: ArchiveEntry
+    for entry in subtree.entries():
+        if entry.is_dir:
+            _dir_node(entry.rel_path)
+            continue
+        parent_rel, _, name = entry.rel_path.rpartition("/")
+        member: str = entry.rel_path
+        _dir_node(parent_rel).children.append(
+            _Node(
+                rel_path=entry.rel_path,
+                name=name,
+                is_dir=False,
+                size=entry.size,
+                opener=lambda member=member: subtree.open(member),
+            )
+        )
+
+    def _sort(node: _Node) -> None:
+        node.children.sort(key=lambda child: child.name.lower())
+        for child in node.children:
+            if child.is_dir:
+                _sort(child)
+
+    _sort(root_node)
+    return root_node
 
 
 def _scan_tree(root: Path) -> _Node:
@@ -329,14 +391,15 @@ def _build_fat(
 
 
 def iter_exfat_image(
-    source_root: Path,
+    source_root: Path | SourceTree,
     cluster_size: int | None = None,
     on_layout: Callable[[int], None] | None = None,
 ) -> Iterator[bytes]:
     """Yield a complete exFAT image for ``source_root`` in strict offset order.
 
     Args:
-        source_root: Directory whose contents become the volume root.
+        source_root: Directory whose contents become the volume root, or an archive
+            subtree whose members are streamed without extraction.
         cluster_size: Optional cluster size in bytes; chosen by file-size policy
             when omitted (32 KiB, or 64 KiB for large-average-file trees).
         on_layout: Optional callback invoked once with the total image size in
@@ -345,7 +408,7 @@ def iter_exfat_image(
     Yields:
         Image byte chunks in increasing offset order; concatenation is the volume.
     """
-    root: _Node = _scan_tree(source_root)
+    root: _Node = _scan_archive_tree(source_root) if isinstance(source_root, SourceTree) else _scan_tree(source_root)
     cluster_size = cluster_size or _choose_cluster_size(root)
     spc: int = cluster_size // BYTES_PER_SECTOR
     spc_shift: int = (cluster_size // BYTES_PER_SECTOR).bit_length() - 1
@@ -404,15 +467,16 @@ def iter_exfat_image(
                 yield _emit_dir_bytes(child, is_root=False)
                 yield from _emit(child)
             elif child.size > 0:
-                assert child.abs_path is not None
                 written: int = 0
-                with child.abs_path.open("rb") as fh:
+                with child.open() as fh:
                     while True:
                         chunk: bytes = fh.read(1024 * 1024)
                         if not chunk:
                             break
                         written += len(chunk)
                         yield chunk
+                if written != child.size:
+                    raise OSError(f"{child.rel_path}: read {written} bytes, expected {child.size}")
                 padding: int = child.cluster_count * cluster_size - written
                 if padding:
                     yield bytes(padding)
@@ -421,7 +485,7 @@ def iter_exfat_image(
 
 
 def write_exfat_image(
-    source_root: Path,
+    source_root: Path | SourceTree,
     output_path: Path,
     cluster_size: int | None = None,
     progress: Progress | None = None,
@@ -429,7 +493,7 @@ def write_exfat_image(
     """Write a complete exFAT image and return the path written.
 
     Args:
-        source_root: Directory whose contents become the volume root.
+        source_root: Directory (or archive subtree) whose contents become the volume root.
         output_path: Destination image path, or an existing directory in which to
             create ``<titleId>.exfat`` (the title ID comes from
             ``sce_sys/param.json``, falling back to the source folder name).
@@ -440,7 +504,7 @@ def write_exfat_image(
         The path of the written image.
     """
     if output_path.is_dir():
-        output_path = output_path / f"{default_image_basename(source_root)}.exfat"
+        output_path = output_path / f"{source_image_basename(source_root)}.exfat"
 
     total: int = 0
     written: int = 0
