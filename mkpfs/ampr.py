@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import struct
+from collections.abc import Iterable
 from pathlib import Path
 
 from .logging import info, warning
@@ -169,6 +170,25 @@ def build_ampr_index(root: Path, output_path: Path) -> int:
     if not rows:
         return 0
 
+    with output_tmp.open("wb") as out:
+        out.write(encode_ampr_index(rows))
+
+    output_tmp.replace(output_path)
+    return len(rows)
+
+
+def encode_ampr_index(rows: list[tuple[int, int, str]]) -> bytes:
+    """Serialize AMPRIDX3 index bytes for ``rows``.
+
+    Args:
+        rows: ``(size, mtime, indexed_path)`` tuples; order is normalized here.
+
+    Returns:
+        The complete index file contents (header, records, path blob, hash table).
+
+    Raises:
+        ValueError: If the path blob exceeds the 32-bit offset/length limits.
+    """
     rows = sorted(rows, key=lambda row: ampr_key_for(row[2]))
 
     # Build the path blob and fixed-size records that reference offsets into it.
@@ -190,27 +210,52 @@ def build_ampr_index(root: Path, output_path: Path) -> int:
     hash_offset: int = (path_end + (HASH_SLOT_STRUCT.size - 1)) & ~(HASH_SLOT_STRUCT.size - 1)
     padding: bytes = b"\0" * (hash_offset - path_end)
 
-    with output_tmp.open("wb") as out:
-        out.write(
-            HEADER_STRUCT.pack(
-                _AMPR_MAGIC,
-                _AMPR_VERSION,
-                RECORD_STRUCT.size,
-                len(rows),
-                len(path_blob),
-                hash_offset,
-                HASH_SLOT_STRUCT.size,
-                len(hash_slots),
-            )
-        )
-        out.write(records)
-        out.write(path_blob)
-        out.write(padding)
-        for h, index_plus_one, flags in hash_slots:
-            out.write(HASH_SLOT_STRUCT.pack(h, index_plus_one, flags))
+    out: bytearray = bytearray()
+    out += HEADER_STRUCT.pack(
+        _AMPR_MAGIC,
+        _AMPR_VERSION,
+        RECORD_STRUCT.size,
+        len(rows),
+        len(path_blob),
+        hash_offset,
+        HASH_SLOT_STRUCT.size,
+        len(hash_slots),
+    )
+    out += records
+    out += path_blob
+    out += padding
+    for h, index_plus_one, flags in hash_slots:
+        out += HASH_SLOT_STRUCT.pack(h, index_plus_one, flags)
+    return bytes(out)
 
-    output_tmp.replace(output_path)
-    return len(rows)
+
+def build_ampr_index_bytes(entries: Iterable[tuple[str, int, int]]) -> bytes:
+    """Build AMPRIDX3 index bytes from an in-memory file listing.
+
+    Used for sources that are not on disk (archive members). Applies the same
+    filtering as :func:`build_ampr_index`: OS metadata and the index itself are
+    skipped and case-insensitive duplicates keep the first occurrence.
+
+    Args:
+        entries: ``(rel_path, size, mtime)`` tuples with POSIX-style relative paths.
+
+    Returns:
+        The index bytes, or ``b""`` when no file qualifies.
+    """
+    seen: set[str] = set()
+    rows: list[tuple[int, int, str]] = []
+    for rel, size, mtime in sorted(entries, key=lambda item: item[0].lower()):
+        if any(is_ignored_name(part) for part in rel.split("/")):
+            continue
+        indexed_path: str = "/app0/" + rel
+        key: str = ampr_key_for(indexed_path)
+        if key in (f"/app0/{AMPR_INDEX_NAME}", f"/app0/{AMPR_INDEX_NAME}.tmp") or key in seen:
+            continue
+        seen.add(key)
+        rows.append((size, int(mtime), indexed_path))
+    if not rows:
+        return b""
+    return encode_ampr_index(rows)
 
 
 def validate_ampr_index(index_path: Path, source_root: Path) -> bool:

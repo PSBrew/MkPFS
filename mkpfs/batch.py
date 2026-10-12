@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .archive_source import ArchiveError, is_archive_path, prepare_archive_subtree
 from .logging import info, warning
 from .utils import human_readable_size, is_ignored_name
 
@@ -25,7 +26,7 @@ class BatchItem:
 
     name: str
     source: Path
-    kind: str  # "folder" or "file"
+    kind: str  # "folder", "file" or "archive"
 
 
 @dataclass
@@ -100,6 +101,8 @@ def discover_batch_items(source_dir: Path) -> list[BatchItem]:
     * Directories -> ``BatchItem(kind="folder")``.
     * Files with a supported image suffix (case-insensitive) ->
       ``BatchItem(kind="file")``.
+    * ``.rar`` / ``.zip`` files -> ``BatchItem(kind="archive")`` (packed without
+      extracting; multi-volume RAR sets contribute their first volume only).
     * All other files are silently ignored.
 
     Returns items sorted by ``name.lower()`` for deterministic ordering.
@@ -127,8 +130,34 @@ def discover_batch_items(source_dir: Path) -> list[BatchItem]:
             suffix: str = entry.suffix.lower()
             if suffix in (".exfat", ".ffpkg", ".ffpfs", ".ffpfsc"):
                 items.append(BatchItem(name=name, source=entry, kind="file"))
+            elif is_archive_path(entry) and not _is_secondary_rar_volume(entry):
+                items.append(BatchItem(name=_archive_item_name(entry), source=entry, kind="archive"))
     items.sort(key=lambda i: i.name.lower())
     return items
+
+
+def _is_secondary_rar_volume(path: Path) -> bool:
+    """Return True for RAR volumes other than the first (``.part02.rar``, ``.r00``...)."""
+    lowered: str = path.name.lower()
+    if lowered.endswith(".rar"):
+        stem: str = lowered[: -len(".rar")]
+        if "." in stem:
+            part: str = stem.rsplit(".", 1)[1]
+            if part.startswith("part") and part[4:].isdigit():
+                return int(part[4:]) != 1
+        return False
+    return lowered.endswith(".zip") is False  # ``.rNN`` continuation volumes
+
+
+def _archive_item_name(path: Path) -> str:
+    """Return the output stem for an archive item (``Game.part1.rar`` -> ``Game``)."""
+    stem: str = path.stem
+    lowered: str = stem.lower()
+    if "." in lowered:
+        head, _, tail = lowered.rpartition(".")
+        if tail.startswith("part") and tail[4:].isdigit():
+            return stem[: len(head)]
+    return stem
 
 
 # ---------------------------------------------------------------------------
@@ -170,18 +199,19 @@ def print_batch_pre_stats(
     """Print a summary of the batch before starting."""
     folders: int = sum(1 for i in items if i.kind == "folder")
     files: int = sum(1 for i in items if i.kind == "file")
+    archives: int = sum(1 for i in items if i.kind == "archive")
 
     info("╔═══════════════════════════════════════╗")
     info("║          BATCH CONVERSION             ║")
     info("╚═══════════════════════════════════════╝")
     info(f"  Source  : {source_dir}")
     info(f"  Output  : {output_dir}")
-    info(f"  Items   : {folders} folder(s), {files} file(s) — {len(items)} total")
+    info(f"  Items   : {folders} folder(s), {files} file(s), {archives} archive(s) - {len(items)} total")
     version_label: str = "PS5" if pack_flags.get("pfs_version") == 0x5000000 else "PS4"
     cpu_val: int | None = pack_flags.get("cpu_count", 0)
     cpu_label: str = str(cpu_val) if cpu_val else "auto"
     comp_enabled: bool = pack_flags.get("compress", True)
-    has_folders: bool = any(i.kind == "folder" for i in items)
+    has_folders: bool = any(i.kind in ("folder", "archive") for i in items)
     has_files: bool = any(i.kind == "file" for i in items)
     if comp_enabled:
         comp_label: str = f"yes  (level {pack_flags.get('zlib_level', 7)})"
@@ -346,8 +376,9 @@ def run_batch(
 
     1. Compute ``output_path = output_dir / f"{item.name}.ffpfsc"``.
     2. If it exists and *overwrite* is False -> skip.
-    3. If ``item.kind == "folder"`` -> call
-       :func:`mkpfs.pfs.build_pfs_stream_from_exfat`.
+    3. If ``item.kind`` is ``"folder"`` or ``"archive"`` -> call
+       :func:`mkpfs.pfs.build_pfs_stream_from_exfat` (archives are streamed
+       through :func:`mkpfs.archive_source.prepare_archive_subtree`).
     4. If ``item.kind == "file"`` -> call
        :func:`mkpfs.pfs.build_pfs_stream_single_file`.
     5. Wrap each call in try/except; on error -> record and continue.
@@ -423,9 +454,19 @@ def run_batch(
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             stats: BuildStats
-            if item.kind == "folder":
+            if item.kind in ("folder", "archive"):
+                source_root: Any = item.source
+                if item.kind == "archive":
+                    try:
+                        source_root = prepare_archive_subtree(
+                            item.source,
+                            password=pack_flags.get("password"),
+                            ampr_index=pack_flags.get("ampr_index", True),
+                        )
+                    except ArchiveError as exc:
+                        raise BuildError(str(exc)) from exc
                 stats = build_pfs_stream_from_exfat(
-                    source_root=item.source,
+                    source_root=source_root,
                     output_path=output_path,
                     block_size=pack_flags["block_size"],
                     pfs_version=pack_flags["pfs_version"],
@@ -531,9 +572,11 @@ def run_batch(
 def _estimate_raw_size(item: BatchItem) -> int:
     """Return a rough estimate of the uncompressed input size for an item.
 
-    For files, use ``st_size``. For directories, sum file sizes recursively.
+    For files and archives, use ``st_size`` (an archive's packed size understates
+    its content, but listing it here would cost a second pass). For directories,
+    sum file sizes recursively.
     """
-    if item.kind == "file":
+    if item.kind in ("file", "archive"):
         return item.source.stat().st_size
     total: int = 0
     for fp in item.source.rglob("*"):
